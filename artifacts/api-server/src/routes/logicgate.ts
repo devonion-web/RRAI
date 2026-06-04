@@ -574,18 +574,27 @@ Phase 1 = must-have apps to solve the primary pain (deploy in months 1-6).
 Phase 2 = high-value expansion apps (months 7-18).
 Optional = nice-to-have or future consideration.
 
-Each app entry: { "app": "<app name>", "rationale": "<1 sentence why>", "priority": "<High|Medium|Low>" }
+IMPORTANT: phase_1, phase_2, and optional must be arrays of plain app name STRINGS — not objects.
+Examples of valid app name strings: "Risk Management", "Third Party Risk Management", "Audit Management"
 
 Return ONLY valid JSON:
 {
   "result": {
     "proposed_scope": {
-      "phase_1": [{ "app": "<name>", "rationale": "<why>", "priority": "High" }],
-      "phase_2": [{ "app": "<name>", "rationale": "<why>", "priority": "Medium" }],
-      "optional": [{ "app": "<name>", "rationale": "<why>", "priority": "Low" }]
+      "phase_1": ["<app name string>", "<app name string>"],
+      "phase_2": ["<app name string>"],
+      "optional": ["<app name string>"]
     },
-    "commercial_view": "<1-2 sentences on expected commercial scope / deal size>",
-    "implementation_notes": "<key delivery considerations>"
+    "commercial_view": {
+      "estimated_apps_min": <integer, min number of apps in scope>,
+      "estimated_apps_max": <integer, max number of apps in scope>,
+      "implementation_approach": "<brief implementation approach description>",
+      "complexity": "<Low|Medium|High>"
+    },
+    "implementation_notes": "<key delivery considerations>",
+    "app_signals": [
+      { "app": "<app name>", "signal": "<mentioned|implied|confirmed>", "phase_assigned": "<phase_1|phase_2|optional|excluded>", "evidence_summary": "<brief reason>" }
+    ]
   }
 }`;
 
