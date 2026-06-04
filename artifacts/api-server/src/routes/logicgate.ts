@@ -522,17 +522,18 @@ ${DASHBOARD_SCHEMA}
 
 Return ONLY valid JSON:
 {
-  "result": "<markdown post-demo update — what changed, demo effectiveness, buying signals, objections, updated deal stance>",
-  "dashboard": { <updated dashboard — score_direction reflects movement from priorScore> },
-  "post_demo_summary": {
-    "what_changed": ["<field or signal that changed>"],
-    "buying_signals": ["<positive signal from demo>"],
-    "new_risks": ["<risk surfaced during demo>"],
-    "demo_effectiveness": "<Strong|Moderate|Weak>"
-  },
-  "source_notes": {
-    "has_transcript": <true|false>,
-    "has_notes": <true|false>
+  "result": {
+    "dashboard": { <updated dashboard object — score_direction reflects movement from priorScore> },
+    "post_demo_summary": {
+      "what_changed": ["<field or signal that changed>"],
+      "buying_signals": ["<positive signal from demo>"],
+      "new_risks": ["<risk surfaced during demo>"],
+      "demo_effectiveness": "<Strong|Moderate|Weak>"
+    },
+    "source_notes": {
+      "has_transcript": <true|false>,
+      "has_notes": <true|false>
+    }
   }
 }`;
 
