@@ -1,0 +1,1 @@
+- [RAI modular structure](rai-modular-structure.md) — LogicGateModule.jsx is the ported original app; new modules = one entry in config/modules.js + new component.
