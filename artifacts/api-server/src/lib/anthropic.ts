@@ -19,6 +19,30 @@ export interface ClaudeOptions {
   maxTokens?: number;
 }
 
+/** Robustly parse Claude's JSON output — handles code fences, leading text, etc. */
+function parseClaudeJSON<T>(raw: string): T {
+  const trimmed = raw.trim();
+
+  // 1. Direct parse — ideal path
+  try { return JSON.parse(trimmed) as T; } catch {}
+
+  // 2. Slice from first { to last } (skips code fences, trailing text)
+  const objStart = trimmed.indexOf("{");
+  const objEnd = trimmed.lastIndexOf("}");
+  if (objStart !== -1 && objEnd > objStart) {
+    try { return JSON.parse(trimmed.slice(objStart, objEnd + 1)) as T; } catch {}
+  }
+
+  // 3. Slice from first [ to last ] (JSON array)
+  const arrStart = trimmed.indexOf("[");
+  const arrEnd = trimmed.lastIndexOf("]");
+  if (arrStart !== -1 && arrEnd > arrStart) {
+    try { return JSON.parse(trimmed.slice(arrStart, arrEnd + 1)) as T; } catch {}
+  }
+
+  throw new Error(`Claude returned invalid JSON. Raw response: ${raw.slice(0, 400)}`);
+}
+
 export async function callClaude(system: string, user: string, opts: ClaudeOptions = {}): Promise<string> {
   const msg = await anthropic.messages.create({
     model: MODEL,
@@ -32,15 +56,7 @@ export async function callClaude(system: string, user: string, opts: ClaudeOptio
 
 export async function callClaudeJSON<T>(system: string, user: string, opts: ClaudeOptions = {}): Promise<T> {
   const raw = await callClaude(system, user, opts);
-  const cleaned = raw
-    .replace(/^```(?:json)?\s*/i, "")
-    .replace(/```\s*$/m, "")
-    .trim();
-  try {
-    return JSON.parse(cleaned) as T;
-  } catch {
-    throw new Error(`Claude returned invalid JSON. Raw response: ${raw.slice(0, 400)}`);
-  }
+  return parseClaudeJSON<T>(raw);
 }
 
 /**
@@ -51,7 +67,7 @@ export async function callClaudeJSON<T>(system: string, user: string, opts: Clau
 export async function callClaudeJSONStreamed<T>(
   system: string,
   user: string,
-  res: import("express").Response,
+  _res: import("express").Response,
   opts: ClaudeOptions = {}
 ): Promise<T> {
   let fullText = "";
@@ -69,14 +85,5 @@ export async function callClaudeJSONStreamed<T>(
 
   await stream.finalMessage();
 
-  const cleaned = fullText
-    .replace(/^```(?:json)?\s*/i, "")
-    .replace(/```\s*$/m, "")
-    .trim();
-
-  try {
-    return JSON.parse(cleaned) as T;
-  } catch {
-    throw new Error(`Claude returned invalid JSON. Raw response: ${fullText.slice(0, 400)}`);
-  }
+  return parseClaudeJSON<T>(fullText);
 }

@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import logo from './assets/rr-logo.png'
-import { extractFiles, generatePrep, postDiscovery, dealStrategy, generateScorecard, updateScore, createOpportunity, getOpportunity, addManualEvent, extractContacts, saveContacts, getOpportunityContacts, getContactsExportUrl, enrichContactApi, listSowProfiles, getSowProfile, generateSoW, enrichDealRisk, enrichDiscoveryQuestions, enrichProductFit, generateRichBriefing, generateEmails, generatePostDemo, generateSolutionBreakdown, generateProposalEmail, generateProposalDocument, getValueDriverLibrary, getOperationalMetricsLibrary, suggestValueDrivers } from './api.js'
+import { extractFiles, generatePrep, postDiscovery, dealStrategy, generateScorecard, updateScore, createOpportunity, getOpportunity, addManualEvent, extractContacts, saveContacts, getOpportunityContacts, getContactsExportUrl, enrichContactApi, listSowProfiles, getSowProfile, generateSoW, enrichDealRisk, enrichDiscoveryQuestions, enrichProductFit, generateRichBriefing, generateEmails, generatePostDemo, generateSolutionBreakdown, generateProposalEmail, generateProposalDocument, generateProposalSection, verifyProposal, getValueDriverLibrary, getOperationalMetricsLibrary, suggestValueDrivers } from './api.js'
 import {
   Document,
   Packer,
@@ -3664,6 +3664,16 @@ function OperationalMetricsPanel({ library, metrics, stage, onEdit, onClear, dis
 
 // ── Main App ──
 
+const PROPOSAL_SECTION_ORDER = [
+  { id: 'executive_summary', label: 'Executive Summary' },
+  { id: 'current_challenges', label: 'Current Challenges' },
+  { id: 'recommended_approach', label: 'Recommended Approach' },
+  { id: 'delivery_scope', label: 'Delivery Scope' },
+  { id: 'value_benefits', label: 'Value & Benefits' },
+  { id: 'assumptions_dependencies', label: 'Assumptions & Dependencies' },
+  { id: 'next_steps', label: 'Next Steps' },
+]
+
 export default function LogicGateModule() {
   const fileRef = useRef(null)
 
@@ -3888,6 +3898,14 @@ export default function LogicGateModule() {
   const [proposalDocument, setProposalDocument] = useState('')
   const [proposalDocumentLoading, setProposalDocumentLoading] = useState(false)
   const [proposalDocumentError, setProposalDocumentError] = useState('')
+
+  // Staged proposal — per-section content, loading, error
+  // Shape: { [sectionId]: { content: string, loading: bool, error: string } }
+  const [proposalSections, setProposalSections] = useState({})
+  const [proposalGeneratingAll, setProposalGeneratingAll] = useState(false)
+  const [proposalVerification, setProposalVerification] = useState(null)
+  const [proposalVerificationLoading, setProposalVerificationLoading] = useState(false)
+  const [proposalVerificationError, setProposalVerificationError] = useState('')
 
   // ── Proposal pricing inputs ──
   // Commercial figures used to deterministically build the Commercial
@@ -4177,6 +4195,9 @@ export default function LogicGateModule() {
       // Proposal stage
       proposalEmail,
       proposalDocument,
+      proposalSections: Object.fromEntries(
+        Object.entries(proposalSections).map(([k, v]) => [k, { content: v.content || '' }])
+      ),
       proposalPricing,
       // Value Case (V1 — drivers + day rate; library not persisted, refetched)
       valueDrivers,
@@ -5016,6 +5037,83 @@ export default function LogicGateModule() {
     }
   }
 
+  // ── Staged proposal handlers ──
+
+  async function handleGenerateProposalSection(sectionId) {
+    const sourceDash = postDashboard || dashboard
+    setProposalSections(prev => ({
+      ...prev,
+      [sectionId]: { ...(prev[sectionId] || {}), loading: true, error: '' },
+    }))
+    try {
+      const data = await generateProposalSection({
+        sectionId,
+        company: postCompany || company,
+        dashboard: sourceDash,
+        postDemoSummary: demoSummary,
+        solutionResult,
+        demoNotes,
+        richBriefing,
+        pricing: proposalPricing,
+      })
+      if (!data?.content) throw new Error(`Empty content for section: ${sectionId}`)
+      setProposalSections(prev => ({
+        ...prev,
+        [sectionId]: { content: data.content, loading: false, error: '' },
+      }))
+    } catch (err) {
+      setProposalSections(prev => ({
+        ...prev,
+        [sectionId]: { ...(prev[sectionId] || {}), loading: false, error: err.message || 'Generation failed.' },
+      }))
+    }
+  }
+
+  async function handleGenerateAllProposalSections() {
+    if (opportunityStatus === 'declined') return
+    setProposalDocumentError('')
+    setProposalGeneratingAll(true)
+    for (const section of PROPOSAL_SECTION_ORDER) {
+      await handleGenerateProposalSection(section.id)
+    }
+    setProposalGeneratingAll(false)
+  }
+
+  async function handleVerifyProposal() {
+    setProposalVerificationLoading(true)
+    setProposalVerificationError('')
+    const filledSections = Object.fromEntries(
+      Object.entries(proposalSections)
+        .filter(([, v]) => v?.content)
+        .map(([k, v]) => [k, v.content])
+    )
+    try {
+      const data = await verifyProposal({
+        company: postCompany || company,
+        sections: filledSections,
+        dashboard: postDashboard || dashboard,
+        solutionResult,
+      })
+      setProposalVerification(data)
+    } catch (err) {
+      setProposalVerificationError(err.message || 'Verification failed.')
+    } finally {
+      setProposalVerificationLoading(false)
+    }
+  }
+
+  function handleCompileProposal() {
+    const lines = [`# LogicGate Risk Cloud — Proposal for ${postCompany || company || 'Prospect'}\n`]
+    for (const s of PROPOSAL_SECTION_ORDER) {
+      const sec = proposalSections[s.id]
+      if (sec?.content) {
+        lines.push(`## ${s.label}\n\n${sec.content}`)
+      }
+    }
+    const compiled = lines.join('\n\n---\n\n')
+    if (compiled.length > 50) setProposalDocument(compiled)
+  }
+
   // ── Value Case handlers (V1) ──
 
   // Suggest value drivers from the deal context. Replaces existing drivers
@@ -5355,6 +5453,11 @@ export default function LogicGateModule() {
     // Proposal stage
     if (s.proposalEmail !== undefined) setProposalEmail(s.proposalEmail || null)
     if (s.proposalDocument !== undefined) setProposalDocument(s.proposalDocument || '')
+    if (s.proposalSections && typeof s.proposalSections === 'object') {
+      setProposalSections(Object.fromEntries(
+        Object.entries(s.proposalSections).map(([k, v]) => [k, { content: v?.content || '', loading: false, error: '' }])
+      ))
+    }
     if (s.proposalPricing && typeof s.proposalPricing === 'object') {
       // Merge with current defaults so any new fields added in future have
       // sensible values rather than coming through as undefined.
@@ -5531,6 +5634,11 @@ export default function LogicGateModule() {
     setProposalDocument('')
     setProposalDocumentLoading(false)
     setProposalDocumentError('')
+    setProposalSections({})
+    setProposalGeneratingAll(false)
+    setProposalVerification(null)
+    setProposalVerificationLoading(false)
+    setProposalVerificationError('')
     // Reset pricing to defaults — perAppPrices is wiped (will be re-seeded
     // by the sync effect once a new solutionResult exists)
     setProposalPricing({
@@ -7782,21 +7890,20 @@ export default function LogicGateModule() {
               >
                 {proposalEmailLoading ? 'Generating…' : proposalEmail ? 'Regenerate Proposal Email' : 'Generate Proposal Email'}
               </button>
+              {/* Generate All Sections */}
               <button
-                onClick={handleGenerateProposalDocument}
-                disabled={proposalDocumentLoading || opportunityStatus === 'declined'}
+                onClick={handleGenerateAllProposalSections}
+                disabled={proposalGeneratingAll || opportunityStatus === 'declined'}
                 style={{
                   padding: '10px 16px', borderRadius: 8, border: 'none',
-                  background: proposalDocumentLoading || opportunityStatus === 'declined' ? '#94a3b8' : NAVY,
+                  background: proposalGeneratingAll || opportunityStatus === 'declined' ? '#94a3b8' : NAVY,
                   color: '#fff', fontWeight: 600, fontSize: 14, fontFamily: 'inherit',
-                  cursor: proposalDocumentLoading || opportunityStatus === 'declined' ? 'not-allowed' : 'pointer',
+                  cursor: proposalGeneratingAll || opportunityStatus === 'declined' ? 'not-allowed' : 'pointer',
                 }}
               >
-                {proposalDocumentLoading ? 'Generating…' : proposalDocument ? 'Regenerate Proposal Document' : 'Generate Proposal Document'}
+                {proposalGeneratingAll ? 'Generating sections…' : Object.keys(proposalSections).length > 0 ? 'Regenerate All Sections' : 'Generate All Sections'}
               </button>
-              {/* Download Proposal — disabled until a document exists.
-                  Uses the same .docx pipeline as the rich briefing for
-                  consistent visual style. */}
+              {/* Download Proposal — enabled once compiled */}
               <button
                 onClick={() => handleDownloadDocx(proposalDocument, postCompany || company, 'proposal')}
                 disabled={!proposalDocument}
@@ -7831,7 +7938,7 @@ export default function LogicGateModule() {
               </button>
             </div>
 
-            {/* Inline error — proposal document */}
+            {/* General error banner */}
             {proposalDocumentError && (
               <div style={{
                 padding: '10px 12px', borderRadius: 8, background: '#fee2e2',
@@ -7841,28 +7948,204 @@ export default function LogicGateModule() {
               </div>
             )}
 
-            {/* Proposal Document preview — shown inline once generated */}
-            {proposalDocument && (
-              <div style={{
-                background: '#fff', border: `1px solid ${BORDER}`, borderRadius: 12,
-                padding: '14px 18px', marginBottom: 16,
-              }}>
-                <div style={{ fontSize: 12, fontWeight: 700, color: MUTED, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 10 }}>
-                  Proposal Document ({proposalDocument.length.toLocaleString()} chars)
-                </div>
-                <div style={{
-                  background: '#f8fafc', border: `1px solid ${BORDER}`, borderRadius: 8,
-                  padding: '14px 16px', maxHeight: 600, overflowY: 'auto',
-                }}>
-                  <pre style={{
-                    margin: 0,
-                    fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
-                    fontSize: 12, lineHeight: 1.6, color: '#1e293b',
-                    whiteSpace: 'pre-wrap', wordBreak: 'break-word',
-                  }}>{proposalDocument}</pre>
-                </div>
-              </div>
-            )}
+            {/* ── Staged proposal sections ── */}
+            {(() => {
+              const completedCount = PROPOSAL_SECTION_ORDER.filter(s => proposalSections[s.id]?.content).length
+              const hasAnySections = completedCount > 0
+              return (
+                <>
+                  {/* Progress bar */}
+                  {(proposalGeneratingAll || hasAnySections) && (
+                    <div style={{
+                      background: '#fff', border: `1px solid ${BORDER}`, borderRadius: 12,
+                      padding: '12px 16px', marginBottom: 14,
+                      display: 'flex', alignItems: 'center', gap: 12,
+                    }}>
+                      <div style={{ flex: 1 }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
+                          <span style={{ fontSize: 12, fontWeight: 700, color: NAVY }}>Proposal Progress</span>
+                          <span style={{ fontSize: 12, color: MUTED }}>{completedCount}/{PROPOSAL_SECTION_ORDER.length} sections</span>
+                        </div>
+                        <div style={{ height: 6, background: '#E2E8F0', borderRadius: 3 }}>
+                          <div style={{
+                            height: 6, borderRadius: 3, background: NAVY,
+                            width: `${(completedCount / PROPOSAL_SECTION_ORDER.length) * 100}%`,
+                            transition: 'width 0.3s ease',
+                          }} />
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Section cards */}
+                  {PROPOSAL_SECTION_ORDER.map((s, idx) => {
+                    const sec = proposalSections[s.id]
+                    const isLoading = sec?.loading || false
+                    const hasContent = Boolean(sec?.content)
+                    const hasError = Boolean(sec?.error)
+                    const isCurrentlyGenerating = proposalGeneratingAll && !hasContent && !hasError
+                    return (
+                      <div key={s.id} style={{
+                        background: '#fff', border: `1px solid ${hasError ? '#fca5a5' : BORDER}`,
+                        borderRadius: 10, padding: '12px 14px', marginBottom: 10,
+                      }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: hasContent ? 8 : 0 }}>
+                          {/* Step number */}
+                          <div style={{
+                            width: 22, height: 22, borderRadius: '50%', flexShrink: 0,
+                            background: hasContent ? '#22c55e' : hasError ? '#ef4444' : isLoading ? NAVY : '#E2E8F0',
+                            color: hasContent || hasError || isLoading ? '#fff' : '#94a3b8',
+                            fontSize: 11, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                          }}>
+                            {hasContent ? '✓' : isLoading ? '…' : idx + 1}
+                          </div>
+                          <span style={{ fontSize: 13, fontWeight: 700, color: NAVY, flex: 1 }}>{s.label}</span>
+                          {/* Status badge */}
+                          {isLoading && (
+                            <span style={{ fontSize: 11, color: NAVY, fontStyle: 'italic' }}>generating…</span>
+                          )}
+                          {hasError && !isLoading && (
+                            <span style={{ fontSize: 11, color: RED, fontWeight: 600 }}>failed</span>
+                          )}
+                          {/* Regenerate button */}
+                          <button
+                            onClick={() => handleGenerateProposalSection(s.id)}
+                            disabled={isLoading || proposalGeneratingAll}
+                            style={{
+                              padding: '4px 10px', borderRadius: 6, border: `1px solid ${BORDER}`,
+                              background: '#fff', color: MUTED, fontSize: 11, fontWeight: 600,
+                              fontFamily: 'inherit', cursor: isLoading || proposalGeneratingAll ? 'not-allowed' : 'pointer',
+                              opacity: isLoading || proposalGeneratingAll ? 0.5 : 1,
+                            }}
+                          >
+                            {hasContent ? 'Regenerate' : 'Generate'}
+                          </button>
+                        </div>
+                        {hasError && (
+                          <div style={{ fontSize: 12, color: RED, marginTop: 6, paddingLeft: 32 }}>{sec.error}</div>
+                        )}
+                        {hasContent && (
+                          <div style={{
+                            background: '#f8fafc', border: `1px solid ${BORDER}`, borderRadius: 6,
+                            padding: '10px 12px', maxHeight: 200, overflowY: 'auto', marginLeft: 32,
+                          }}>
+                            <pre style={{
+                              margin: 0, fontSize: 11, lineHeight: 1.6, color: '#334155',
+                              whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+                              fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
+                            }}>{sec.content}</pre>
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })}
+
+                  {/* Verification + Compile row — only shown once there are sections */}
+                  {hasAnySections && (
+                    <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 14, marginTop: 4 }}>
+                      <button
+                        onClick={handleVerifyProposal}
+                        disabled={proposalVerificationLoading || proposalGeneratingAll}
+                        style={{
+                          padding: '9px 14px', borderRadius: 8, border: `1px solid ${BORDER}`,
+                          background: '#fff', color: NAVY, fontWeight: 600, fontSize: 13,
+                          fontFamily: 'inherit',
+                          cursor: proposalVerificationLoading || proposalGeneratingAll ? 'not-allowed' : 'pointer',
+                          opacity: proposalVerificationLoading || proposalGeneratingAll ? 0.6 : 1,
+                        }}
+                      >
+                        {proposalVerificationLoading ? 'Verifying…' : proposalVerification ? '↻ Re-verify' : '✓ Run Verification'}
+                      </button>
+                      <button
+                        onClick={handleCompileProposal}
+                        disabled={completedCount === 0 || proposalGeneratingAll}
+                        style={{
+                          padding: '9px 14px', borderRadius: 8, border: 'none',
+                          background: completedCount === 0 || proposalGeneratingAll ? '#94a3b8' : '#1d4ed8',
+                          color: '#fff', fontWeight: 600, fontSize: 13, fontFamily: 'inherit',
+                          cursor: completedCount === 0 || proposalGeneratingAll ? 'not-allowed' : 'pointer',
+                        }}
+                      >
+                        {proposalDocument ? '↻ Recompile Proposal' : '⊞ Compile Proposal'}
+                      </button>
+                    </div>
+                  )}
+
+                  {/* Verification results */}
+                  {proposalVerificationError && (
+                    <div style={{ padding: '10px 12px', borderRadius: 8, background: '#fee2e2', color: RED, fontSize: 13, marginBottom: 12 }}>
+                      {proposalVerificationError}
+                    </div>
+                  )}
+                  {proposalVerification && (
+                    <div style={{
+                      background: '#fff', border: `1px solid ${BORDER}`, borderRadius: 12,
+                      padding: '14px 16px', marginBottom: 14,
+                    }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
+                        <span style={{ fontSize: 12, fontWeight: 700, color: MUTED, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Verification</span>
+                        <span style={{
+                          padding: '2px 8px', borderRadius: 10, fontSize: 11, fontWeight: 700,
+                          background: proposalVerification.overall_score >= 8 ? '#dcfce7' : proposalVerification.overall_score >= 6 ? '#fef9c3' : '#fee2e2',
+                          color: proposalVerification.overall_score >= 8 ? '#15803d' : proposalVerification.overall_score >= 6 ? '#a16207' : '#b91c1c',
+                        }}>
+                          {proposalVerification.overall_score}/10
+                        </span>
+                      </div>
+                      {proposalVerification.summary && (
+                        <p style={{ fontSize: 13, color: '#334155', margin: '0 0 10px 0', lineHeight: 1.5 }}>{proposalVerification.summary}</p>
+                      )}
+                      {Array.isArray(proposalVerification.issues) && proposalVerification.issues.length > 0 && (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                          {proposalVerification.issues.map((issue, i) => (
+                            <div key={i} style={{
+                              padding: '8px 10px', borderRadius: 6,
+                              background: issue.severity === 'high' ? '#fee2e2' : issue.severity === 'medium' ? '#fef9c3' : '#f1f5f9',
+                              borderLeft: `3px solid ${issue.severity === 'high' ? '#ef4444' : issue.severity === 'medium' ? '#eab308' : '#94a3b8'}`,
+                            }}>
+                              <div style={{ display: 'flex', gap: 8, alignItems: 'baseline', marginBottom: 2 }}>
+                                <span style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase',
+                                  color: issue.severity === 'high' ? '#b91c1c' : issue.severity === 'medium' ? '#a16207' : '#475569' }}>
+                                  {issue.severity}
+                                </span>
+                                <span style={{ fontSize: 11, color: MUTED }}>— {issue.section}</span>
+                              </div>
+                              <div style={{ fontSize: 12, color: '#1e293b', marginBottom: 2 }}>{issue.description}</div>
+                              {issue.suggestion && (
+                                <div style={{ fontSize: 11, color: '#475569', fontStyle: 'italic' }}>Fix: {issue.suggestion}</div>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Compiled proposal preview */}
+                  {proposalDocument && (
+                    <div style={{
+                      background: '#fff', border: `1px solid ${BORDER}`, borderRadius: 12,
+                      padding: '14px 18px', marginBottom: 16,
+                    }}>
+                      <div style={{ fontSize: 12, fontWeight: 700, color: MUTED, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 10 }}>
+                        Compiled Proposal ({proposalDocument.length.toLocaleString()} chars) — ready to download
+                      </div>
+                      <div style={{
+                        background: '#f8fafc', border: `1px solid ${BORDER}`, borderRadius: 8,
+                        padding: '14px 16px', maxHeight: 400, overflowY: 'auto',
+                      }}>
+                        <pre style={{
+                          margin: 0,
+                          fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
+                          fontSize: 12, lineHeight: 1.6, color: '#1e293b',
+                          whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+                        }}>{proposalDocument}</pre>
+                      </div>
+                    </div>
+                  )}
+                </>
+              )
+            })()}
           </>
         )}
 

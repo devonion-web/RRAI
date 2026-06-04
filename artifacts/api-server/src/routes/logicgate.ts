@@ -706,6 +706,140 @@ Return ONLY valid JSON with no markdown fences:
   }
 });
 
+// ─── Staged proposal: per-section generation + verification ──────────────────
+
+const PROPOSAL_SECTION_DEFS: Record<string, { instruction: string; maxTokens: number }> = {
+  executive_summary: {
+    maxTokens: 500,
+    instruction: `Write the "Executive Summary" section for this company's LogicGate Risk Cloud proposal.
+3-4 concise paragraphs: who they are, their core challenge, why LogicGate + Risk Rising fits, expected outcome.
+Be specific — no generic filler. Tone: consultative, confident, outcome-focused.
+Return ONLY valid JSON (no code fences): {"content": "<markdown>"}`,
+  },
+  current_challenges: {
+    maxTokens: 500,
+    instruction: `Write the "Current Challenges" section.
+4-6 bullet points describing the prospect's specific risk, compliance, or operational pain points surfaced in discovery/demo.
+Ground each in the provided evidence. Do not invent challenges not mentioned.
+Return ONLY valid JSON (no code fences): {"content": "<markdown>"}`,
+  },
+  recommended_approach: {
+    maxTokens: 600,
+    instruction: `Write the "Recommended Approach" section.
+Explain why LogicGate Risk Cloud + Risk Rising is the right fit. Cover: relevant platform strengths, Risk Rising's delivery methodology, how it directly addresses their challenges.
+3-4 concise paragraphs. Tone: expert, evidence-based, not salesy.
+Return ONLY valid JSON (no code fences): {"content": "<markdown>"}`,
+  },
+  delivery_scope: {
+    maxTokens: 700,
+    instruction: `Write the "Delivery Scope" section.
+Structure: Phase 1 apps (months 1-6), Phase 2 apps (months 7-18), brief timeline summary.
+Use the proposed scope from the solution breakdown. List each app with a one-line rationale.
+Return ONLY valid JSON (no code fences): {"content": "<markdown>"}`,
+  },
+  value_benefits: {
+    maxTokens: 600,
+    instruction: `Write the "Value & Benefits" section.
+Cover: expected business outcomes (risk reduction, audit efficiency, compliance posture), operational improvements.
+Only cite figures that appear in the provided context — do not invent ROI numbers.
+3-4 paragraphs or a structured bullet list. Tone: outcome-focused, grounded.
+Return ONLY valid JSON (no code fences): {"content": "<markdown>"}`,
+  },
+  assumptions_dependencies: {
+    maxTokens: 500,
+    instruction: `Write the "Assumptions & Dependencies" section.
+List 5-8 specific assumptions: data availability, stakeholder access, licence model, integration requirements.
+Also note client-side dependencies. Be specific and realistic for this deal.
+Return ONLY valid JSON (no code fences): {"content": "<markdown>"}`,
+  },
+  next_steps: {
+    maxTokens: 300,
+    instruction: `Write the "Next Steps" section.
+3 clear action items. For each: owner (Risk Rising or client), action, suggested timeframe.
+Tone: direct, professional, momentum-building.
+Return ONLY valid JSON (no code fences): {"content": "<markdown>"}`,
+  },
+};
+
+router.post("/generate-proposal-section", async (req, res): Promise<void> => {
+  const { sectionId, company, dashboard, postDemoSummary, solutionResult, demoNotes, richBriefing, pricing } = req.body as Record<string, unknown>;
+
+  const def = PROPOSAL_SECTION_DEFS[String(sectionId ?? "")];
+  if (!def) {
+    res.status(400).json({ error: `Unknown section: ${sectionId}` });
+    return;
+  }
+
+  const system = `You are a LogicGate proposal writer for Risk Rising.\n\n${LOGICGATE_CONTEXT}\n\n${def.instruction}`;
+
+  const contextParts = [
+    `Company: ${String(company || "Unknown")}`,
+    dashboard ? `Deal Dashboard:\n${JSON.stringify(dashboard, null, 2)}` : "",
+    solutionResult ? `Proposed Scope:\n${JSON.stringify(solutionResult, null, 2)}` : "",
+    pricing ? `Pricing:\n${JSON.stringify(pricing, null, 2)}` : "",
+    postDemoSummary ? `Post-Demo Summary:\n${JSON.stringify(postDemoSummary, null, 2)}` : "",
+    richBriefing ? `Deal Briefing:\n${String(richBriefing).slice(0, 1500)}` : "",
+    demoNotes ? `Demo Notes:\n${String(demoNotes).slice(0, 800)}` : "",
+  ].filter(Boolean);
+
+  try {
+    const data = await callClaudeJSONStreamed<{ content: string }>(
+      system, contextParts.join("\n\n"), res, { maxTokens: def.maxTokens }
+    );
+    req.log.info({ company, sectionId }, "generate-proposal-section completed");
+    res.json(data);
+  } catch (err) {
+    req.log.error({ err, sectionId }, "generate-proposal-section failed");
+    res.status(500).json({ error: (err as Error).message });
+  }
+});
+
+router.post("/verify-proposal", async (req, res): Promise<void> => {
+  const { sections, company, dashboard, solutionResult } = req.body as Record<string, unknown>;
+
+  const system = `You are a Quality Assurance reviewer for Risk Rising proposal documents.
+
+${LOGICGATE_CONTEXT}
+
+Review the provided proposal sections and identify issues across:
+1. Risk Rising tone — consultative, outcome-focused, expert. Flag generic or salesy language.
+2. LogicGate/RR positioning — correct platform positioning; no invented features or competitor comparisons.
+3. Unsupported claims — numbers, ROI claims, or promises not supported by the deal context.
+4. Missing assumptions — risks or dependencies that should be stated but aren't.
+5. Cross-section consistency — contradictions between sections.
+
+Return ONLY valid JSON (no code fences):
+{
+  "issues": [
+    { "section": "<section_id or 'overall'>", "severity": "high|medium|low", "description": "<issue>", "suggestion": "<how to fix>" }
+  ],
+  "overall_score": <integer 1-10>,
+  "summary": "<2-3 sentence overall assessment>"
+}`;
+
+  const sectionsText = Object.entries(sections as Record<string, string>)
+    .map(([k, v]) => `### ${k}\n${v}`)
+    .join("\n\n");
+
+  const contextParts = [
+    `Company: ${String(company || "Unknown")}`,
+    dashboard ? `Deal Dashboard:\n${JSON.stringify(dashboard, null, 2)}` : "",
+    solutionResult ? `Proposed Scope:\n${JSON.stringify(solutionResult, null, 2)}` : "",
+    `Proposal Sections:\n${sectionsText}`,
+  ].filter(Boolean);
+
+  try {
+    const data = await callClaudeJSONStreamed<{ issues: unknown[]; overall_score: number; summary: string }>(
+      system, contextParts.join("\n\n"), res, { maxTokens: 1200 }
+    );
+    req.log.info({ company }, "verify-proposal completed");
+    res.json(data);
+  } catch (err) {
+    req.log.error({ err }, "verify-proposal failed");
+    res.status(500).json({ error: (err as Error).message });
+  }
+});
+
 router.post("/suggest-value-drivers", async (req, res): Promise<void> => {
   const { company, dashboard, solutionResult, postDemoSummary, demoTranscript, demoNotes, operationalMetrics } = req.body as Record<string, unknown>;
 

@@ -130,6 +130,14 @@ export async function generateProposalDocument(body) {
   return post('/generate-proposal-document', body)
 }
 
+export async function generateProposalSection(body) {
+  return post('/generate-proposal-section', body)
+}
+
+export async function verifyProposal(body) {
+  return post('/verify-proposal', body)
+}
+
 export async function getValueDriverLibrary() {
   return get('/value-drivers')
 }
