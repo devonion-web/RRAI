@@ -1,6 +1,6 @@
 import { Router, type IRouter } from "express";
 import multer from "multer";
-import { callClaude, callClaudeJSON } from "../lib/anthropic";
+import { callClaude, callClaudeJSON, callClaudeJSONStreamed } from "../lib/anthropic";
 import { logger } from "../lib/logger";
 
 const router: IRouter = Router();
@@ -668,22 +668,18 @@ router.post("/generate-proposal-document", async (req, res): Promise<void> => {
 
 ${LOGICGATE_CONTEXT}
 
-Your job: produce a professional proposal document in markdown. Structure:
-1. Executive Summary
-2. Understanding of Your Requirements
-3. Why LogicGate Risk Cloud
-4. Proposed Solution (Phase 1 & Phase 2 scope)
-5. Implementation Approach & Timeline
-6. Commercial Proposal (use the pricing data if provided)
-7. Why Risk Rising
-8. Next Steps
+Your job: produce a concise, professional proposal document in markdown. Be specific to the company and focused on business outcomes. Keep each section to 2-4 sentences or a short bullet list — quality over length.
 
-Make it compelling, specific to the company, and focused on business outcomes.
+Structure (use ## headings):
+1. Executive Summary (3-4 sentences)
+2. Understanding of Your Requirements (3-5 bullet points)
+3. Proposed Solution (Phase 1 & Phase 2 app scope as bullet lists)
+4. Implementation Approach (brief timeline table or 3-4 bullets)
+5. Commercial Proposal (use pricing data if provided; otherwise omit numbers)
+6. Next Steps (3 bullet points)
 
-Return ONLY valid JSON:
-{
-  "document": "<full markdown proposal document>"
-}`;
+Return ONLY valid JSON with no markdown fences:
+{"document": "<full markdown proposal>"}`;
 
   const contextParts = [
     `Company: ${String(company || "Unknown")}`,
@@ -691,12 +687,17 @@ Return ONLY valid JSON:
     solutionResult ? `Proposed Scope:\n${JSON.stringify(solutionResult, null, 2)}` : "",
     pricing ? `Pricing:\n${JSON.stringify(pricing, null, 2)}` : "",
     postDemoSummary ? `Post-Demo Summary:\n${JSON.stringify(postDemoSummary, null, 2)}` : "",
-    richBriefing ? `Deal Briefing (for context):\n${String(richBriefing).slice(0, 3000)}` : "",
-    demoNotes ? `Demo Notes:\n${demoNotes}` : "",
+    richBriefing ? `Deal Briefing:\n${String(richBriefing).slice(0, 2000)}` : "",
+    demoNotes ? `Demo Notes:\n${String(demoNotes).slice(0, 1000)}` : "",
   ].filter(Boolean);
 
   try {
-    const data = await callClaudeJSON<{ document: string }>(system, contextParts.join("\n\n"));
+    const data = await callClaudeJSONStreamed<{ document: string }>(
+      system,
+      contextParts.join("\n\n"),
+      res,
+      { maxTokens: 3500 }
+    );
     req.log.info({ company }, "generate-proposal-document completed");
     res.json(data);
   } catch (err) {

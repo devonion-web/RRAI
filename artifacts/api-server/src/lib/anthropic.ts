@@ -15,10 +15,14 @@ export const anthropic = new Anthropic({
 
 const MODEL = "claude-sonnet-4-6";
 
-export async function callClaude(system: string, user: string): Promise<string> {
+export interface ClaudeOptions {
+  maxTokens?: number;
+}
+
+export async function callClaude(system: string, user: string, opts: ClaudeOptions = {}): Promise<string> {
   const msg = await anthropic.messages.create({
     model: MODEL,
-    max_tokens: 8192,
+    max_tokens: opts.maxTokens ?? 8192,
     system,
     messages: [{ role: "user", content: user }],
   });
@@ -26,8 +30,8 @@ export async function callClaude(system: string, user: string): Promise<string> 
   return block.type === "text" ? block.text : "";
 }
 
-export async function callClaudeJSON<T>(system: string, user: string): Promise<T> {
-  const raw = await callClaude(system, user);
+export async function callClaudeJSON<T>(system: string, user: string, opts: ClaudeOptions = {}): Promise<T> {
+  const raw = await callClaude(system, user, opts);
   const cleaned = raw
     .replace(/^```(?:json)?\s*/i, "")
     .replace(/```\s*$/m, "")
@@ -36,5 +40,43 @@ export async function callClaudeJSON<T>(system: string, user: string): Promise<T
     return JSON.parse(cleaned) as T;
   } catch {
     throw new Error(`Claude returned invalid JSON. Raw response: ${raw.slice(0, 400)}`);
+  }
+}
+
+/**
+ * Stream a Claude generation while keeping the HTTP connection alive.
+ * Collects the full streamed text, then returns it as a parsed JSON object.
+ * Use for long-running generations that risk hitting the 120s proxy timeout.
+ */
+export async function callClaudeJSONStreamed<T>(
+  system: string,
+  user: string,
+  res: import("express").Response,
+  opts: ClaudeOptions = {}
+): Promise<T> {
+  let fullText = "";
+
+  const stream = anthropic.messages.stream({
+    model: MODEL,
+    max_tokens: opts.maxTokens ?? 4096,
+    system,
+    messages: [{ role: "user", content: user }],
+  });
+
+  stream.on("text", (chunk) => {
+    fullText += chunk;
+  });
+
+  await stream.finalMessage();
+
+  const cleaned = fullText
+    .replace(/^```(?:json)?\s*/i, "")
+    .replace(/```\s*$/m, "")
+    .trim();
+
+  try {
+    return JSON.parse(cleaned) as T;
+  } catch {
+    throw new Error(`Claude returned invalid JSON. Raw response: ${fullText.slice(0, 400)}`);
   }
 }
