@@ -172,47 +172,43 @@ async function claudeEnrichWorklist(
 - Scope: ${understanding.scope ?? "Not specified"}`
     : "";
 
-  const system = `You are a senior GRC consultant at Risk Rising triaging an RFP/RFI for the first time.
+  const system = `You are a bid manager at Risk Rising conducting first-pass triage of an RFP/RFI requirements list.
 
-Your goal is NOT to write responses. Your goal is to assess each requirement and help the team decide where to focus effort.
+Triage only. Do not write responses. Do not provide strategy or commentary.
 
-Think like an experienced consultant reviewing an RFP: "Should we respond to this? Why does it matter? Who should own it? Is it even relevant to us?"
+For each requirement, answer three questions:
+1. Does this require a response from RR, LogicGate or Panorays?
+2. Who should own it?
+3. What does LogicGate Risk Cloud specifically provide for it?
 
 ${RR_CONTEXT}
 ${OWNERSHIP_GUIDE}
 ${understandingCtx}
 
-For each requirement row, produce an enriched worklist entry with these fields:
+Fields to produce per requirement:
 - requirement_id: padded ID (REQ-NNN)
 - source_document: document filename
-- original_question: verbatim requirement text from the row
+- original_question: verbatim text from the row — do not alter
 - category: from the categories list
-- mandatory_optional: Mandatory | Optional | Unknown (use the row's priority field as a guide)
+- mandatory_optional: Mandatory | Optional | Unknown
 - relevance: "Relevant" | "Not Relevant" | "Uncertain"
-  - Relevant: RR, LogicGate, or Panorays can meaningfully respond
-  - Not Relevant: administrative, legal boilerplate, or completely outside scope
-  - Uncertain: needs clarification before assessing
-- why_it_matters: one sentence explaining its significance to winning this bid (null if Not Relevant)
-- logicgate_mapping: what LogicGate Risk Cloud provides for this requirement (null if not applicable)
-- rr_mapping: what Risk Rising delivers for this requirement (null if not applicable)
+  - Relevant: RR, LogicGate, or Panorays can respond
+  - Not Relevant: admin, legal boilerplate, or entirely out of scope
+  - Uncertain: cannot determine without more information
+- why_relevant: one short factual sentence on why this requirement applies to RR/LG/Panorays. Null if Not Relevant.
+- logicgate_mapping: specific LogicGate Risk Cloud feature or capability that covers this. Null if not applicable. Do not speculate — if unsure, set to null and set confidence to Low.
+- rr_mapping: specific RR delivery or service capability that covers this. Null if not applicable.
 - recommended_owner: RR | LogicGate | Panorays | Joint | Not Relevant
-- recommended_response_type: 
-  - "Direct" — RR can respond without vendor input
-  - "Vendor Validation" — needs LogicGate or Panorays to confirm
-  - "Collaborative" — RR and vendor each contribute a part
-  - "Decline" — outside scope or not applicable
-- priority: High | Medium | Low
-  - High: mandatory or directly impacts evaluation score
-  - Medium: important but secondary to High items
-  - Low: optional, informational, or low-weight
-- linked_objectives: which customer objectives this requirement addresses (max 2, verbatim from the list above, empty array if none or no objectives known)
-- notes: brief additional context (null if none)
+- response_required: true if a response should be drafted; false if Not Relevant or Decline
+- vendor_validation_required: true if LogicGate or Panorays must confirm before a complete answer can be given
+- confidence: "High" (clear ownership and scope) | "Medium" (some ambiguity) | "Low" (unclear — needs review)
+- notes: flag any ambiguity, missing information, or items needing customer clarification. Null if none.
 
 Rules:
-- Use verbatim requirement text — do not paraphrase or summarise original_question.
-- Be selective with priority — not everything can be High.
-- Not Relevant items still need recommended_owner: "Not Relevant" and recommended_response_type: "Decline".
-- Never guess at platform capabilities — if uncertain, use "Vendor Validation" or "Uncertain".
+- original_question must be verbatim — never paraphrase.
+- Do not invent platform capabilities. If uncertain about LogicGate or Panorays coverage, set logicgate_mapping / rr_mapping to null and confidence to Low.
+- Not Relevant items: recommended_owner = "Not Relevant", response_required = false, vendor_validation_required = false.
+- Confidence Low means: ownership unclear, requirement ambiguous, or platform coverage unknown.
 
 Output ONLY valid JSON — no prose, no code fences:
 {
@@ -224,13 +220,13 @@ Output ONLY valid JSON — no prose, no code fences:
       "category": "<category>",
       "mandatory_optional": "<Mandatory|Optional|Unknown>",
       "relevance": "<Relevant|Not Relevant|Uncertain>",
-      "why_it_matters": "<one sentence or null>",
-      "logicgate_mapping": "<brief description or null>",
-      "rr_mapping": "<brief description or null>",
+      "why_relevant": "<one factual sentence or null>",
+      "logicgate_mapping": "<specific LG feature or null>",
+      "rr_mapping": "<specific RR capability or null>",
       "recommended_owner": "<RR|LogicGate|Panorays|Joint|Not Relevant>",
-      "recommended_response_type": "<Direct|Vendor Validation|Collaborative|Decline>",
-      "priority": "<High|Medium|Low>",
-      "linked_objectives": [],
+      "response_required": true,
+      "vendor_validation_required": false,
+      "confidence": "<High|Medium|Low>",
       "notes": null
     }
   ]
@@ -267,14 +263,14 @@ Categories: ${CATEGORIES.join(", ")}.`;
       category: r.category ?? "Other / unknown",
       mandatory_optional: r.priority?.toLowerCase().includes("mand") ? "Mandatory" : "Unknown",
       relevance: "Uncertain",
-      why_it_matters: null,
+      why_relevant: null,
       logicgate_mapping: null,
       rr_mapping: null,
       recommended_owner: "Unknown",
-      recommended_response_type: "Vendor Validation",
-      priority: "Medium",
-      linked_objectives: [],
-      notes: "Enrichment failed — please review manually.",
+      response_required: true,
+      vendor_validation_required: false,
+      confidence: "Low",
+      notes: "Triage failed — please review manually.",
     }));
   }
 }
@@ -297,30 +293,33 @@ async function claudeExtractWorklistFromText(
 - Key themes: ${JSON.stringify(understanding.key_themes ?? [])}`
     : "";
 
-  const system = `You are a senior GRC consultant at Risk Rising triaging an RFP/RFI.
+  const system = `You are a bid manager at Risk Rising conducting first-pass triage of an RFP/RFI document.
 
-Extract every identifiable question or requirement from this document text, then assess each one.
+Extract every distinct question or requirement, then triage each one. Do not write responses. Do not provide strategy.
+
 ${RR_CONTEXT}
 ${OWNERSHIP_GUIDE}
 ${understandingCtx}
 
-Rules for extraction:
+Extraction rules:
 - Extract EVERY distinct question or requirement, even brief ones.
 - Do not merge multiple requirements into one.
 - Ignore table of contents, headers, page numbers, footers.
 - If the chunk contains no requirements, return an empty array.
 
-For each extracted requirement, produce a worklist entry:
-- requirement_id, source_document, original_question (verbatim), category, mandatory_optional
+Triage fields per requirement:
+- requirement_id, source_document, original_question (verbatim — do not paraphrase), category, mandatory_optional
 - relevance: Relevant | Not Relevant | Uncertain
-- why_it_matters (one sentence or null)
-- logicgate_mapping (brief or null)
-- rr_mapping (brief or null)
+- why_relevant: one short factual sentence on why this applies to RR/LG/Panorays. Null if Not Relevant.
+- logicgate_mapping: specific LG Risk Cloud feature/capability. Null if not applicable or uncertain.
+- rr_mapping: specific RR delivery/service capability. Null if not applicable.
 - recommended_owner: RR | LogicGate | Panorays | Joint | Not Relevant
-- recommended_response_type: Direct | Vendor Validation | Collaborative | Decline
-- priority: High | Medium | Low
-- linked_objectives: [] (from objectives list above)
-- notes: null
+- response_required: true if a response should be drafted; false if Not Relevant
+- vendor_validation_required: true if LG or Panorays must confirm before a complete answer can be given
+- confidence: High (clear) | Medium (some ambiguity) | Low (unclear or platform coverage unknown)
+- notes: flag ambiguity, missing info, or items needing customer clarification. Null if none.
+
+Do not invent platform capabilities. If uncertain, set mapping fields to null and confidence to Low.
 
 Output ONLY valid JSON — no prose, no code fences:
 {
@@ -328,17 +327,17 @@ Output ONLY valid JSON — no prose, no code fences:
     {
       "requirement_id": "REQ-NNN",
       "source_document": "<filename>",
-      "original_question": "<verbatim or closely paraphrased>",
+      "original_question": "<verbatim text>",
       "category": "<category>",
       "mandatory_optional": "<Mandatory|Optional|Unknown>",
       "relevance": "<Relevant|Not Relevant|Uncertain>",
-      "why_it_matters": "<one sentence or null>",
-      "logicgate_mapping": "<brief or null>",
-      "rr_mapping": "<brief or null>",
+      "why_relevant": "<one factual sentence or null>",
+      "logicgate_mapping": "<specific LG feature or null>",
+      "rr_mapping": "<specific RR capability or null>",
       "recommended_owner": "<RR|LogicGate|Panorays|Joint|Not Relevant>",
-      "recommended_response_type": "<Direct|Vendor Validation|Collaborative|Decline>",
-      "priority": "<High|Medium|Low>",
-      "linked_objectives": [],
+      "response_required": true,
+      "vendor_validation_required": false,
+      "confidence": "<High|Medium|Low>",
       "notes": null
     }
   ]
@@ -372,31 +371,24 @@ async function claudeGenerateAssessmentSections(
   vendorContext: string,
   log: Logger
 ): Promise<Record<string, unknown>> {
-  const system = `You are a senior GRC consultant at Risk Rising producing a strategic opportunity assessment.
+  const system = `You are a bid manager at Risk Rising reviewing a completed first-pass triage of an RFP/RFI.
 
-This is NOT about writing responses. This is about helping the pursuit team decide where to focus effort.
+Produce a brief, factual triage summary. Do not provide strategy, pursuit recommendations, or narrative commentary.
 
-${RR_CONTEXT}
-${OWNERSHIP_GUIDE}
+Output:
+- triage_summary: 1–2 factual sentences only — state what was found (total requirements, how many are relevant, how many need vendor input). No opinion, no recommendation.
+- gaps: specific gaps in the triage — requirements where ownership is unclear, platform coverage is unknown, or information is missing. Each gap must reference a specific requirement area or category. No boilerplate.
+- clarification_needed: specific questions to raise with the customer or procurement team before a full response can be drafted. Factual questions only — no strategy.
+- items_flagged_for_review: requirement IDs or brief descriptions of items that need human review before proceeding.
 
-Based on the RFP Understanding Model and the worklist, produce a strategic assessment with these sections:
+Output ONLY valid JSON — no prose, no code fences:
+{
+  "triage_summary": "<factual 1-2 sentences>",
+  "gaps": ["<specific gap>"],
+  "clarification_needed": ["<specific question>"],
+  "items_flagged_for_review": ["<requirement area or ref>"]
+}`;
 
-- opportunity_summary: 2–3 sentence executive overview of what this RFP is about and what winning it means for RR.
-- customer_objectives: list of specific business objectives extracted from the RFP (be specific, not generic).
-- key_themes: overarching themes that should inform all response decisions.
-- logicgate_capability_mapping: list of strings — how LogicGate Risk Cloud modules map to this opportunity. Mention specific LogicGate features or modules where relevant (Risk Cloud, Controls, Frameworks, Assessments, Incidents, Reporting etc.).
-- rr_service_mapping: list of strings — how RR's implementation, delivery, support and managed service capabilities map. Be specific about what RR brings.
-- risks_and_assumptions: { "risks": ["<specific risk>"], "assumptions": ["<assumption>"] }
-  - Risks: real gaps, uncertainties, or potential issues (not boilerplate).
-  - Assumptions: things RR is assuming to be true when assessing this opportunity.
-- recommended_strategy: 3–4 sentence recommended pursuit and response strategy. Where should the team focus? What should they lead with?
-- pursuit_recommendation: "Proceed" | "Qualify" | "Do not pursue"
-- pursuit_rationale: one sentence rationale.
-- response_confidence: "High" | "Medium" | "Low"
-
-Output ONLY valid JSON — no prose, no code fences.`;
-
-  // Summarise the worklist for context
   const ownerCounts = worklist.reduce<Record<string, number>>((acc, r) => {
     const k = String(r.recommended_owner ?? "Unknown");
     acc[k] = (acc[k] ?? 0) + 1;
@@ -407,44 +399,49 @@ Output ONLY valid JSON — no prose, no code fences.`;
     acc[k] = (acc[k] ?? 0) + 1;
     return acc;
   }, {});
-  const highPriority = worklist
-    .filter((r) => r.priority === "High")
-    .slice(0, 10)
+  const lowConfidence = worklist
+    .filter((r) => r.confidence === "Low")
+    .slice(0, 15)
     .map((r) => ({
       id: r.requirement_id,
       q: typeof r.original_question === "string" ? r.original_question.slice(0, 100) : "",
       owner: r.recommended_owner,
-      type: r.recommended_response_type,
+      notes: r.notes ?? null,
+    }));
+  const vendorItems = worklist
+    .filter((r) => r.vendor_validation_required)
+    .slice(0, 10)
+    .map((r) => ({
+      id: r.requirement_id,
+      owner: r.recommended_owner,
+      q: typeof r.original_question === "string" ? r.original_question.slice(0, 80) : "",
     }));
 
   const user = `Company: ${company}
 Vendor context: ${vendorContext}
 
-RFP Understanding Model:
-${JSON.stringify(understanding, null, 2)}
-
-Worklist summary:
+Worklist totals:
 - Total requirements: ${worklist.length}
-- By owner: ${JSON.stringify(ownerCounts)}
 - By relevance: ${JSON.stringify(relevanceCounts)}
-- High-priority items: ${JSON.stringify(highPriority)}`;
+- By owner: ${JSON.stringify(ownerCounts)}
+- Vendor validation required: ${worklist.filter((r) => r.vendor_validation_required).length}
+
+Low-confidence items (need review):
+${JSON.stringify(lowConfidence, null, 2)}
+
+Items needing vendor validation:
+${JSON.stringify(vendorItems, null, 2)}`;
 
   try {
-    const result = await callClaudeJSON<Record<string, unknown>>(system, user, { maxTokens: 3000 });
+    const result = await callClaudeJSON<Record<string, unknown>>(system, user, { maxTokens: 1500 });
     return result ?? {};
   } catch (err) {
-    log.warn({ err }, "claudeGenerateAssessmentSections failed — returning minimal assessment");
+    log.warn({ err }, "claudeGenerateAssessmentSections failed");
     return {
-      opportunity_summary: "Assessment generation failed. Please review the worklist manually.",
-      customer_objectives: (understanding.objectives as string[]) ?? [],
-      key_themes: (understanding.key_themes as string[]) ?? [],
-      logicgate_capability_mapping: [],
-      rr_service_mapping: [],
-      risks_and_assumptions: { risks: [], assumptions: [] },
-      recommended_strategy: "Manual review required.",
-      pursuit_recommendation: "Qualify",
-      pursuit_rationale: "Automatic assessment failed — manual review needed.",
-      response_confidence: "Low",
+      triage_summary: `${worklist.length} requirements triaged. Manual review recommended.`,
+      gaps: [],
+      clarification_needed: [],
+      items_flagged_for_review: [],
     };
   }
 }
