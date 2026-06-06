@@ -4,7 +4,7 @@ import mammoth from "mammoth";
 import pdfParse from "pdf-parse";
 import { callClaudeJSON } from "../lib/anthropic";
 import { storeTextDoc, storeExcelDoc, getDocs, removeDoc, storeSize } from "../lib/docStore";
-import { createJob, getJob, updateJob, updateProgress, appendRequirements } from "../lib/jobStore";
+import { createJob, getJob, updateJob, updateProgress, appendRequirements, appendMappingRows } from "../lib/jobStore";
 import { parseExcelForRequirements, batchRows, chunkText, type ParsedRow } from "../lib/xlsxParser";
 import type { Logger } from "pino";
 
@@ -429,6 +429,8 @@ router.get("/rfp/jobs/:id", (req, res): void => {
     progress: job.progress,
     health: job.health,
     requirements: job.requirements,
+    mappingRows: job.mappingRows,
+    mappingSummary: job.mappingSummary,
     error: job.error,
   });
 });
@@ -621,6 +623,261 @@ Output ONLY valid JSON. No prose, no code fences.
     res.json(result);
   } catch (err) {
     req.log.error({ err }, "rfp generate-gap-analysis failed");
+    res.status(500).json({ error: (err as Error).message });
+  }
+});
+
+// ═════════════════════════════════════════════════════════════════════════════
+// RR MAPPING PACK
+// ═════════════════════════════════════════════════════════════════════════════
+
+const MAPPING_BATCH_SIZE = 25;
+
+async function claudeMapBatch(
+  batch: Record<string, unknown>[],
+  vendorContext: string,
+  company: string,
+  log: Logger
+): Promise<Record<string, unknown>[]> {
+  const system = `You are a senior GRC consultant at Risk Rising creating a detailed RFP/RFI Response Mapping Pack.
+
+${RR_CONTEXT}
+${OWNERSHIP_GUIDE}
+
+For each requirement, produce a complete mapping entry.
+
+owner: Assign using the ownership guide. Use exactly one of: RR, LogicGate, Panorays, Joint, Unknown.
+rr_capability_mapping: What Risk Rising can genuinely own and deliver. Max 80 words. Null if not relevant.
+logicgate_mapping: What LogicGate Risk Cloud provides for this requirement. Max 80 words. Null if not relevant.
+panorays_mapping: What Panorays provides. Max 80 words. Null if not relevant.
+draft_rr_response: Concise Risk Rising response. Max 120 words. UK English. Rules by owner:
+  - RR: write a specific implementation/delivery/support/commercial response.
+  - Joint: write only the RR element; vendor element goes in vendor_question_or_prompt.
+  - LogicGate / Panorays / Unknown: null — do not draft a response.
+vendor_validation_required: true if vendor input is needed before a complete answer can be given.
+vendor_question_or_prompt: Specific question to send to the vendor. Null if not needed.
+confidence: High (clear boundary), Medium (some ambiguity), Low (complex or unclear).
+assumptions: Key assumptions. Null if none.
+status: Always "Draft".
+notes: One-sentence rationale for owner assignment.
+
+Rules:
+- Never invent platform capabilities not listed above.
+- UK English throughout (organisation, recognise, customise, programme).
+- "Risk Rising" not "RiskRising".
+- draft_rr_response max 120 words.
+- Classify every item — never leave owner blank.
+
+Output ONLY valid JSON — no prose, no code fences:
+{
+  "rows": [
+    {
+      "requirement_id": "REQ-001",
+      "owner": "RR",
+      "rr_capability_mapping": "...",
+      "logicgate_mapping": null,
+      "panorays_mapping": null,
+      "draft_rr_response": "...",
+      "vendor_validation_required": false,
+      "vendor_question_or_prompt": null,
+      "confidence": "High",
+      "assumptions": null,
+      "status": "Draft",
+      "notes": "..."
+    }
+  ]
+}`;
+
+  const input = batch.map((r) => ({
+    requirement_id: r.requirement_id,
+    source_document: r.source_document,
+    original_question: typeof r.original_question === "string" ? r.original_question.slice(0, 300) : "",
+    category: r.category,
+    mandatory_optional: r.mandatory_optional,
+  }));
+
+  const user = `Company: ${company}\nVendor context: ${vendorContext}\n\nRequirements to map:\n${JSON.stringify(input, null, 2)}`;
+
+  try {
+    const result = await callClaudeJSON<{ rows: Record<string, unknown>[] }>(system, user, { maxTokens: 8000 });
+    return Array.isArray(result?.rows) ? result.rows : [];
+  } catch (err) {
+    log.warn({ err }, "claudeMapBatch failed — returning stub rows");
+    return batch.map((r) => ({
+      requirement_id: r.requirement_id,
+      original_question: r.original_question,
+      category: r.category,
+      owner: "Unknown",
+      rr_capability_mapping: null,
+      logicgate_mapping: null,
+      panorays_mapping: null,
+      draft_rr_response: null,
+      vendor_validation_required: false,
+      vendor_question_or_prompt: null,
+      confidence: "Low",
+      assumptions: null,
+      status: "Draft",
+      notes: "Automatic mapping failed — please review manually.",
+    }));
+  }
+}
+
+async function claudeGenerateMappingSummary(
+  mappingRows: Record<string, unknown>[],
+  company: string,
+  vendorContext: string,
+  log: Logger
+): Promise<Record<string, unknown>> {
+  const system = `You are a senior GRC consultant at Risk Rising. Based on the complete RFP/RFI Response Mapping Pack, produce an executive summary.
+
+${RR_CONTEXT}
+
+Produce four lists:
+- gaps_and_risks: Specific gaps or risks in the response approach (missing vendor input, unclear ownership, unsupported claims). Be specific.
+- assumptions: Key assumptions underpinning the pack as a whole.
+- commercial_delivery_considerations: Commercial, contractual or delivery points to factor into the response or proposal.
+- recommended_next_actions: Ordered list of concrete next actions for the pursuit team.
+
+UK English. Concise. Each item max 40 words.
+
+Output ONLY valid JSON — no prose, no code fences:
+{
+  "gaps_and_risks": ["..."],
+  "assumptions": ["..."],
+  "commercial_delivery_considerations": ["..."],
+  "recommended_next_actions": ["..."]
+}`;
+
+  const ownerCounts = mappingRows.reduce<Record<string, number>>((acc, r) => {
+    const o = String(r.owner ?? "Unknown");
+    acc[o] = (acc[o] ?? 0) + 1;
+    return acc;
+  }, {});
+
+  const sample = mappingRows.slice(0, 80).map((r) => ({
+    requirement_id: r.requirement_id,
+    category: r.category,
+    owner: r.owner,
+    vendor_validation_required: r.vendor_validation_required,
+    confidence: r.confidence,
+    original_question: typeof r.original_question === "string" ? r.original_question.slice(0, 100) : "",
+  }));
+
+  const user = `Company: ${company}\nVendor context: ${vendorContext}\nTotal requirements: ${mappingRows.length}\nOwnership breakdown: ${JSON.stringify(ownerCounts)}\n\nSample rows:\n${JSON.stringify(sample, null, 2)}`;
+
+  try {
+    return await callClaudeJSON<Record<string, unknown>>(system, user, { maxTokens: 2500 });
+  } catch (err) {
+    log.warn({ err }, "claudeGenerateMappingSummary failed");
+    return {
+      gaps_and_risks: ["Summary generation failed — please review requirements manually."],
+      assumptions: [],
+      commercial_delivery_considerations: [],
+      recommended_next_actions: [
+        "Review ownership assignments",
+        "Obtain vendor input for flagged items",
+        "Complete draft responses before submission",
+      ],
+    };
+  }
+}
+
+async function runMappingJob(
+  jobId: string,
+  requirements: Record<string, unknown>[],
+  vendorContext: string,
+  company: string,
+  log: Logger
+): Promise<void> {
+  try {
+    updateJob(jobId, { status: "running" });
+
+    const batches: Record<string, unknown>[][] = [];
+    for (let i = 0; i < requirements.length; i += MAPPING_BATCH_SIZE) {
+      batches.push(requirements.slice(i, i + MAPPING_BATCH_SIZE));
+    }
+
+    const total = batches.length + 1; // +1 for summary
+    log.info({ jobId, batches: batches.length, requirements: requirements.length }, "mapping job started");
+
+    for (const [i, batch] of batches.entries()) {
+      const stage = batches.length === 1
+        ? "Mapping requirements…"
+        : `Mapping requirements — batch ${i + 1} of ${batches.length}`;
+      updateProgress(jobId, i, total, stage);
+
+      const rows = await claudeMapBatch(batch, vendorContext, company, log);
+      appendMappingRows(jobId, rows);
+
+      log.info({ jobId, batch: i + 1, total, rowsThisBatch: rows.length }, "mapping batch done");
+    }
+
+    updateProgress(jobId, batches.length, total, "Generating pack summary…");
+    const job = getJob(jobId)!;
+    const summary = await claudeGenerateMappingSummary(job.mappingRows, company, vendorContext, log);
+
+    updateJob(jobId, {
+      status: "done",
+      mappingSummary: summary,
+      progress: {
+        done: total,
+        total,
+        stage: `Done — ${job.mappingRows.length} requirements mapped`,
+      },
+    });
+
+    log.info({ jobId, rowCount: job.mappingRows.length }, "mapping job complete");
+  } catch (err) {
+    log.error({ jobId, err }, "mapping job crashed");
+    updateJob(jobId, { status: "error", error: (err as Error).message });
+  }
+}
+
+// ── POST /api/rfp/generate-mapping-pack ──────────────────────────────────────
+// Returns {jobId} immediately. Polls via GET /api/rfp/jobs/:id.
+// Job result: mappingRows[], mappingSummary.
+router.post("/rfp/generate-mapping-pack", (req: Request, res): void => {
+  const { requirements, vendorContext, company } = req.body as Record<string, unknown>;
+  if (!Array.isArray(requirements) || requirements.length === 0) {
+    res.status(400).json({ error: "requirements array is required" }); return;
+  }
+
+  const job = createJob();
+  req.log.info({ jobId: job.id, count: requirements.length, company }, "rfp: mapping job created");
+
+  void runMappingJob(
+    job.id,
+    requirements as Record<string, unknown>[],
+    String(vendorContext ?? "Unknown"),
+    String(company ?? "Unknown"),
+    req.log
+  );
+
+  res.json({ jobId: job.id });
+});
+
+// ── POST /api/rfp/regenerate-mapping-row ─────────────────────────────────────
+// Synchronous — processes a single row, returns the updated row.
+router.post("/rfp/regenerate-mapping-row", async (req, res): Promise<void> => {
+  const { requirement, vendorContext, company } = req.body as Record<string, unknown>;
+  if (!requirement || typeof requirement !== "object") {
+    res.status(400).json({ error: "requirement object is required" }); return;
+  }
+
+  try {
+    const rows = await claudeMapBatch(
+      [requirement as Record<string, unknown>],
+      String(vendorContext ?? "Unknown"),
+      String(company ?? "Unknown"),
+      req.log
+    );
+    req.log.info(
+      { requirementId: (requirement as Record<string, unknown>).requirement_id },
+      "rfp: row regenerated"
+    );
+    res.json({ row: rows[0] ?? null });
+  } catch (err) {
+    req.log.error({ err }, "rfp: regenerate-mapping-row failed");
     res.status(500).json({ error: (err as Error).message });
   }
 });

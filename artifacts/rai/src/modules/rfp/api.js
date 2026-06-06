@@ -51,6 +51,16 @@ export async function rfpGenerateGapAnalysis({ requirements, vendorContext, comp
   return post('/generate-gap-analysis', { requirements, vendorContext, company })
 }
 
+// Fire a mapping pack job — returns { jobId } immediately (background processing)
+export async function rfpGenerateMappingPack({ requirements, vendorContext, company }) {
+  return post('/generate-mapping-pack', { requirements, vendorContext, company })
+}
+
+// Regenerate a single row — synchronous, returns { row }
+export async function rfpRegenerateMappingRow({ requirement, vendorContext, company }) {
+  return post('/regenerate-mapping-row', { requirement, vendorContext, company })
+}
+
 // Remove a stored document from the server
 export async function rfpRemoveDocument(id) {
   await fetch(`${BASE}/documents/${id}`, { method: 'DELETE' })

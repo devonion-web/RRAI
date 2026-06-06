@@ -14,6 +14,8 @@ export interface ExtractionJob {
   progress: JobProgress;
   health: Record<string, unknown> | null;
   requirements: Record<string, unknown>[];
+  mappingRows: Record<string, unknown>[];
+  mappingSummary: Record<string, unknown> | null;
   error: string | null;
   createdAt: number;
 }
@@ -35,6 +37,8 @@ export function createJob(): ExtractionJob {
     progress: { done: 0, total: 1, stage: "Starting…" },
     health: null,
     requirements: [],
+    mappingRows: [],
+    mappingSummary: null,
     error: null,
     createdAt: Date.now(),
   };
@@ -59,4 +63,9 @@ export function updateProgress(id: string, done: number, total: number, stage: s
 export function appendRequirements(id: string, reqs: Record<string, unknown>[]): void {
   const job = JOBS.get(id);
   if (job) job.requirements.push(...reqs);
+}
+
+export function appendMappingRows(id: string, rows: Record<string, unknown>[]): void {
+  const job = JOBS.get(id);
+  if (job) job.mappingRows.push(...rows);
 }

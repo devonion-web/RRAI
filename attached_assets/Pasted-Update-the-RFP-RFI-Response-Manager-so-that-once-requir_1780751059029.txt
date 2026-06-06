@@ -1,0 +1,142 @@
+Update the RFP / RFI Response Manager so that once requirements have been extracted, the next step is to create an RR RFP Response Mapping Pack.
+
+Important context:
+Risk Rising will often support an RFP/RFI in partnership with LogicGate or Panorays. RR should not blindly answer every question. RR should answer where the question relates to RR capability, implementation, delivery, advisory, support, managed services or commercials. Where the question relates to LogicGate or Panorays platform functionality, RAI should map the likely capability based on the knowledgebase, but clearly mark vendor validation required.
+
+Core principle:
+RAI should answer where RR has authority, map where RR has informed knowledge, and flag where vendor validation is needed.
+
+Build the next stage after extraction:
+
+Extracted Requirements
+→ Classify
+→ Assign Owner
+→ Map Capability
+→ Generate RR-owned answers
+→ Generate vendor validation prompts
+→ Produce RR Response Mapping Pack
+
+Ownership categories:
+1. RR-owned
+2. LogicGate-owned
+3. Panorays-owned
+4. Joint
+5. Unknown / Human Review Required
+
+Answer modes:
+1. RR-owned answer
+   - Generate a concise Risk Rising response.
+   - Use RR delivery, implementation, support, managed service and commercial knowledge.
+   - Do not overclaim.
+   - Include assumptions where relevant.
+
+2. Vendor-owned answer
+   - Do not provide a final answer unless approved vendor knowledge exists.
+   - Provide a mapped view based on RR knowledge.
+   - Mark clearly: LogicGate validation required or Panorays validation required.
+
+3. Joint answer
+   - Split into:
+     - Vendor platform capability
+     - RR implementation / service response
+   - Draft the RR element.
+   - Flag the vendor validation needed.
+
+4. Unknown
+   - Mark as Human Review Required.
+   - Explain why ownership is unclear.
+
+For each extracted requirement create this data structure:
+- rfp_reference
+- source_document
+- original_question
+- category
+- owner
+- rr_capability_mapping
+- logicgate_mapping
+- panorays_mapping
+- draft_rr_response
+- vendor_validation_required
+- vendor_question_or_prompt
+- confidence
+- assumptions
+- status
+- notes
+
+Categories:
+- Functional capability
+- Technical architecture
+- Security
+- Compliance
+- Data / integrations
+- Reporting / dashboards
+- Workflow / configuration
+- Implementation approach
+- Project delivery
+- Training
+- UAT / testing
+- Hypercare
+- Support
+- Managed service
+- Commercials
+- Legal / contractual
+- Case studies / references
+- Company information
+- Unknown / other
+
+Create a new UI step called: Generate RR Mapping Pack.
+
+The user should be able to:
+- view all extracted requirements in a table
+- filter by owner
+- filter by category
+- filter by confidence
+- regenerate one row
+- edit a draft response
+- mark an item as RR-owned, vendor-owned, joint or unknown
+- export the RR Mapping Pack to DOCX
+
+The RR Mapping Pack DOCX should contain:
+1. Cover Page
+2. Opportunity Summary
+3. RFP / RFI Health Assessment
+4. Ownership Breakdown
+5. Requirement Mapping Matrix
+6. RR-Owned Draft Responses
+7. LogicGate / Panorays Validation Required
+8. Joint Response Items
+9. Gaps, Risks and Assumptions
+10. Commercial / Delivery Considerations
+11. Recommended Next Actions
+12. Appendix: Extracted Requirements
+
+Document style:
+- Use the existing RR-branded DOCX styling.
+- Keep it concise and executive-friendly.
+- Use tables wherever possible.
+- Avoid long narrative paragraphs.
+- No paragraph should exceed approximately 120 words.
+- Use clear labels such as “Vendor validation required”.
+- Use UK spelling.
+- Use “Risk Rising”, not “RiskRising”.
+
+Important:
+This is not a final customer-facing RFP response yet. It is an RR working document that can be shared internally or with LogicGate/Panorays to help coordinate the response.
+
+Backend:
+Do not run one huge Claude call. Process rows in batches.
+Suggested batch size: 25-50 requirements.
+Store intermediate classification and answer results server-side.
+Return progress to the frontend.
+Avoid 120-second timeout issues.
+
+Validation before export:
+- Every requirement has an owner.
+- Every RR-owned item has a draft RR response.
+- Every vendor-owned item has a vendor validation prompt.
+- Every joint item is split into vendor and RR parts.
+- Unknown items are clearly flagged.
+- Commercial and delivery considerations are included.
+- Unsupported product claims are not presented as fact.
+
+Please implement this as the next stage after requirement extraction, without breaking the existing extraction flow.
