@@ -1,0 +1,329 @@
+We need to redesign the RFP capability.
+
+The current design is too focused on requirements, ownership classification and response generation.
+
+This is not how Risk Rising reviews an RFP.
+
+## New Principle
+
+The purpose of the RFP tool is:
+
+> To understand what Risk Rising would need to deliver, implement, support and respond to if we won the engagement.
+
+The tool should behave like an experienced RR consultant reviewing an RFP for the first time.
+
+The tool is NOT:
+
+- a bid writer
+- a proposal writer
+- a requirement classifier
+- a vendor capability explainer
+
+The tool IS:
+
+- a delivery assessor
+- a support assessor
+- a use case assessor
+- a response prioritisation engine
+
+---
+
+# New Workflow
+
+## Stage 1 – RFP Understanding
+
+Analyse all uploaded documents.
+
+This includes:
+
+- RFPs
+- RFIs
+- Requirement spreadsheets
+- Security questionnaires
+- Procurement documents
+- PDF decks
+- Scope documents
+- Supporting documents
+
+Build an understanding of:
+
+- what the customer is trying to achieve
+- what capabilities they need
+- what business problems they are solving
+
+Do not generate responses yet.
+
+---
+
+## Stage 2 – Use Case Assessment
+
+Identify:
+
+### Primary Use Cases
+
+Examples:
+
+- Enterprise Risk Management
+- Controls Management
+- Internal Audit
+- Third Party Risk Management
+- Regulatory Compliance
+- Policy Management
+- Incident Management
+- Risk Assessments
+- Workflow Management
+- Reporting
+
+For each use case provide:
+
+- confidence
+- source references
+- business importance
+
+---
+
+## Stage 3 – LogicGate Assessment
+
+If vendorContext = LogicGate
+
+Map use cases to LogicGate modules.
+
+Example:
+
+ERM
+→ LogicGate ERM
+
+Controls
+→ Controls Compliance
+
+TPRM
+→ LogicGate TPRM
+
+Policy
+→ Policy Management
+
+Incident Management
+→ Incident Management
+
+Do not generate marketing descriptions.
+
+Keep mapping implementation-focused.
+
+---
+
+## Stage 4 – RR Delivery Assessment
+
+This is the most important stage.
+
+Determine:
+
+### Discovery Activities
+
+Would RR need:
+
+- workshops
+- requirements gathering
+- process mapping
+- operating model design
+
+### Configuration Activities
+
+Would RR need:
+
+- workflow configuration
+- forms
+- reports
+- dashboards
+- notifications
+- user roles
+
+### Data Activities
+
+Would RR need:
+
+- data migration
+- cleansing
+- transformation
+- taxonomy design
+
+### Integration Activities
+
+Would RR need:
+
+- APIs
+- ServiceNow
+- HR systems
+- ERP systems
+- Security tools
+
+### Testing Activities
+
+Would RR need:
+
+- UAT
+- defect management
+- go-live support
+
+### Change Activities
+
+Would RR need:
+
+- training
+- train-the-trainer
+- adoption support
+
+---
+
+## Stage 5 – RR Support Assessment
+
+Identify:
+
+### Hypercare Requirements
+
+### Training Requirements
+
+### Administrative Support Requirements
+
+### Managed Service Opportunities
+
+### Platform Support Expectations
+
+### Reporting Support Requirements
+
+### Enhancement Requirements
+
+Focus only on support implications for RR.
+
+---
+
+## Stage 6 – Geographic & Coverage Assessment
+
+Identify:
+
+### Regions
+
+### Countries
+
+### Languages
+
+### Timezones
+
+### Support Coverage Requirements
+
+### Delivery Constraints
+
+Only include information that impacts RR delivery or support.
+
+---
+
+## Stage 7 – Delivery Risks
+
+Identify:
+
+### Delivery Risks
+
+### Integration Risks
+
+### Data Risks
+
+### Resource Risks
+
+### Support Risks
+
+### Timeline Risks
+
+Only include risks relevant to RR delivery.
+
+---
+
+## Stage 8 – RR Response Identification
+
+Only after all previous stages are complete.
+
+Identify:
+
+### Questions RR Must Answer
+
+Examples:
+
+- implementation approach
+- migration strategy
+- training approach
+- support model
+- managed service
+- delivery governance
+- resource model
+
+### Questions LogicGate Must Validate
+
+Examples:
+
+- platform functionality
+- security architecture
+- hosting
+- performance
+- roadmap
+
+### Questions Requiring Joint Response
+
+Examples:
+
+- integrations
+- TPRM workflows
+- reporting
+- operating model
+
+---
+
+# Remove
+
+Remove or heavily reduce:
+
+- pursuit recommendations
+- win strategy
+- sales strategy
+- competitive positioning
+- generic opportunity summaries
+- vendor marketing language
+- long capability descriptions
+
+---
+
+# Final Output
+
+Create four tabs only:
+
+## 1. Use Cases
+
+What business capabilities are required?
+
+## 2. Delivery Impact
+
+What RR would need to implement?
+
+## 3. Support Impact
+
+What RR would need to support?
+
+## 4. Response Workbench
+
+What questions actually require responses?
+
+---
+
+# Success Criteria
+
+After analysing an RFP, Dev should immediately understand:
+
+- what use cases exist
+- what LogicGate modules are likely required
+- what RR would need to deliver
+- what RR would need to support
+- what integrations are likely required
+- what migration effort exists
+- what resources are needed
+- what timezones matter
+- what delivery risks exist
+- what questions RR actually needs to answer
+
+If the output does not help estimate delivery scope, support scope or response effort, then the analysis has failed.

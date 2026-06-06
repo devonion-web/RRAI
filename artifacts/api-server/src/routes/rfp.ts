@@ -118,94 +118,89 @@ async function claudeOpportunityIntelligence(
   vendorContext: string,
   log: Logger
 ): Promise<Record<string, unknown>> {
-  const system = `You are a senior Risk Rising consultant reviewing an RFP/RFI procurement pack for the first time.
+  const system = `You are an experienced Risk Rising consultant reviewing an RFP/RFI procurement pack for the first time.
 
-OBJECTIVE: Understand this opportunity. Do NOT write responses. Do NOT draft a proposal. Do NOT recommend pursuit strategy. Do NOT speculate beyond what the documents contain.
+Your role: Understand what Risk Rising would need to deliver, implement, support and respond to — if RR won this engagement.
 
-Think like a senior consultant doing a first read-through: What does the customer need to achieve? What would RR need to deliver, support, implement and respond to? What questions remain unanswered?
+You are NOT a bid writer. You are NOT a proposal writer. You are a delivery assessor and support assessor.
+
+DO NOT write responses. DO NOT draft proposals. DO NOT recommend pursuit strategy. DO NOT produce marketing language. DO NOT produce long capability descriptions.
 
 ${RR_CONTEXT}
 ${OWNERSHIP_GUIDE}
 
-Produce a structured Opportunity Intelligence Assessment. Extract actual content from the documents — do not hallucinate or invent details not present. If a field cannot be determined, use null (strings), [] (arrays), or "Unknown" (enums).
+Produce a structured assessment. Extract only what is present in the documents. Do not hallucinate. If a field cannot be determined, use [] (arrays) or appropriate defaults.
 
-Keep all list items concise — one line each. No long descriptions. No marketing language.
+Keep every list item to one concise line. No paragraph answers.
 
 Output ONLY valid JSON — no prose, no code fences:
 {
-  "customer_objectives": [
-    "<what the customer states they are trying to achieve — specific, not generic>"
-  ],
-  "business_use_cases": [
-    "<likely use case implied by the RFP — e.g. Risk Management, TPRM, Policy Attestation, Incident Management, Regulatory Compliance, Audit Management, Controls Testing, Executive Reporting>"
-  ],
-  "capability_requirements": [
+  "use_cases": [
     {
-      "capability": "<specific capability required>",
-      "rr_area": "<ERM | Controls Compliance | TPRM | Regulatory Compliance | Policy Management | Incident Management | Audit | Assessments | Reporting | Integrations | Workflow | Implementation | Support | Other>"
+      "name": "<use case name — e.g. Enterprise Risk Management, Controls Management, TPRM, Internal Audit, Regulatory Compliance, Policy Management, Incident Management, Reporting>",
+      "confidence": "<High|Medium|Low>",
+      "source_references": ["<document name or section where this was evidenced>"],
+      "business_importance": "<one-line statement of why this matters to the customer>"
     }
   ],
   "logicgate_mapping": [
     {
-      "requirement_area": "<capability area or use case>",
-      "logicgate_module": "<specific LogicGate module — e.g. Risk Cloud ERM, TPRM, Policy Management, Incident Management, Controls, Assessments, Reporting>"
+      "use_case": "<use case name from above>",
+      "logicgate_module": "<specific LogicGate Risk Cloud module — e.g. ERM, Controls Compliance, TPRM, Policy Management, Incident Management, Regulatory Compliance, Audit, Assessments>"
     }
   ],
-  "scope_assessment": {
-    "in_scope": ["<what is clearly in scope>"],
-    "likely_out_of_scope": ["<what appears out of scope or is not mentioned>"],
-    "mandatory_items": ["<non-negotiable requirements explicitly stated>"],
-    "optional_items": ["<items flagged as optional, desirable, or phase 2>"]
-  },
-  "suggested_delivery_phases": [
-    {
-      "phase": 1,
-      "name": "<phase name>",
-      "items": ["<capability or workstream in this phase>"]
-    }
-  ],
-  "resource_assessment": [
-    {
-      "role": "<role title — e.g. Project Manager, Solution Architect, LogicGate Consultant, Business Analyst, Trainer, Integration Specialist, Data Migration Support>",
-      "justification": "<one-line reason based on what is in scope>"
-    }
-  ],
-  "integration_assessment": {
-    "likely_integrations": ["<system or platform likely needing integration>"],
-    "data_sources": ["<data source likely to be involved>"],
-    "api_dependencies": ["<specific API integration that may be required>"]
-  },
-  "data_migration_assessment": {
-    "likely_requirements": ["<data migration requirement>"],
-    "complexity": "Low | Medium | High | Unknown",
-    "assumptions": ["<assumption RR is making about migration>"]
+  "delivery_assessment": {
+    "discovery_activities": ["<discovery or requirements gathering activity RR would need to perform>"],
+    "configuration_activities": ["<workflow, form, dashboard, report, or role configuration RR would need to build>"],
+    "data_activities": ["<data migration, cleansing, taxonomy or transformation activity>"],
+    "integration_activities": ["<API, system or tool integration RR would need to plan or deliver>"],
+    "testing_activities": ["<UAT, defect management, go-live support or testing activity>"],
+    "change_activities": ["<training, adoption, train-the-trainer or change management activity>"]
   },
   "support_assessment": {
-    "support_expectations": ["<level or type of support expected>"],
-    "hypercare_requirements": ["<hypercare or go-live support requirement>"],
-    "training_obligations": ["<training requirement or obligation>"]
+    "hypercare_requirements": ["<hypercare or immediate post-go-live support requirement>"],
+    "training_requirements": ["<ongoing or post-go-live training requirement>"],
+    "admin_support_requirements": ["<user management, configuration, or platform admin support>"],
+    "managed_service_opportunities": ["<ongoing managed service or optimisation opportunity>"],
+    "platform_support_expectations": ["<support hours, SLA, or availability expectation>"],
+    "reporting_support_requirements": ["<ongoing reporting or dashboard support requirement>"],
+    "enhancement_requirements": ["<post-go-live enhancement, iteration or continuous improvement requirement>"]
   },
   "geographic_assessment": {
-    "operating_regions": ["<region where customer operates>"],
-    "implementation_timezone_impacts": ["<timezone consideration for delivery>"],
-    "support_timezone_impacts": ["<timezone requirement for ongoing support>"]
+    "regions": ["<region where the customer operates — e.g. UK, EMEA, Americas, APAC>"],
+    "countries": ["<specific country if mentioned>"],
+    "languages": ["<language requirement if stated>"],
+    "timezones": ["<timezone relevant to delivery or support>"],
+    "support_coverage_requirements": ["<specific support coverage requirement — e.g. business hours, 24/7, follow-the-sun>"],
+    "delivery_constraints": ["<geographic or timezone constraint that affects RR delivery>"]
   },
-  "risk_assessment": {
-    "delivery_risks": ["<risk to successful delivery>"],
-    "integration_risks": ["<risk related to integrations or data>"],
-    "resource_risks": ["<resourcing risk>"],
-    "platform_risks": ["<risk related to platform, vendor, or technical architecture>"]
+  "delivery_risks": {
+    "delivery_risks": ["<risk to successful delivery — timeline, complexity, dependency>"],
+    "integration_risks": ["<risk related to integration complexity, API access, or data flows>"],
+    "data_risks": ["<risk related to data migration quality, volume, or availability>"],
+    "resource_risks": ["<resourcing risk — specialist availability, team capacity>"],
+    "support_risks": ["<risk to RR's ability to meet support obligations>"],
+    "timeline_risks": ["<risk related to deadlines, regulatory dates, or procurement timelines>"]
   },
-  "open_questions": {
-    "customer_clarification": ["<question RR needs answered by the customer before responding>"],
-    "vendor_clarification": ["<question RR needs answered by LogicGate or Panorays>"],
-    "scope_clarification": ["<scope ambiguity that needs resolving>"]
-  },
-  "response_candidates": {
-    "rr_responds": ["<requirement area where RR should own the response — implementation, delivery, support, commercials>"],
-    "logicgate_validates": ["<requirement area where LogicGate must validate — platform features, architecture, security, SLAs>"],
-    "joint_response": ["<requirement area requiring both RR implementation context and vendor platform detail>"],
-    "can_be_ignored": ["<requirement area that is administrative, legal boilerplate, or out of scope>"]
+  "response_identification": {
+    "rr_must_answer": [
+      {
+        "topic": "<response topic — e.g. Implementation approach, Migration strategy, Training approach, Support model>",
+        "reason": "<one sentence: why RR must own this answer>"
+      }
+    ],
+    "logicgate_must_validate": [
+      {
+        "topic": "<response topic — e.g. Platform security architecture, API specifications, SLAs, Hosting model>",
+        "reason": "<one sentence: why LogicGate must validate this>"
+      }
+    ],
+    "joint_response": [
+      {
+        "topic": "<response topic — e.g. Integration approach for ServiceNow, TPRM workflow capabilities>",
+        "reason": "<one sentence: why both RR and LogicGate input is needed>"
+      }
+    ]
   }
 }`;
 
@@ -750,10 +745,9 @@ async function claudeMapBatch(
 ): Promise<Record<string, unknown>[]> {
   const oiCtx = oiAssessment
     ? `\nOpportunity context (from OI Assessment):
-- Customer objectives: ${JSON.stringify((oiAssessment.customer_objectives as string[]) ?? [])}
-- Business use cases: ${JSON.stringify((oiAssessment.business_use_cases as string[]) ?? [])}
-- In-scope capabilities: ${JSON.stringify((oiAssessment.scope_assessment as Record<string,unknown> | null)?.in_scope ?? [])}
-- Open questions — customer: ${JSON.stringify((oiAssessment.open_questions as Record<string,unknown> | null)?.customer_clarification ?? [])}`
+- Use cases: ${JSON.stringify(((oiAssessment.use_cases as Record<string,unknown>[]) ?? []).map((u) => (u as Record<string,unknown>).name))}
+- Configuration activities: ${JSON.stringify((oiAssessment.delivery_assessment as Record<string,unknown> | null)?.configuration_activities ?? [])}
+- RR must answer: ${JSON.stringify(((oiAssessment.response_identification as Record<string,unknown> | null)?.rr_must_answer as Record<string,unknown>[] ?? []).map((r) => (r as Record<string,unknown>).topic))}`
     : "";
 
   const system = `You are a senior GRC consultant at Risk Rising creating a detailed RFP/RFI Response Mapping Pack.
@@ -852,7 +846,7 @@ async function claudeGenerateMappingSummary(
   log: Logger
 ): Promise<Record<string, unknown>> {
   const oiCtx = oiAssessment
-    ? `\nCustomer objectives: ${JSON.stringify((oiAssessment.customer_objectives as string[]) ?? [])}`
+    ? `\nUse cases: ${JSON.stringify(((oiAssessment.use_cases as Record<string,unknown>[]) ?? []).map((u) => (u as Record<string,unknown>).name))}`
     : "";
 
   const system = `You are a senior GRC consultant at Risk Rising. Based on the completed RFP/RFI Response Mapping Pack, produce an executive summary.
