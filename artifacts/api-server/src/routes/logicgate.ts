@@ -781,22 +781,20 @@ Return only section text — no JSON, no code fences, no headings.`,
 Return only the table — no JSON, no code fences, no headings.`,
   },
   commercial: {
-    maxTokens: 380,
-    instruction: `Write the Commercial Summary section as a markdown table. No prose.
+    maxTokens: 320,
+    instruction: `Write the Commercial Summary section as a markdown table covering scope and billing context only. No prose, no licence/implementation amounts (those appear in a separate auto-calculated cost table).
 
 | Item | Detail |
 |------|--------|
-| Platform Licence (Annual) | £X,XXX per year |
-| Implementation Investment | £X,XXX (one-off) |
-| Phase 1 Apps in Scope | X apps |
-| Phase 2 Apps in Scope | X apps |
+| Phase 1 Apps in Scope | X apps — [list them] |
+| Phase 2 Apps in Scope | X apps — [list them] |
 | Contract Term | X years |
-| Billing Frequency | Quarterly / Annual in Advance |
+| Billing Frequency | Quarterly in Advance / Annual in Advance |
 | Estimated Go-Live | Q[X] [Year] |
+| Key Commercial Assumption | [one key assumption] |
 
-Use figures from the provided pricing context. Write "TBC" if a figure is unavailable.
-Add one sentence beneath the table on key pricing assumptions.
-Return only section text — no JSON, no code fences, no headings.`,
+Use figures from the provided pricing context. Write "TBC" if unavailable.
+Return only the table — no JSON, no code fences, no headings.`,
   },
   assumptions_dependencies: {
     maxTokens: 420,

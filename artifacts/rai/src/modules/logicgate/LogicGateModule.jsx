@@ -1346,6 +1346,73 @@ function buildCommercialLedger(rowLines) {
   })
 }
 
+// Build a Year 1 / Year 2 / Year 3 cost breakdown table from proposalPricing state.
+// Returns an array of docx elements (heading paragraph + Table) or [] if no prices are set.
+function buildYearByYearTable(pricing) {
+  if (!pricing) return []
+  const num = (v) => {
+    if (v === null || v === undefined || v === '') return 0
+    const n = typeof v === 'number' ? v : parseFloat(String(v).replace(/[^0-9.]/g, ''))
+    return isNaN(n) || n < 0 ? 0 : n
+  }
+  let annualSoftware = 0
+  const perAppPrices = pricing.perAppPrices || {}
+  for (const k of Object.keys(perAppPrices)) annualSoftware += num(perAppPrices[k])
+  if (pricing.powerUsersEnabled) annualSoftware += num(pricing.powerUsersPrice)
+  if (pricing.apiEnabled) annualSoftware += num(pricing.apiPrice)
+  const implementationTotal = pricing.implementationEnabled
+    ? num(pricing.implementationPerApp) * Object.keys(perAppPrices).length
+    : 0
+  const managedServiceAnnual = pricing.managedServiceEnabled ? num(pricing.managedServicePrice) : 0
+  const annualRecurring = annualSoftware + managedServiceAnnual
+  if (annualRecurring === 0 && implementationTotal === 0) return []
+
+  const fmt = (n) => n === 0 ? '—' : `£${Math.round(n).toLocaleString('en-GB')}`
+  const yr1 = annualRecurring + implementationTotal
+  const yr2 = annualRecurring
+  const yr3 = annualRecurring
+  const total3yr = yr1 + yr2 + yr3
+
+  const noBorder = { style: BorderStyle.NONE }
+  const rowBorder = { style: BorderStyle.SINGLE, size: 4, color: 'E2E8F0' }
+  const brd = { top: rowBorder, bottom: rowBorder, left: noBorder, right: noBorder }
+  const COL = [1800, 2424, 2424, 2424]
+
+  const hCell = (text, i) => new TableCell({
+    shading: { type: ShadingType.CLEAR, fill: '0B1F3A', color: 'auto' },
+    width: { size: COL[i], type: WidthType.DXA },
+    margins: { top: 100, bottom: 100, left: 160, right: 100 },
+    children: [new Paragraph({ children: [new TextRun({ text, font: 'Arial', size: 19, bold: true, color: 'FFFFFF' })] })],
+  })
+  const dCell = (text, i, bold = false, shade = false) => new TableCell({
+    shading: shade ? { type: ShadingType.CLEAR, fill: 'EFF6FF', color: 'auto' } : undefined,
+    borders: brd,
+    width: { size: COL[i], type: WidthType.DXA },
+    margins: { top: 100, bottom: 100, left: 160, right: 100 },
+    children: [new Paragraph({ children: [new TextRun({ text, font: 'Arial', size: 20, bold, color: bold ? '0B1F3A' : '1F2937' })] })],
+  })
+
+  const hRow = new TableRow({ tableHeader: true, children: [hCell('', 0), hCell('Platform & Software', 1), hCell('Implementation', 2), hCell('Total', 3)] })
+  const dataRows = [
+    ['Year 1', fmt(annualRecurring), fmt(implementationTotal), fmt(yr1), false, false],
+    ['Year 2', fmt(annualRecurring), '—', fmt(yr2), false, true],
+    ['Year 3', fmt(annualRecurring), '—', fmt(yr3), false, false],
+    ['3-Year Total', fmt(annualRecurring * 3), fmt(implementationTotal), fmt(total3yr), true, true],
+  ].map(([label, c1, c2, c3, bold, shade]) => new TableRow({
+    children: [dCell(label, 0, bold, shade), dCell(c1, 1, bold, shade), dCell(c2, 2, false, shade), dCell(c3, 3, bold, shade)],
+  }))
+
+  return [
+    new Paragraph({ spacing: { before: 200, after: 80 }, children: [new TextRun({ text: '3-Year Investment Summary', font: 'Arial', size: 22, bold: true, color: '0B1F3A' })] }),
+    new Table({
+      width: { size: 9072, type: WidthType.DXA },
+      columnWidths: COL,
+      rows: [hRow, ...dataRows],
+      borders: { top: noBorder, bottom: noBorder, left: noBorder, right: noBorder, insideHorizontal: noBorder, insideVertical: noBorder },
+    }),
+  ]
+}
+
 // Build commercial ledger from proposalPricing state when section not generated.
 function buildCommercialFromPricing(pricing) {
   if (!pricing) return []
@@ -1499,10 +1566,12 @@ async function exportProposalDocx(sections, pricing, company) {
     // Commercial: always include — fall back to pricing inputs if not generated
     if (s.id === 'commercial' && !content) {
       const fallbackElements = buildCommercialFromPricing(pricing)
-      if (fallbackElements.length) {
+      const yrTable = buildYearByYearTable(pricing)
+      if (fallbackElements.length || yrTable.length) {
         sectionNum++
         children.push(proposalSectionHeader(sectionNum, s.label))
-        children.push(...fallbackElements)
+        if (fallbackElements.length) children.push(...fallbackElements)
+        if (yrTable.length) children.push(...yrTable)
         children.push(new Paragraph({
           spacing: { before: 80, after: 0 },
           children: [new TextRun({ text: 'All commercial figures are indicative and subject to final scope confirmation and contract execution.', font: 'Arial', size: 18, italics: true, color: '6B7280' })],
@@ -1517,8 +1586,10 @@ async function exportProposalDocx(sections, pricing, company) {
     children.push(proposalSectionHeader(sectionNum, s.label))
     children.push(...parseProposalContent(content, s.id))
 
-    // Commercial note beneath the commercial section
+    // Commercial: append 3-year cost table and note
     if (s.id === 'commercial') {
+      const yrTable = buildYearByYearTable(pricing)
+      if (yrTable.length) children.push(...yrTable)
       children.push(new Paragraph({
         spacing: { before: 80, after: 0 },
         children: [new TextRun({ text: 'All commercial figures are indicative and subject to final scope confirmation and contract execution.', font: 'Arial', size: 18, italics: true, color: '6B7280' })],
@@ -8573,11 +8644,38 @@ export default function LogicGateModule() {
                           <div style={{ fontSize: 12, color: RED, marginTop: 6, paddingLeft: 32 }}>{sec.error}</div>
                         )}
                         {hasContent && (
-                          <div style={{
-                            background: '#f8fafc', border: `1px solid ${BORDER}`, borderRadius: 6,
-                            padding: '10px 12px', maxHeight: 320, overflowY: 'auto', marginLeft: 32,
-                          }}>
-                            <ProposalSectionContent sectionId={s.id} content={sec.content} />
+                          <div style={{ marginLeft: 32 }}>
+                            {s.id === 'next_steps' ? (
+                              <>
+                                <div style={{ fontSize: 11, color: MUTED, marginBottom: 4, fontStyle: 'italic' }}>
+                                  Edit suggested next steps before downloading
+                                </div>
+                                <textarea
+                                  value={sec.content}
+                                  onChange={(e) => setProposalSections(prev => ({
+                                    ...prev,
+                                    next_steps: { ...prev.next_steps, content: e.target.value },
+                                  }))}
+                                  rows={8}
+                                  style={{
+                                    width: '100%', boxSizing: 'border-box',
+                                    fontFamily: 'ui-monospace, "Cascadia Code", Menlo, monospace',
+                                    fontSize: 12, padding: '8px 10px',
+                                    border: `1px solid ${BORDER}`, borderRadius: 6,
+                                    resize: 'vertical', outline: 'none',
+                                    color: '#374151', lineHeight: 1.65,
+                                    background: '#f8fafc',
+                                  }}
+                                />
+                              </>
+                            ) : (
+                              <div style={{
+                                background: '#f8fafc', border: `1px solid ${BORDER}`, borderRadius: 6,
+                                padding: '10px 12px', maxHeight: 320, overflowY: 'auto',
+                              }}>
+                                <ProposalSectionContent sectionId={s.id} content={sec.content} />
+                              </div>
+                            )}
                           </div>
                         )}
                       </div>
