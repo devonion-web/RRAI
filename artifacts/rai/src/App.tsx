@@ -1,7 +1,9 @@
 import React, { useState } from 'react'
 import RaiDashboard from './components/RaiDashboard'
-// @ts-ignore — LogicGateModule is a plain JS file; TS checks skipped
+// @ts-ignore — plain JS modules; TS checks skipped
 import LogicGateModule from './modules/logicgate/LogicGateModule'
+// @ts-ignore
+import RFPModule from './modules/rfp/RFPModule'
 
 type ModuleId = string | null
 
@@ -33,6 +35,7 @@ const backButtonStyle: React.CSSProperties = {
 
 const MODULE_LABELS: Record<string, string> = {
   logicgate: 'LogicGate Specialist',
+  rfp: 'RFP / RFI Response Manager',
   proposal: 'Proposal Specialist',
   marketing: 'Marketing Specialist',
   delivery: 'Delivery Specialist',
@@ -54,6 +57,7 @@ export default function App() {
           </span>
         </div>
         {activeModule === 'logicgate' && <LogicGateModule />}
+        {activeModule === 'rfp' && <RFPModule />}
       </div>
     )
   }

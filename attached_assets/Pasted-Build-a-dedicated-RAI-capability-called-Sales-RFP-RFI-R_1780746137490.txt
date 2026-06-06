@@ -1,0 +1,386 @@
+Build a dedicated RAI capability called: Sales → RFP / RFI Response Manager.
+
+Context:
+RAI is the Risk Rising AI operating platform. Risk Rising often supports RFPs, RFIs and questionnaires alongside LogicGate and/or Panorays. In many cases, the software vendor should answer functional, platform, security and technical product questions, while Risk Rising should answer implementation, delivery, support, managed service, commercial and advisory questions.
+
+This capability must not behave like a generic bid-writing tool. It must absorb all documents provided, classify requirements, map ownership, draft RR-owned responses, identify vendor-owned responses, and generate a mapped document that can be provided back to LogicGate or Panorays for input, review or completion.
+
+Primary objective:
+Create a structured RFP/RFI workflow that produces:
+1. Requirement extraction
+2. Question classification
+3. Owner mapping: RR / LogicGate / Panorays / Joint / Unknown
+4. Draft RR responses
+5. Suggested vendor response prompts for LogicGate or Panorays
+6. Gap and risk analysis
+7. Commercial and implementation response sections
+8. Exportable mapped response document
+9. Optional RR proposal or executive summary deck later
+
+Build this as a dedicated module inside the existing RAI platform.
+
+Module name:
+Sales → RFP / RFI Response Manager
+
+Core user flow:
+1. User selects Sales → RFP / RFI Response Manager.
+2. User uploads one or more documents:
+   - RFP
+   - RFI
+   - requirements spreadsheet
+   - procurement questionnaire
+   - security questionnaire
+   - implementation questionnaire
+   - commercial template
+   - meeting notes
+   - existing proposal or SOW
+3. User selects the relevant vendor context:
+   - LogicGate
+   - Panorays
+   - LogicGate + Panorays
+   - RR only
+   - Unknown / to be assessed
+4. User selects output type:
+   - Internal mapping matrix
+   - Vendor response pack
+   - RR-owned response document
+   - Combined customer response draft
+   - Gap analysis
+   - Commercial response
+5. RAI analyses the documents and generates a structured output.
+6. User can review, edit, regenerate or export.
+
+Important distinction:
+The tool must classify each question/requirement by ownership.
+
+Ownership categories:
+- RR-owned: implementation, project delivery, configuration approach, training, UAT, hypercare, support model, managed service, commercials, advisory services, customer engagement, delivery governance.
+- LogicGate-owned: functional product capabilities, platform features, workflow engine, dashboards, reporting, integrations, technical architecture, security, hosting, product roadmap, standard product support, platform SLAs.
+- Panorays-owned: third-party cyber monitoring, vendor assessment, external attack surface, questionnaire automation, continuous monitoring, platform-specific functionality, technical/security answers, product roadmap.
+- Joint: where RR provides implementation/service context and the vendor provides functional/platform detail.
+- Unknown: where ownership is unclear and human review is required.
+
+The system must never guess ownership silently. If unsure, classify as Unknown and add a clarification note.
+
+Use existing RAI / LogicGate Assistant sales criteria:
+The RFP capability must reuse the same opportunity intelligence criteria already used by the LogicGate Assistant sales modules, including:
+- opportunity fit
+- module fit
+- customer challenge
+- maturity level
+- urgency
+- buying drivers
+- likely stakeholders
+- competitive risk
+- implementation complexity
+- managed service potential
+- MEDDPICC-style qualification signals where relevant
+- risk and gap indicators
+- recommended next action
+
+Add an RFP Health Assessment at the start of each analysis:
+Fields:
+- Customer / prospect
+- Vendor context: LogicGate / Panorays / both / unknown
+- RFP type: RFI / RFP / security questionnaire / implementation questionnaire / procurement pack
+- Response deadline if found
+- Number of extracted questions / requirements
+- Estimated RR-owned items
+- Estimated vendor-owned items
+- Estimated joint items
+- Unknown / needs review items
+- LogicGate fit: High / Medium / Low / Unknown
+- Panorays fit: High / Medium / Low / Unknown
+- RR delivery fit: High / Medium / Low / Unknown
+- Managed service potential: High / Medium / Low / Unknown
+- Commercial complexity: High / Medium / Low / Unknown
+- Key risks
+- Recommended action: Proceed / Proceed with vendor input / Clarify / Do not proceed
+
+Requirement extraction:
+The tool must extract each identifiable question, requirement or response item from the uploaded documents.
+
+Each extracted item should have:
+- requirement_id
+- source_document
+- original_question_or_requirement
+- category
+- owner
+- vendor_context
+- priority
+- mandatory_optional_unknown
+- suggested_response_owner
+- RR_response_draft
+- vendor_response_needed
+- confidence
+- notes
+- evidence_or_source_reference
+
+Categories:
+- Functional capability
+- Technical architecture
+- Security
+- Compliance
+- Data / integrations
+- Reporting / dashboards
+- Workflow / configuration
+- Implementation approach
+- Project delivery
+- Training
+- UAT / testing
+- Hypercare
+- Support
+- Managed service
+- Commercials
+- Legal / contractual
+- Case studies / references
+- Company information
+- Other / unknown
+
+Response behaviour:
+For RR-owned items:
+- Generate a concise, professional RR response.
+- Use Risk Rising tone.
+- Avoid overclaiming.
+- Be specific about implementation, delivery, support or commercial approach.
+- Flag assumptions where needed.
+
+For vendor-owned items:
+- Do not invent detailed product answers unless approved knowledge exists.
+- Provide a suggested vendor response request, for example:
+  “LogicGate to confirm native capability, standard configuration approach, limitations and roadmap position.”
+- Where general knowledge exists, provide a draft response clearly marked as “vendor validation required.”
+
+For joint items:
+- Split the response into:
+  - Vendor platform response required
+  - RR implementation / service response
+- Draft the RR element.
+- Flag what the vendor needs to validate.
+
+For unknown items:
+- Mark as Human Review Required.
+- Explain why ownership is unclear.
+
+Output 1: RFP Mapping Matrix
+Create a table with:
+- ID
+- Source
+- Question / Requirement
+- Category
+- Owner
+- Vendor context
+- Draft RR response
+- Vendor input required
+- Confidence
+- Notes
+
+Output 2: Vendor Response Pack
+This is the document RR can send back to LogicGate or Panorays.
+
+It should include:
+- Opportunity summary
+- RFP health assessment
+- Items requiring vendor input
+- Questions grouped by category
+- Suggested response guidance
+- Deadline / urgency
+- Known RR position
+- Specific asks from the vendor
+
+Output 3: RR-Owned Response Pack
+This should include:
+- Implementation methodology
+- Delivery approach
+- Project governance
+- Training and enablement
+- UAT and hypercare
+- Support model
+- Managed service option
+- Commercial assumptions
+- Next steps
+
+Output 4: Gap Analysis
+Include:
+- Missing information
+- Product validation needed
+- Commercial dependencies
+- Security answers needed from vendor
+- Unsupported or unclear requirements
+- Risks to response quality
+- Questions to ask customer
+- Questions to ask vendor
+
+Output 5: Commercial Section
+Commercials must always be included where a proposal-style response is generated.
+
+If pricing is not known, include:
+- Pricing to be confirmed
+- Commercial assumptions
+- Optional service lines
+- Dependencies
+- Validity note
+- What is excluded
+
+For Risk Rising responses, include:
+- Implementation services
+- Configuration services
+- Training
+- Hypercare
+- Core support
+- Optional managed service
+- Optional advisory support
+
+Document generation:
+The final downloadable DOCX should be concise and visually structured.
+
+Important:
+Optimise the final downloadable document, not just the UI.
+
+DOCX style requirements:
+- Use RR branding/template if already present in the app.
+- Avoid long prose.
+- Use tables, bullets and callout boxes.
+- Executive summary should be short and scannable.
+- Mapping matrix should be table-led.
+- Commercials should be table-led.
+- No paragraph should exceed approximately 120 words unless necessary.
+- Include clear section headings.
+- Include a status/confidence indicator where useful.
+- Include “Vendor validation required” labels where applicable.
+
+Suggested document sections:
+1. Cover Page
+2. RFP / RFI Response Summary
+3. RFP Health Assessment
+4. Ownership Breakdown
+5. Requirement Mapping Matrix
+6. RR-Owned Draft Responses
+7. Vendor Input Required
+8. Joint Response Items
+9. Gap / Risk Analysis
+10. Commercial Considerations
+11. Recommended Next Actions
+12. Appendix: Extracted Requirements
+
+Frontend requirements:
+Add a dedicated RFP/RFI module UI with:
+- Upload multiple documents
+- Select vendor context
+- Select output type
+- Run analysis
+- Show progress
+- Display extracted requirements in a table
+- Allow filtering by owner/category/confidence
+- Allow editing of draft responses
+- Allow regeneration of individual responses
+- Allow export to DOCX
+- Later allow export to PPTX
+
+Backend requirements:
+- Add new routes for RFP capability.
+- Avoid one huge Claude call.
+- Use staged processing:
+  1. Parse / extract requirements
+  2. Classify ownership
+  3. Generate RR responses
+  4. Generate vendor ask pack
+  5. Generate gap analysis
+  6. Generate final export
+- Store intermediate outputs so a failure does not lose all work.
+- Return JSON for all API responses.
+- Add useful errors.
+- Do not expose Anthropic API keys to frontend.
+- Use existing Anthropic/Claude backend pattern already in the app.
+- Use streaming or staged calls to avoid timeout issues.
+
+Suggested API routes:
+- POST /api/rfp/upload
+- POST /api/rfp/analyse
+- POST /api/rfp/classify
+- POST /api/rfp/generate-responses
+- POST /api/rfp/generate-vendor-pack
+- POST /api/rfp/generate-gap-analysis
+- POST /api/rfp/export-docx
+- GET /api/rfp/health
+
+Knowledge sources:
+Create or use folders for:
+- /rai/knowledge/risk-rising
+- /rai/knowledge/logicgate
+- /rai/knowledge/panorays
+- /rai/knowledge/sales
+- /rai/knowledge/delivery
+- /rai/templates/rfp
+- /rai/templates/proposals
+- /rai/templates/vendor-response-packs
+
+The tool should load relevant knowledge based on vendor context and category.
+
+Do not load every knowledge file into every prompt. Select relevant knowledge only.
+
+Validation rules:
+Before generating the final document, run a validation pass:
+- Are all extracted requirements included?
+- Is every item assigned an owner?
+- Are vendor-owned items clearly marked?
+- Are RR-owned items drafted?
+- Are unknown items flagged?
+- Is commercial content included where relevant?
+- Are unsupported claims flagged?
+- Is the document concise enough?
+- Is the document suitable to send to LogicGate/Panorays or internal RR stakeholders?
+
+Important quality rules:
+- Do not hallucinate product capability.
+- Do not claim LogicGate or Panorays functionality unless supported by available knowledge.
+- If vendor validation is required, say so.
+- Use UK spelling.
+- Use Risk Rising, not RiskRising.
+- Keep tone professional, practical and commercially useful.
+- Avoid generic consulting filler.
+- Be direct and useful.
+
+Build sequence:
+Please do not attempt to build everything at once.
+
+Step 1:
+Create the module shell and UI.
+
+Step 2:
+Add document upload and extraction.
+
+Step 3:
+Add ownership classification.
+
+Step 4:
+Add mapping matrix UI.
+
+Step 5:
+Add RR-owned response generation.
+
+Step 6:
+Add vendor response pack generation.
+
+Step 7:
+Add gap analysis.
+
+Step 8:
+Add DOCX export.
+
+Step 9:
+Add validation pass.
+
+Step 10:
+Only then consider PPTX export.
+
+Before coding:
+First inspect the existing app architecture and identify:
+- existing sales module criteria
+- existing Claude call patterns
+- existing document generation functions
+- existing DOCX template approach
+- existing routes
+- any reusable components
+
+Then provide a safe implementation plan before making changes.

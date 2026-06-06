@@ -9,6 +9,15 @@ export const MODULES = [
     category: 'Sales',
   },
   {
+    id: 'rfp',
+    title: 'RFP / RFI Response Manager',
+    description:
+      'Extract requirements, classify ownership, draft RR responses, generate vendor input packs and export structured response documents.',
+    status: 'active',
+    icon: '📋',
+    category: 'Sales',
+  },
+  {
     id: 'proposal',
     title: 'Proposal Specialist',
     description:
