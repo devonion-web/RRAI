@@ -8,10 +8,10 @@ import { createJob, getJob, updateJob, updateProgress, appendRequirements, appen
 import { parseExcelForRequirements, batchRows, chunkText, type ParsedRow } from "../lib/xlsxParser";
 import type { Logger } from "pino";
 
-const MAX_CHARS_PER_CHUNK  = 18_000;
-const ROWS_PER_BATCH       = 30;
-const MAX_UNDERSTANDING_CHARS = 60_000;
-const MAPPING_BATCH_SIZE   = 25;
+const MAX_CHARS_PER_CHUNK    = 18_000;
+const ROWS_PER_BATCH         = 30;
+const MAX_OI_CHARS           = 80_000;
+const MAPPING_BATCH_SIZE     = 25;
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -57,7 +57,7 @@ const DOC_TYPES = [
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function padId(n: number): string {
-  return `REQ-${String(n).padStart(3, "0")}`;
+  return `RC-${String(n).padStart(3, "0")}`;
 }
 
 // ── Stage 1: Classify documents ───────────────────────────────────────────────
@@ -110,124 +110,164 @@ Output ONLY valid JSON — no prose, no code fences:
   }
 }
 
-// ── Stage 2: Extract RFP Understanding Model ──────────────────────────────────
+// ── Stage 2: Opportunity Intelligence Assessment ──────────────────────────────
 
-async function claudeExtractUnderstanding(
-  combinedText: string,
+async function claudeOpportunityIntelligence(
+  allContent: string,
   company: string,
   vendorContext: string,
   log: Logger
 ): Promise<Record<string, unknown>> {
-  const system = `You are a senior GRC consultant at Risk Rising reading an RFP/RFI procurement pack.
+  const system = `You are a senior Risk Rising consultant reviewing an RFP/RFI procurement pack for the first time.
 
-Extract a structured understanding of this procurement. Be specific — extract actual content from the document. Do not hallucinate or invent information not present.
+OBJECTIVE: Understand this opportunity. Do NOT write responses. Do NOT draft a proposal. Do NOT recommend pursuit strategy. Do NOT speculate beyond what the documents contain.
+
+Think like a senior consultant doing a first read-through: What does the customer need to achieve? What would RR need to deliver, support, implement and respond to? What questions remain unanswered?
+
+${RR_CONTEXT}
+${OWNERSHIP_GUIDE}
+
+Produce a structured Opportunity Intelligence Assessment. Extract actual content from the documents — do not hallucinate or invent details not present. If a field cannot be determined, use null (strings), [] (arrays), or "Unknown" (enums).
+
+Keep all list items concise — one line each. No long descriptions. No marketing language.
 
 Output ONLY valid JSON — no prose, no code fences:
 {
-  "customer_name": "<string or null>",
-  "industry": "<string or null>",
-  "objectives": ["<business objective the procurement aims to achieve>"],
-  "current_challenges": ["<problem or pain point driving this procurement>"],
-  "desired_outcomes": ["<specific outcome they want to achieve>"],
-  "scope": "<scope of the contract or project — what is included and excluded>",
-  "success_criteria": ["<how they will measure success>"],
-  "evaluation_criteria": ["<how responses will be evaluated — include weightings if stated>"],
-  "mandatory_requirements": ["<non-negotiable requirements explicitly stated in the document>"],
-  "timeline": "<key dates, deadlines, or project timeline>",
-  "procurement_process": "<stages of the procurement process>",
-  "commercial_constraints": ["<commercial, budget or contractual constraints>"],
-  "key_themes": ["<overarching themes or priorities that should inform all responses>"]
-}
+  "customer_objectives": [
+    "<what the customer states they are trying to achieve — specific, not generic>"
+  ],
+  "business_use_cases": [
+    "<likely use case implied by the RFP — e.g. Risk Management, TPRM, Policy Attestation, Incident Management, Regulatory Compliance, Audit Management, Controls Testing, Executive Reporting>"
+  ],
+  "capability_requirements": [
+    {
+      "capability": "<specific capability required>",
+      "rr_area": "<ERM | Controls Compliance | TPRM | Regulatory Compliance | Policy Management | Incident Management | Audit | Assessments | Reporting | Integrations | Workflow | Implementation | Support | Other>"
+    }
+  ],
+  "logicgate_mapping": [
+    {
+      "requirement_area": "<capability area or use case>",
+      "logicgate_module": "<specific LogicGate module — e.g. Risk Cloud ERM, TPRM, Policy Management, Incident Management, Controls, Assessments, Reporting>"
+    }
+  ],
+  "scope_assessment": {
+    "in_scope": ["<what is clearly in scope>"],
+    "likely_out_of_scope": ["<what appears out of scope or is not mentioned>"],
+    "mandatory_items": ["<non-negotiable requirements explicitly stated>"],
+    "optional_items": ["<items flagged as optional, desirable, or phase 2>"]
+  },
+  "suggested_delivery_phases": [
+    {
+      "phase": 1,
+      "name": "<phase name>",
+      "items": ["<capability or workstream in this phase>"]
+    }
+  ],
+  "resource_assessment": [
+    {
+      "role": "<role title — e.g. Project Manager, Solution Architect, LogicGate Consultant, Business Analyst, Trainer, Integration Specialist, Data Migration Support>",
+      "justification": "<one-line reason based on what is in scope>"
+    }
+  ],
+  "integration_assessment": {
+    "likely_integrations": ["<system or platform likely needing integration>"],
+    "data_sources": ["<data source likely to be involved>"],
+    "api_dependencies": ["<specific API integration that may be required>"]
+  },
+  "data_migration_assessment": {
+    "likely_requirements": ["<data migration requirement>"],
+    "complexity": "Low | Medium | High | Unknown",
+    "assumptions": ["<assumption RR is making about migration>"]
+  },
+  "support_assessment": {
+    "support_expectations": ["<level or type of support expected>"],
+    "hypercare_requirements": ["<hypercare or go-live support requirement>"],
+    "training_obligations": ["<training requirement or obligation>"]
+  },
+  "geographic_assessment": {
+    "operating_regions": ["<region where customer operates>"],
+    "implementation_timezone_impacts": ["<timezone consideration for delivery>"],
+    "support_timezone_impacts": ["<timezone requirement for ongoing support>"]
+  },
+  "risk_assessment": {
+    "delivery_risks": ["<risk to successful delivery>"],
+    "integration_risks": ["<risk related to integrations or data>"],
+    "resource_risks": ["<resourcing risk>"],
+    "platform_risks": ["<risk related to platform, vendor, or technical architecture>"]
+  },
+  "open_questions": {
+    "customer_clarification": ["<question RR needs answered by the customer before responding>"],
+    "vendor_clarification": ["<question RR needs answered by LogicGate or Panorays>"],
+    "scope_clarification": ["<scope ambiguity that needs resolving>"]
+  },
+  "response_candidates": {
+    "rr_responds": ["<requirement area where RR should own the response — implementation, delivery, support, commercials>"],
+    "logicgate_validates": ["<requirement area where LogicGate must validate — platform features, architecture, security, SLAs>"],
+    "joint_response": ["<requirement area requiring both RR implementation context and vendor platform detail>"],
+    "can_be_ignored": ["<requirement area that is administrative, legal boilerplate, or out of scope>"]
+  }
+}`;
 
-If a field cannot be determined from the documents, set it to null (strings) or [] (arrays).`;
-
-  const user = `Company: ${company}\nVendor context: ${vendorContext}\n\nDocument content:\n${combinedText}`;
+  const user = `Company: ${company}\nVendor context: ${vendorContext}\n\nDocument content:\n${allContent}`;
 
   try {
-    const result = await callClaudeJSON<Record<string, unknown>>(system, user, { maxTokens: 3000 });
+    const result = await callClaudeJSON<Record<string, unknown>>(system, user, { maxTokens: 6000 });
     return result ?? {};
   } catch (err) {
-    log.warn({ err }, "claudeExtractUnderstanding failed — returning empty model");
+    log.warn({ err }, "claudeOpportunityIntelligence failed — returning empty assessment");
     return {};
   }
 }
 
-// ── Stage 3a: Enrich worklist from Excel rows ─────────────────────────────────
+// ── Stage 3a: Identify response candidates from Excel rows ────────────────────
 
-async function claudeEnrichWorklist(
+async function claudeIdentifyResponseCandidates(
   rows: ParsedRow[],
   docName: string,
   vendorContext: string,
   company: string,
   startIndex: number,
-  understanding: Record<string, unknown> | null,
+  oiAssessment: Record<string, unknown> | null,
   log: Logger
 ): Promise<Record<string, unknown>[]> {
-  const understandingCtx = understanding
-    ? `\nRFP Context:
-- Customer objectives: ${JSON.stringify(understanding.objectives ?? [])}
-- Evaluation criteria: ${JSON.stringify(understanding.evaluation_criteria ?? [])}
-- Key themes: ${JSON.stringify(understanding.key_themes ?? [])}
-- Current challenges: ${JSON.stringify(understanding.current_challenges ?? [])}
-- Scope: ${understanding.scope ?? "Not specified"}`
+  const oiCtx = oiAssessment
+    ? `\nOpportunity context (from the OI Assessment):
+- Customer objectives: ${JSON.stringify((oiAssessment.customer_objectives as string[]) ?? [])}
+- In-scope capabilities: ${JSON.stringify((oiAssessment.scope_assessment as Record<string,unknown> | null)?.in_scope ?? [])}
+- Response candidates overview: ${JSON.stringify(oiAssessment.response_candidates ?? {})}`
     : "";
 
-  const system = `You are a bid manager at Risk Rising conducting first-pass triage of an RFP/RFI requirements list.
+  const system = `You are a bid manager at Risk Rising categorising RFP/RFI requirements into response buckets.
 
-Triage only. Do not write responses. Do not provide strategy or commentary.
-
-For each requirement, answer three questions:
-1. Does this require a response from RR, LogicGate or Panorays?
-2. Who should own it?
-3. What does LogicGate Risk Cloud specifically provide for it?
+Do NOT write responses. Do NOT provide strategy. Just categorise each requirement.
 
 ${RR_CONTEXT}
 ${OWNERSHIP_GUIDE}
-${understandingCtx}
+${oiCtx}
 
-Fields to produce per requirement:
-- requirement_id: padded ID (REQ-NNN)
-- source_document: document filename
-- original_question: verbatim text from the row — do not alter
-- category: from the categories list
-- mandatory_optional: Mandatory | Optional | Unknown
-- relevance: "Relevant" | "Not Relevant" | "Uncertain"
-  - Relevant: RR, LogicGate, or Panorays can respond
-  - Not Relevant: admin, legal boilerplate, or entirely out of scope
-  - Uncertain: cannot determine without more information
-- why_relevant: one short factual sentence on why this requirement applies to RR/LG/Panorays. Null if Not Relevant.
-- logicgate_mapping: specific LogicGate Risk Cloud feature or capability that covers this. Null if not applicable. Do not speculate — if unsure, set to null and set confidence to Low.
-- rr_mapping: specific RR delivery or service capability that covers this. Null if not applicable.
-- recommended_owner: RR | LogicGate | Panorays | Joint | Not Relevant
-- response_required: true if a response should be drafted; false if Not Relevant or Decline
-- vendor_validation_required: true if LogicGate or Panorays must confirm before a complete answer can be given
-- confidence: "High" (clear ownership and scope) | "Medium" (some ambiguity) | "Low" (unclear — needs review)
-- notes: flag any ambiguity, missing information, or items needing customer clarification. Null if none.
+For each requirement, determine:
+1. Bucket: RR | LogicGate | Joint | Ignore
+2. Mandatory or Optional
+3. One sentence explaining why
 
-Rules:
-- original_question must be verbatim — never paraphrase.
-- Do not invent platform capabilities. If uncertain about LogicGate or Panorays coverage, set logicgate_mapping / rr_mapping to null and confidence to Low.
-- Not Relevant items: recommended_owner = "Not Relevant", response_required = false, vendor_validation_required = false.
-- Confidence Low means: ownership unclear, requirement ambiguous, or platform coverage unknown.
+Bucket definitions:
+- RR: RR owns the response — implementation, configuration, project delivery, training, UAT, hypercare, support model, managed service, commercials, advisory.
+- LogicGate: LogicGate must validate or respond — platform features, technical architecture, security certifications, product roadmap, platform SLAs, hosting.
+- Joint: RR provides implementation/service context AND vendor provides platform/product detail.
+- Ignore: Administrative, legal boilerplate, company information, completely out of scope, or clearly not relevant.
 
 Output ONLY valid JSON — no prose, no code fences:
 {
-  "requirements": [
+  "candidates": [
     {
-      "requirement_id": "REQ-NNN",
+      "requirement_id": "RC-NNN",
       "source_document": "<filename>",
-      "original_question": "<verbatim text>",
-      "category": "<category>",
+      "original_question": "<verbatim text — do not alter>",
+      "category": "<from categories list>",
       "mandatory_optional": "<Mandatory|Optional|Unknown>",
-      "relevance": "<Relevant|Not Relevant|Uncertain>",
-      "why_relevant": "<one factual sentence or null>",
-      "logicgate_mapping": "<specific LG feature or null>",
-      "rr_mapping": "<specific RR capability or null>",
-      "recommended_owner": "<RR|LogicGate|Panorays|Joint|Not Relevant>",
-      "response_required": true,
-      "vendor_validation_required": false,
-      "confidence": "<High|Medium|Low>",
-      "notes": null
+      "bucket": "<RR|LogicGate|Joint|Ignore>",
+      "reason": "<one factual sentence>"
     }
   ]
 }
@@ -238,107 +278,83 @@ Categories: ${CATEGORIES.join(", ")}.`;
     id: r.id,
     requirement: r.requirement,
     category: r.category,
-    subcategory: r.subcategory,
     priority: r.priority,
   }));
 
-  const user = `Vendor context: ${vendorContext}\nCompany: ${company}\nDocument: ${docName}\n\nRows to assess:\n${JSON.stringify(rowsSummary, null, 2)}`;
+  const user = `Vendor context: ${vendorContext}\nCompany: ${company}\nDocument: ${docName}\n\nRequirements to categorise:\n${JSON.stringify(rowsSummary, null, 2)}`;
 
   try {
-    const result = await callClaudeJSON<{ requirements: Record<string, unknown>[] }>(
-      system, user, { maxTokens: 8000 }
+    const result = await callClaudeJSON<{ candidates: Record<string, unknown>[] }>(
+      system, user, { maxTokens: 6000 }
     );
-    const reqs = Array.isArray(result?.requirements) ? result.requirements : [];
-    return reqs.map((r, i) => ({
+    const candidates = Array.isArray(result?.candidates) ? result.candidates : [];
+    return candidates.map((r, i) => ({
       ...r,
       requirement_id: padId(startIndex + i + 1),
       source_document: docName,
     }));
   } catch (err) {
-    log.warn({ err, docName }, "claudeEnrichWorklist failed — generating fallback rows");
+    log.warn({ err, docName }, "claudeIdentifyResponseCandidates failed — generating fallback rows");
     return rows.map((r, i) => ({
       requirement_id: padId(startIndex + i + 1),
       source_document: docName,
       original_question: r.requirement,
       category: r.category ?? "Other / unknown",
       mandatory_optional: r.priority?.toLowerCase().includes("mand") ? "Mandatory" : "Unknown",
-      relevance: "Uncertain",
-      why_relevant: null,
-      logicgate_mapping: null,
-      rr_mapping: null,
-      recommended_owner: "Unknown",
-      response_required: true,
-      vendor_validation_required: false,
-      confidence: "Low",
-      notes: "Triage failed — please review manually.",
+      bucket: "RR",
+      reason: "Categorisation failed — please review manually.",
     }));
   }
 }
 
-// ── Stage 3b: Extract worklist from text docs ─────────────────────────────────
+// ── Stage 3b: Identify response candidates from text docs ─────────────────────
 
-async function claudeExtractWorklistFromText(
+async function claudeExtractCandidatesFromText(
   text: string,
   docName: string,
   vendorContext: string,
   company: string,
   startIndex: number,
-  understanding: Record<string, unknown> | null,
+  oiAssessment: Record<string, unknown> | null,
   log: Logger
 ): Promise<Record<string, unknown>[]> {
-  const understandingCtx = understanding
-    ? `\nRFP Context:
-- Customer objectives: ${JSON.stringify(understanding.objectives ?? [])}
-- Evaluation criteria: ${JSON.stringify(understanding.evaluation_criteria ?? [])}
-- Key themes: ${JSON.stringify(understanding.key_themes ?? [])}`
+  const oiCtx = oiAssessment
+    ? `\nOpportunity context (from the OI Assessment):
+- Customer objectives: ${JSON.stringify((oiAssessment.customer_objectives as string[]) ?? [])}
+- In-scope capabilities: ${JSON.stringify((oiAssessment.scope_assessment as Record<string,unknown> | null)?.in_scope ?? [])}`
     : "";
 
-  const system = `You are a bid manager at Risk Rising conducting first-pass triage of an RFP/RFI document.
+  const system = `You are a bid manager at Risk Rising extracting and categorising requirements from an RFP/RFI document.
 
-Extract every distinct question or requirement, then triage each one. Do not write responses. Do not provide strategy.
+Extract every distinct question or requirement, then categorise each one. Do NOT write responses. Do NOT provide strategy.
 
 ${RR_CONTEXT}
 ${OWNERSHIP_GUIDE}
-${understandingCtx}
+${oiCtx}
 
 Extraction rules:
 - Extract EVERY distinct question or requirement, even brief ones.
 - Do not merge multiple requirements into one.
 - Ignore table of contents, headers, page numbers, footers.
-- If the chunk contains no requirements, return an empty array.
+- If this chunk contains no requirements, return an empty array.
 
-Triage fields per requirement:
-- requirement_id, source_document, original_question (verbatim — do not paraphrase), category, mandatory_optional
-- relevance: Relevant | Not Relevant | Uncertain
-- why_relevant: one short factual sentence on why this applies to RR/LG/Panorays. Null if Not Relevant.
-- logicgate_mapping: specific LG Risk Cloud feature/capability. Null if not applicable or uncertain.
-- rr_mapping: specific RR delivery/service capability. Null if not applicable.
-- recommended_owner: RR | LogicGate | Panorays | Joint | Not Relevant
-- response_required: true if a response should be drafted; false if Not Relevant
-- vendor_validation_required: true if LG or Panorays must confirm before a complete answer can be given
-- confidence: High (clear) | Medium (some ambiguity) | Low (unclear or platform coverage unknown)
-- notes: flag ambiguity, missing info, or items needing customer clarification. Null if none.
-
-Do not invent platform capabilities. If uncertain, set mapping fields to null and confidence to Low.
+Bucket definitions:
+- RR: RR owns the response — implementation, configuration, delivery, training, UAT, hypercare, support, managed service, commercials.
+- LogicGate: LogicGate must validate — platform features, technical architecture, security, SLAs, roadmap, hosting.
+- Joint: RR provides service context AND vendor provides platform detail.
+- Ignore: Administrative, legal boilerplate, company info, or out of scope.
 
 Output ONLY valid JSON — no prose, no code fences:
 {
-  "requirements": [
+  "candidates": [
     {
-      "requirement_id": "REQ-NNN",
+      "requirement_id": "RC-NNN",
       "source_document": "<filename>",
       "original_question": "<verbatim text>",
-      "category": "<category>",
+      "category": "<from categories list>",
       "mandatory_optional": "<Mandatory|Optional|Unknown>",
-      "relevance": "<Relevant|Not Relevant|Uncertain>",
-      "why_relevant": "<one factual sentence or null>",
-      "logicgate_mapping": "<specific LG feature or null>",
-      "rr_mapping": "<specific RR capability or null>",
-      "recommended_owner": "<RR|LogicGate|Panorays|Joint|Not Relevant>",
-      "response_required": true,
-      "vendor_validation_required": false,
-      "confidence": "<High|Medium|Low>",
-      "notes": null
+      "bucket": "<RR|LogicGate|Joint|Ignore>",
+      "reason": "<one factual sentence>"
     }
   ]
 }
@@ -347,102 +363,18 @@ Categories: ${CATEGORIES.join(", ")}.`;
   const user = `Vendor context: ${vendorContext}\nCompany: ${company}\nDocument: ${docName}\n\n${text}`;
 
   try {
-    const result = await callClaudeJSON<{ requirements: Record<string, unknown>[] }>(
-      system, user, { maxTokens: 6000 }
+    const result = await callClaudeJSON<{ candidates: Record<string, unknown>[] }>(
+      system, user, { maxTokens: 5000 }
     );
-    const reqs = Array.isArray(result?.requirements) ? result.requirements : [];
-    return reqs.map((r, i) => ({
+    const candidates = Array.isArray(result?.candidates) ? result.candidates : [];
+    return candidates.map((r, i) => ({
       ...r,
       requirement_id: padId(startIndex + i + 1),
       source_document: docName,
     }));
   } catch (err) {
-    log.warn({ err, docName }, "claudeExtractWorklistFromText failed — skipping chunk");
+    log.warn({ err, docName }, "claudeExtractCandidatesFromText failed — skipping chunk");
     return [];
-  }
-}
-
-// ── Stage 4: Generate assessment sections ─────────────────────────────────────
-
-async function claudeGenerateAssessmentSections(
-  understanding: Record<string, unknown>,
-  worklist: Record<string, unknown>[],
-  company: string,
-  vendorContext: string,
-  log: Logger
-): Promise<Record<string, unknown>> {
-  const system = `You are a bid manager at Risk Rising reviewing a completed first-pass triage of an RFP/RFI.
-
-Produce a brief, factual triage summary. Do not provide strategy, pursuit recommendations, or narrative commentary.
-
-Output:
-- triage_summary: 1–2 factual sentences only — state what was found (total requirements, how many are relevant, how many need vendor input). No opinion, no recommendation.
-- gaps: specific gaps in the triage — requirements where ownership is unclear, platform coverage is unknown, or information is missing. Each gap must reference a specific requirement area or category. No boilerplate.
-- clarification_needed: specific questions to raise with the customer or procurement team before a full response can be drafted. Factual questions only — no strategy.
-- items_flagged_for_review: requirement IDs or brief descriptions of items that need human review before proceeding.
-
-Output ONLY valid JSON — no prose, no code fences:
-{
-  "triage_summary": "<factual 1-2 sentences>",
-  "gaps": ["<specific gap>"],
-  "clarification_needed": ["<specific question>"],
-  "items_flagged_for_review": ["<requirement area or ref>"]
-}`;
-
-  const ownerCounts = worklist.reduce<Record<string, number>>((acc, r) => {
-    const k = String(r.recommended_owner ?? "Unknown");
-    acc[k] = (acc[k] ?? 0) + 1;
-    return acc;
-  }, {});
-  const relevanceCounts = worklist.reduce<Record<string, number>>((acc, r) => {
-    const k = String(r.relevance ?? "Uncertain");
-    acc[k] = (acc[k] ?? 0) + 1;
-    return acc;
-  }, {});
-  const lowConfidence = worklist
-    .filter((r) => r.confidence === "Low")
-    .slice(0, 15)
-    .map((r) => ({
-      id: r.requirement_id,
-      q: typeof r.original_question === "string" ? r.original_question.slice(0, 100) : "",
-      owner: r.recommended_owner,
-      notes: r.notes ?? null,
-    }));
-  const vendorItems = worklist
-    .filter((r) => r.vendor_validation_required)
-    .slice(0, 10)
-    .map((r) => ({
-      id: r.requirement_id,
-      owner: r.recommended_owner,
-      q: typeof r.original_question === "string" ? r.original_question.slice(0, 80) : "",
-    }));
-
-  const user = `Company: ${company}
-Vendor context: ${vendorContext}
-
-Worklist totals:
-- Total requirements: ${worklist.length}
-- By relevance: ${JSON.stringify(relevanceCounts)}
-- By owner: ${JSON.stringify(ownerCounts)}
-- Vendor validation required: ${worklist.filter((r) => r.vendor_validation_required).length}
-
-Low-confidence items (need review):
-${JSON.stringify(lowConfidence, null, 2)}
-
-Items needing vendor validation:
-${JSON.stringify(vendorItems, null, 2)}`;
-
-  try {
-    const result = await callClaudeJSON<Record<string, unknown>>(system, user, { maxTokens: 1500 });
-    return result ?? {};
-  } catch (err) {
-    log.warn({ err }, "claudeGenerateAssessmentSections failed");
-    return {
-      triage_summary: `${worklist.length} requirements triaged. Manual review recommended.`,
-      gaps: [],
-      clarification_needed: [],
-      items_flagged_for_review: [],
-    };
   }
 }
 
@@ -470,102 +402,101 @@ async function runExtractionJob(
     updateJob(jobId, { documentClassifications: classifications });
     log.info({ jobId, classifications }, "documents classified");
 
-    // Separate contextual docs from requirements docs
+    // Separate requirements matrices from contextual docs
     const requirementIds = new Set(
       classifications.filter((c) => c.docType === "Requirements Matrix").map((c) => c.id)
     );
     const excelIds = new Set(docs.filter((d) => d.fileType === "excel").map((d) => d.id));
-
     const requirementDocs = docs.filter((d) => excelIds.has(d.id) || requirementIds.has(d.id));
     const contextualDocs  = docs.filter((d) => !excelIds.has(d.id) && !requirementIds.has(d.id));
 
-    // Build worklist processing steps
+    // Build combined content for OI Assessment — ALL docs (contextual first, then req matrices abbreviated)
+    let oiContent = "";
+    for (const doc of contextualDocs) {
+      if (doc.text) {
+        const toAdd = `\n\n=== ${doc.name} ===\n${doc.text}`;
+        if (oiContent.length + toAdd.length <= MAX_OI_CHARS) oiContent += toAdd;
+      }
+    }
+    // Include abbreviated requirements matrix content so OI has full picture
+    for (const doc of requirementDocs) {
+      if (doc.structuredRows && doc.structuredRows.length > 0) {
+        const reqs = doc.structuredRows.slice(0, 100).map((r) => r.requirement).filter(Boolean).join("\n");
+        const toAdd = `\n\n=== ${doc.name} (requirements list) ===\n${reqs}`;
+        if (oiContent.length + toAdd.length <= MAX_OI_CHARS) oiContent += toAdd;
+      } else if (doc.text) {
+        const toAdd = `\n\n=== ${doc.name} ===\n${doc.text.slice(0, 8000)}`;
+        if (oiContent.length + toAdd.length <= MAX_OI_CHARS) oiContent += toAdd;
+      }
+    }
+
+    // Build candidate-extraction steps (requirements matrices only)
     type Step =
       | { type: "excel"; rows: ParsedRow[]; docName: string }
       | { type: "text";  text: string;      docName: string };
 
-    const worklistSteps: Step[] = [];
+    const candidateSteps: Step[] = [];
     for (const doc of requirementDocs) {
       if (doc.fileType === "excel" && doc.structuredRows && doc.structuredRows.length > 0) {
         batchRows(doc.structuredRows, ROWS_PER_BATCH).forEach((b) =>
-          worklistSteps.push({ type: "excel", rows: b, docName: doc.name })
+          candidateSteps.push({ type: "excel", rows: b, docName: doc.name })
         );
       } else if (doc.text) {
         chunkText(doc.text, MAX_CHARS_PER_CHUNK).forEach((c) =>
-          worklistSteps.push({ type: "text", text: c, docName: doc.name })
+          candidateSteps.push({ type: "text", text: c, docName: doc.name })
         );
       }
     }
 
-    // Build combined contextual text for understanding
-    let contextCombined = "";
-    for (const doc of contextualDocs) {
-      if (doc.text) {
-        const toAdd = `\n\n=== ${doc.name} ===\n${doc.text}`;
-        if (contextCombined.length + toAdd.length <= MAX_UNDERSTANDING_CHARS) {
-          contextCombined += toAdd;
-        }
-      }
-    }
-
-    const hasContext  = contextCombined.trim().length > 0;
-    const totalSteps  = 1 + (hasContext ? 1 : 0) + worklistSteps.length + 1;
+    const hasContent = oiContent.trim().length > 0;
+    const totalSteps = 1 + (hasContent ? 1 : 0) + candidateSteps.length;
     let stepIdx = 1;
 
-    // ── Step 2: Extract RFP Understanding Model ────────────────────────────
-    let rfpUnderstanding: Record<string, unknown> = {};
-    if (hasContext) {
-      updateProgress(jobId, stepIdx, totalSteps, "Understanding the opportunity…");
-      rfpUnderstanding = await claudeExtractUnderstanding(contextCombined, company, vendorContext, log);
-      updateJob(jobId, { rfpUnderstanding });
-      log.info({ jobId, understanding: rfpUnderstanding }, "understanding model extracted");
+    // ── Step 2: Opportunity Intelligence Assessment ─────────────────────────
+    let oiAssessment: Record<string, unknown> = {};
+    if (hasContent) {
+      updateProgress(jobId, stepIdx, totalSteps, "Running Opportunity Intelligence Assessment…");
+      oiAssessment = await claudeOpportunityIntelligence(oiContent, company, vendorContext, log);
+      updateJob(jobId, { rfpUnderstanding: oiAssessment, assessment: oiAssessment });
+      log.info({ jobId }, "OI Assessment complete");
       stepIdx++;
     }
 
-    // ── Step 3: Build enriched worklist ───────────────────────────────────
-    let reqCounter = 0;
-    for (const [i, step] of worklistSteps.entries()) {
-      const label =
-        worklistSteps.length === 1
-          ? `Assessing requirements…`
-          : `Assessing requirements — batch ${i + 1} of ${worklistSteps.length}`;
+    // ── Step 3: Extract Response Candidates ────────────────────────────────
+    let candidateCounter = 0;
+    for (const [i, step] of candidateSteps.entries()) {
+      const label = candidateSteps.length === 1
+        ? "Identifying response candidates…"
+        : `Identifying response candidates — batch ${i + 1} of ${candidateSteps.length}`;
       updateProgress(jobId, stepIdx, totalSteps, label);
 
-      let reqs: Record<string, unknown>[];
+      let candidates: Record<string, unknown>[];
       if (step.type === "excel") {
-        reqs = await claudeEnrichWorklist(
-          step.rows, step.docName, vendorContext, company, reqCounter, rfpUnderstanding, log
+        candidates = await claudeIdentifyResponseCandidates(
+          step.rows, step.docName, vendorContext, company, candidateCounter, oiAssessment, log
         );
       } else {
-        reqs = await claudeExtractWorklistFromText(
-          step.text, step.docName, vendorContext, company, reqCounter, rfpUnderstanding, log
+        candidates = await claudeExtractCandidatesFromText(
+          step.text, step.docName, vendorContext, company, candidateCounter, oiAssessment, log
         );
       }
 
-      reqCounter += reqs.length;
-      appendRequirements(jobId, reqs);
-      log.info({ jobId, step: i + 1, totalSteps, batch: reqs.length, total: reqCounter }, "worklist batch done");
+      candidateCounter += candidates.length;
+      appendRequirements(jobId, candidates);
+      log.info({ jobId, batch: i + 1, total: candidateSteps.length, count: candidates.length, runningTotal: candidateCounter }, "candidate batch done");
       stepIdx++;
     }
-
-    // ── Step 4: Generate high-level assessment sections ────────────────────
-    updateProgress(jobId, stepIdx, totalSteps, "Generating opportunity assessment…");
-    const currentJob = getJob(jobId)!;
-    const assessment = await claudeGenerateAssessmentSections(
-      rfpUnderstanding, currentJob.requirements, company, vendorContext, log
-    );
 
     updateJob(jobId, {
       status: "done",
-      assessment,
       progress: {
         done: totalSteps,
         total: totalSteps,
-        stage: `Done — ${reqCounter} requirements assessed`,
+        stage: `Done — OI Assessment complete${candidateCounter > 0 ? `, ${candidateCounter} response candidates identified` : ""}`,
       },
     });
 
-    log.info({ jobId, reqCounter, hasUnderstanding: hasContext }, "extraction job complete");
+    log.info({ jobId, candidateCounter, hasOI: hasContent }, "extraction job complete");
   } catch (err) {
     log.error({ jobId, err }, "extraction job crashed");
     updateJob(jobId, { status: "error", error: (err as Error).message });
@@ -665,7 +596,7 @@ router.post("/rfp/extract-requirements", (req: Request, res): void => {
   }
 
   const job = createJob();
-  req.log.info({ jobId: job.id, documentIds, company }, "rfp: assessment job created");
+  req.log.info({ jobId: job.id, documentIds, company }, "rfp: OI assessment job created");
 
   void runExtractionJob(
     job.id,
@@ -698,7 +629,7 @@ router.get("/rfp/jobs/:id", (req, res): void => {
   });
 });
 
-// ── Legacy routes (preserved for backward compatibility) ──────────────────────
+// ── Legacy routes ─────────────────────────────────────────────────────────────
 
 router.post("/rfp/classify", async (req, res): Promise<void> => {
   const { requirements, vendorContext, company } = req.body as Record<string, unknown>;
@@ -761,13 +692,13 @@ ${RR_CONTEXT}
 Output ONLY valid JSON:
 { "logicgate_pack": "<markdown or null>", "panorays_pack": "<markdown or null>", "summary": "<string>" }`;
   const vendorItems = (requirements as Array<Record<string, unknown>>).filter(
-    (r) => r.owner === "LogicGate" || r.owner === "Panorays" || r.owner === "Joint"
+    (r) => r.bucket === "LogicGate" || r.bucket === "Joint"
   );
   const toProcess = vendorItems.length > 0 ? vendorItems : (requirements as Array<Record<string, unknown>>);
   const summary = toProcess.slice(0, 100).map((r) => ({
     requirement_id: r.requirement_id,
     category: r.category,
-    owner: r.owner,
+    bucket: r.bucket,
     original_question: typeof r.original_question === "string" ? r.original_question.slice(0, 200) : "",
   }));
   const user = `Company: ${String(company ?? "Unknown")}\nVendor context: ${String(vendorContext ?? "Unknown")}\n\n${JSON.stringify(summary, null, 2)}`;
@@ -792,7 +723,7 @@ Output ONLY valid JSON:
   const reqSummary = (requirements as Record<string, unknown>[]).slice(0, 120).map((r) => ({
     requirement_id: r.requirement_id,
     category: r.category,
-    owner: r.owner ?? r.recommended_owner,
+    bucket: r.bucket,
     mandatory_optional: r.mandatory_optional,
     original_question: typeof r.original_question === "string" ? r.original_question.slice(0, 150) : "",
   }));
@@ -814,26 +745,26 @@ async function claudeMapBatch(
   batch: Record<string, unknown>[],
   vendorContext: string,
   company: string,
-  rfpUnderstanding: Record<string, unknown> | null,
+  oiAssessment: Record<string, unknown> | null,
   log: Logger
 ): Promise<Record<string, unknown>[]> {
-  const understandingCtx = rfpUnderstanding
-    ? `\nRFP Context (use to inform response quality):
-- Customer objectives: ${JSON.stringify(rfpUnderstanding.objectives ?? [])}
-- Evaluation criteria: ${JSON.stringify(rfpUnderstanding.evaluation_criteria ?? [])}
-- Key themes: ${JSON.stringify(rfpUnderstanding.key_themes ?? [])}
-- Scope: ${rfpUnderstanding.scope ?? "Not specified"}`
+  const oiCtx = oiAssessment
+    ? `\nOpportunity context (from OI Assessment):
+- Customer objectives: ${JSON.stringify((oiAssessment.customer_objectives as string[]) ?? [])}
+- Business use cases: ${JSON.stringify((oiAssessment.business_use_cases as string[]) ?? [])}
+- In-scope capabilities: ${JSON.stringify((oiAssessment.scope_assessment as Record<string,unknown> | null)?.in_scope ?? [])}
+- Open questions — customer: ${JSON.stringify((oiAssessment.open_questions as Record<string,unknown> | null)?.customer_clarification ?? [])}`
     : "";
 
   const system = `You are a senior GRC consultant at Risk Rising creating a detailed RFP/RFI Response Mapping Pack.
 
 ${RR_CONTEXT}
 ${OWNERSHIP_GUIDE}
-${understandingCtx}
+${oiCtx}
 
-For each requirement, produce a complete mapping entry.
+For each response candidate, produce a complete mapping entry.
 
-Use the assessment fields already provided (recommended_owner, logicgate_mapping, rr_mapping, why_it_matters) as your starting point — validate and build on them, do not contradict them without good reason.
+Use the bucket and reason fields already provided as your starting point — validate and build on them, do not contradict without good reason.
 
 Fields to produce:
 - owner: RR | LogicGate | Panorays | Joint | Unknown
@@ -846,7 +777,7 @@ Fields to produce:
   - LogicGate / Panorays / Unknown: null.
 - vendor_validation_required: true if vendor input is needed before a complete answer.
 - vendor_question_or_prompt: Specific question to send to the vendor. Null if not needed.
-- confidence: High (clear) | Medium (some ambiguity) | Low (complex or unclear).
+- confidence: High | Medium | Low
 - assumptions: Key assumptions. Null if none.
 - status: Always "Draft".
 - notes: One-sentence rationale for owner assignment.
@@ -855,13 +786,13 @@ Rules:
 - Never invent platform capabilities.
 - UK English throughout.
 - draft_rr_response max 120 words.
-- Responses must reflect the customer's stated objectives and evaluation criteria where relevant.
+- Responses must reflect the customer's stated objectives where relevant.
 
 Output ONLY valid JSON — no prose, no code fences:
 {
   "rows": [
     {
-      "requirement_id": "REQ-001",
+      "requirement_id": "RC-001",
       "owner": "RR",
       "rr_capability_mapping": "...",
       "logicgate_mapping": null,
@@ -883,16 +814,11 @@ Output ONLY valid JSON — no prose, no code fences:
     original_question: typeof r.original_question === "string" ? r.original_question.slice(0, 300) : "",
     category: r.category,
     mandatory_optional: r.mandatory_optional,
-    // Pass through assessment enrichment fields as context
-    why_it_matters: r.why_it_matters ?? null,
-    recommended_owner: r.recommended_owner ?? null,
-    logicgate_mapping: r.logicgate_mapping ?? null,
-    rr_mapping: r.rr_mapping ?? null,
-    priority: r.priority ?? null,
-    linked_objectives: r.linked_objectives ?? [],
+    bucket: r.bucket ?? null,
+    reason: r.reason ?? null,
   }));
 
-  const user = `Company: ${company}\nVendor context: ${vendorContext}\n\nRequirements to map:\n${JSON.stringify(input, null, 2)}`;
+  const user = `Company: ${company}\nVendor context: ${vendorContext}\n\nCandidates to map:\n${JSON.stringify(input, null, 2)}`;
 
   try {
     const result = await callClaudeJSON<{ rows: Record<string, unknown>[] }>(system, user, { maxTokens: 8000 });
@@ -903,7 +829,7 @@ Output ONLY valid JSON — no prose, no code fences:
       requirement_id: r.requirement_id,
       original_question: r.original_question,
       category: r.category,
-      owner: r.recommended_owner ?? "Unknown",
+      owner: r.bucket ?? "Unknown",
       rr_capability_mapping: null,
       logicgate_mapping: null,
       panorays_mapping: null,
@@ -922,16 +848,16 @@ async function claudeGenerateMappingSummary(
   mappingRows: Record<string, unknown>[],
   company: string,
   vendorContext: string,
-  rfpUnderstanding: Record<string, unknown> | null,
+  oiAssessment: Record<string, unknown> | null,
   log: Logger
 ): Promise<Record<string, unknown>> {
-  const understandingCtx = rfpUnderstanding
-    ? `\nRFP objectives: ${JSON.stringify(rfpUnderstanding.objectives ?? [])}\nKey themes: ${JSON.stringify(rfpUnderstanding.key_themes ?? [])}`
+  const oiCtx = oiAssessment
+    ? `\nCustomer objectives: ${JSON.stringify((oiAssessment.customer_objectives as string[]) ?? [])}`
     : "";
 
   const system = `You are a senior GRC consultant at Risk Rising. Based on the completed RFP/RFI Response Mapping Pack, produce an executive summary.
 ${RR_CONTEXT}
-${understandingCtx}
+${oiCtx}
 
 Produce four lists:
 - gaps_and_risks: Specific gaps or risks in the response approach. Be specific and actionable.
@@ -988,7 +914,7 @@ async function runMappingJob(
   requirements: Record<string, unknown>[],
   vendorContext: string,
   company: string,
-  rfpUnderstanding: Record<string, unknown> | null,
+  oiAssessment: Record<string, unknown> | null,
   log: Logger
 ): Promise<void> {
   try {
@@ -1008,7 +934,7 @@ async function runMappingJob(
         : `Drafting responses — batch ${i + 1} of ${batches.length}`;
       updateProgress(jobId, i, total, stage);
 
-      const rows = await claudeMapBatch(batch, vendorContext, company, rfpUnderstanding, log);
+      const rows = await claudeMapBatch(batch, vendorContext, company, oiAssessment, log);
       appendMappingRows(jobId, rows);
 
       log.info({ jobId, batch: i + 1, total, rowsThisBatch: rows.length }, "mapping batch done");
@@ -1017,7 +943,7 @@ async function runMappingJob(
     updateProgress(jobId, batches.length, total, "Generating pack summary…");
     const job = getJob(jobId)!;
     const summary = await claudeGenerateMappingSummary(
-      job.mappingRows, company, vendorContext, rfpUnderstanding, log
+      job.mappingRows, company, vendorContext, oiAssessment, log
     );
 
     updateJob(jobId, {

@@ -1,0 +1,305 @@
+Refactor the RFP / RFI capability.
+
+Current issue:
+
+The capability is focused on:
+- extracting requirements
+- classifying ownership
+- drafting responses
+
+This is the wrong primary objective.
+
+Risk Rising does not begin an RFP by writing responses.
+
+Risk Rising begins by understanding:
+
+- what the customer is trying to achieve
+- what business outcomes are being sought
+- what use cases exist
+- what capabilities are required
+- what modules are in scope
+- what implementation effort is implied
+- what integrations are required
+- what support obligations exist
+- what commercial implications exist
+- what RR needs to respond to
+
+The capability should behave like a senior RR consultant reviewing an opportunity for the first time.
+
+NEW PRIMARY OBJECTIVE
+
+Rename the first stage:
+
+From:
+RFP Analysis
+
+To:
+Opportunity Intelligence Assessment
+
+The purpose of the first stage is:
+
+"Understand the opportunity and determine what Risk Rising would need to deliver, support, implement and respond to."
+
+DO NOT start with response generation.
+
+FIRST PASS OUTPUT SHOULD IDENTIFY
+
+1. Customer Objectives
+
+What is the customer trying to achieve?
+
+Examples:
+- Modernise GRC
+- Consolidate risk processes
+- Improve regulatory compliance
+- Establish TPRM
+- Improve board reporting
+- Create a connected risk model
+
+2. Business Use Cases
+
+Identify likely use cases.
+
+Examples:
+- Risk management
+- Controls testing
+- Incident management
+- Vendor onboarding
+- Third-party assessments
+- Regulatory obligations
+- Policy attestation
+- Audit management
+- Executive reporting
+
+3. Capability Requirements
+
+Identify required capabilities.
+
+Map to:
+
+- ERM
+- Controls Compliance
+- TPRM
+- Regulatory Compliance
+- Policy Management
+- Incident Management
+- Audit
+- Assessments
+- Reporting
+- Integrations
+- Workflow
+
+4. LogicGate Mapping
+
+If vendor = LogicGate:
+
+Map capability requirements to LogicGate modules.
+
+Examples:
+
+Risk Register
+→ LogicGate ERM
+
+Vendor Assessments
+→ LogicGate TPRM
+
+Policy Attestation
+→ LogicGate Policy Management
+
+Incident Tracking
+→ LogicGate Incident Management
+
+Do not produce long capability descriptions.
+
+Keep mappings concise.
+
+5. Scope Assessment
+
+Identify:
+
+- in-scope capabilities
+- likely out-of-scope capabilities
+- mandatory requirements
+- optional requirements
+
+6. Suggested Delivery Phasing
+
+Infer logical delivery phases.
+
+Example:
+
+Phase 1
+- Foundation
+- Taxonomy
+- User model
+- ERM
+- Controls
+
+Phase 2
+- TPRM
+- Regulatory
+- Incidents
+
+Phase 3
+- Reporting
+- Advanced workflows
+- Optimisation
+
+This is an RR recommendation, not a customer statement.
+
+7. Resource Assessment
+
+Estimate likely delivery roles required.
+
+Examples:
+
+- Project Manager
+- Solution Architect
+- LogicGate Consultant
+- Business Analyst
+- Trainer
+- Data Migration Support
+- Integration Specialist
+
+8. Integration Assessment
+
+Identify:
+
+- likely integrations
+- likely data sources
+- API dependencies
+- CCM dependencies
+
+9. Data Migration Assessment
+
+Identify:
+
+- likely migration requirements
+- complexity
+- assumptions
+
+10. Support Assessment
+
+Identify:
+
+- support expectations
+- hypercare requirements
+- managed service opportunities
+- training obligations
+- support windows
+
+Examples:
+
+Business hours support
+24x7 requirement
+Multi-region support
+Follow-the-sun support
+
+11. Geographic & Timezone Assessment
+
+Identify:
+
+- operating regions
+- implementation timezone impacts
+- support timezone impacts
+
+Examples:
+
+UK only
+EMEA
+Global
+US coverage required
+APAC coverage required
+
+12. Risk Assessment
+
+Identify:
+
+- delivery risks
+- integration risks
+- resource risks
+- platform risks
+- dependency risks
+
+13. Questions RR Needs Answered
+
+Create a list of:
+
+- customer clarification questions
+- vendor clarification questions
+- scope clarification questions
+
+These are far more valuable than immediate draft responses.
+
+14. Response Candidate Identification
+
+Only after all analysis is complete:
+
+Identify:
+
+- requirements RR should respond to
+- requirements LogicGate should validate
+- requirements requiring joint response
+- requirements that can be ignored
+
+UI CHANGES
+
+Replace current narrative-heavy output.
+
+Create sections:
+
+Opportunity Summary
+Customer Objectives
+Business Use Cases
+Capability Mapping
+LogicGate Mapping
+Scope Assessment
+Suggested Delivery Phases
+Resource Assessment
+Integration Assessment
+Support Assessment
+Timezone Assessment
+Risks & Dependencies
+Open Questions
+Response Candidates
+
+Remove:
+
+- pursuit recommendation
+- win strategy
+- speculative managed service commentary
+- marketing language
+- long capability descriptions
+
+DO NOT attempt to sell.
+
+DO NOT attempt to write a proposal.
+
+DO NOT attempt to recommend pursuit strategy.
+
+Focus on understanding the opportunity.
+
+SUCCESS CRITERIA
+
+After running the assessment, Dev should be able to answer:
+
+- What is the customer trying to achieve?
+- What LogicGate modules are likely required?
+- What RR services are required?
+- What implementation approach makes sense?
+- What phases make sense?
+- What resources are needed?
+- What support obligations exist?
+- What timezone obligations exist?
+- What are the biggest risks?
+- What questions still need answering?
+- Which requirements actually require a response?
+
+Only after this stage is complete should the workflow move into:
+
+Generate RR Responses
+Generate Vendor Validation Pack
+Generate Proposal
+Generate Executive Deck
+
+The Opportunity Intelligence Assessment becomes the foundation for every subsequent activity.

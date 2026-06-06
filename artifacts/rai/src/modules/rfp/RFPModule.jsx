@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react'
+import React, { useState, useRef } from 'react'
 import {
   Document, Packer, Paragraph, TextRun, AlignmentType, ShadingType,
   Table, TableRow, TableCell, WidthType, BorderStyle, HeadingLevel,
@@ -13,420 +13,452 @@ import {
   rfpRemoveDocument,
 } from './api.js'
 
-// ── Colours ───────────────────────────────────────────────────────────────────
-const NAVY      = '#0B1F3A'
-const BLUE_LIGHT = '#EAF1F8'
-const TEXT      = '#1E293B'
-const MUTED     = '#64748B'
-const BORDER    = '#E2E8F0'
-const GREEN     = '#16A34A'
-const AMBER     = '#D97706'
-const RED       = '#DC2626'
-const WHITE     = '#FFFFFF'
+// ── Palette ───────────────────────────────────────────────────────────────────
+const NAVY   = '#0B1F3A'
+const BLUE   = '#1D4ED8'
+const GREEN  = '#16A34A'
+const AMBER  = '#D97706'
+const RED    = '#DC2626'
+const PURPLE = '#7C3AED'
+const TEAL   = '#0D9488'
+const MUTED  = '#64748B'
+const BORDER = '#E2E8F0'
+const WHITE  = '#FFFFFF'
+const BG     = '#F8FAFC'
+const LBLUE  = '#EAF1F8'
 
-// ── Badge colour helpers ──────────────────────────────────────────────────────
-function ownerColour(owner) {
+// ── Helpers ───────────────────────────────────────────────────────────────────
+function ownerColor(owner) {
   switch (owner) {
-    case 'RR':           return { bg: '#DBEAFE', text: '#1D4ED8' }
-    case 'LogicGate':    return { bg: '#F3E8FF', text: '#7C3AED' }
+    case 'RR':           return { bg: '#DBEAFE', text: BLUE }
+    case 'LogicGate':    return { bg: '#F3E8FF', text: PURPLE }
     case 'Panorays':     return { bg: '#FCE7F3', text: '#BE185D' }
     case 'Joint':        return { bg: '#D1FAE5', text: '#065F46' }
-    case 'Not Relevant': return { bg: '#F1F5F9', text: '#94A3B8' }
-    default:             return { bg: '#F1F5F9', text: '#64748B' }
+    case 'Ignore':       return { bg: '#F1F5F9', text: '#94A3B8' }
+    default:             return { bg: '#F1F5F9', text: MUTED }
   }
 }
 
-function confidenceColour(c) {
-  switch (c) {
-    case 'High':   return { text: GREEN,  bg: '#DCFCE7' }
-    case 'Medium': return { text: AMBER,  bg: '#FEF9C3' }
-    default:       return { text: RED,    bg: '#FEE2E2' }
+function bucketColor(b) {
+  switch (b) {
+    case 'RR':        return { bg: '#DBEAFE', text: BLUE }
+    case 'LogicGate': return { bg: '#F3E8FF', text: PURPLE }
+    case 'Joint':     return { bg: '#D1FAE5', text: '#065F46' }
+    case 'Ignore':    return { bg: '#F1F5F9', text: MUTED }
+    default:          return { bg: '#FEF9C3', text: AMBER }
   }
 }
 
-function relevanceColour(r) {
-  switch (r) {
-    case 'Relevant':     return { bg: '#DCFCE7', text: '#15803D' }
-    case 'Not Relevant': return { bg: '#F1F5F9', text: '#94A3B8' }
-    default:             return { bg: '#FEF9C3', text: '#A16207' }
-  }
-}
-
-function docTypeColour(dt) {
-  const map = {
-    'Requirements Matrix':      { bg: '#DBEAFE', text: '#1D4ED8' },
+function docTypeColor(dt) {
+  const m = {
+    'Requirements Matrix':      { bg: '#DBEAFE', text: BLUE },
     'RFP Overview':             { bg: '#D1FAE5', text: '#065F46' },
-    'Scope Document':           { bg: '#F3E8FF', text: '#7C3AED' },
-    'Evaluation Criteria':      { bg: '#FEF9C3', text: '#A16207' },
+    'Scope Document':           { bg: '#F3E8FF', text: PURPLE },
+    'Evaluation Criteria':      { bg: '#FEF9C3', text: AMBER },
     'Procurement Instructions': { bg: '#E0F2FE', text: '#0369A1' },
     'Commercial Requirements':  { bg: '#FCE7F3', text: '#BE185D' },
     'Security Requirements':    { bg: '#FEE2E2', text: '#991B1B' },
     'Supporting Material':      { bg: '#F1F5F9', text: '#475569' },
   }
-  return map[dt] || { bg: '#F1F5F9', text: '#64748B' }
+  return m[dt] || { bg: '#F1F5F9', text: MUTED }
+}
+
+function riskColor(cat) {
+  switch (cat) {
+    case 'delivery':    return { accent: RED,    bg: '#FEF2F2' }
+    case 'integration': return { accent: AMBER,  bg: '#FFFBEB' }
+    case 'resource':    return { accent: PURPLE, bg: '#FAF5FF' }
+    case 'platform':    return { accent: TEAL,   bg: '#F0FDFA' }
+    default:            return { accent: MUTED,  bg: BG }
+  }
+}
+
+// ── Small components ──────────────────────────────────────────────────────────
+function Badge({ label, color, size = 'sm' }) {
+  const p = size === 'xs' ? '1px 6px' : '2px 9px'
+  const fs = size === 'xs' ? 10 : 11
+  return (
+    <span style={{ display: 'inline-block', padding: p, borderRadius: 12, fontSize: fs, fontWeight: 600, background: color.bg, color: color.text, whiteSpace: 'nowrap' }}>
+      {label}
+    </span>
+  )
+}
+
+function SectionCard({ title, icon, children, accent = NAVY, style }) {
+  return (
+    <div style={{ background: WHITE, border: `1px solid ${BORDER}`, borderRadius: 8, overflow: 'hidden', ...style }}>
+      <div style={{ padding: '10px 16px', background: NAVY, display: 'flex', alignItems: 'center', gap: 8 }}>
+        {icon && <span style={{ fontSize: 14 }}>{icon}</span>}
+        <span style={{ fontSize: 12, fontWeight: 700, color: WHITE, textTransform: 'uppercase', letterSpacing: '0.05em' }}>{title}</span>
+      </div>
+      <div style={{ padding: '14px 16px' }}>{children}</div>
+    </div>
+  )
+}
+
+function BulletList({ items, color = NAVY, emptyText = '—' }) {
+  if (!items || !items.length) return <span style={{ color: MUTED, fontSize: 12 }}>{emptyText}</span>
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+      {items.map((item, i) => (
+        <div key={i} style={{ display: 'flex', gap: 7, alignItems: 'flex-start', fontSize: 12, color: '#1E293B', lineHeight: 1.5 }}>
+          <span style={{ color, flexShrink: 0, fontSize: 10, marginTop: 3 }}>▸</span>
+          <span>{item}</span>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function QList({ items, color, emptyText = '—' }) {
+  if (!items || !items.length) return <span style={{ color: MUTED, fontSize: 12 }}>{emptyText}</span>
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+      {items.map((q, i) => (
+        <div key={i} style={{ display: 'flex', gap: 7, alignItems: 'flex-start', fontSize: 12, color: '#1E293B', lineHeight: 1.5 }}>
+          <span style={{ fontWeight: 700, color, flexShrink: 0, fontSize: 11 }}>Q{i + 1}</span>
+          <span>{q}</span>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function SubSection({ title, children, color = MUTED }) {
+  return (
+    <div style={{ marginBottom: 14 }}>
+      <div style={{ fontSize: 10, fontWeight: 700, color, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 6 }}>{title}</div>
+      {children}
+    </div>
+  )
+}
+
+function ProgressBar({ progress }) {
+  if (!progress) return null
+  const pct = progress.total > 0 ? Math.round((progress.done / progress.total) * 100) : 5
+  return (
+    <div style={{ marginBottom: 8 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+        <span style={{ fontSize: 12, color: MUTED }}>{progress.stage}</span>
+        <span style={{ fontSize: 11, color: MUTED }}>{progress.done}/{progress.total}</span>
+      </div>
+      <div style={{ height: 4, background: BORDER, borderRadius: 2, overflow: 'hidden' }}>
+        <div style={{ height: '100%', background: NAVY, borderRadius: 2, width: `${pct}%`, transition: 'width 0.4s ease', minWidth: 8 }} />
+      </div>
+    </div>
+  )
 }
 
 // ── DOCX helpers ──────────────────────────────────────────────────────────────
 function clean(t) { return t ? String(t).replace(/\n/g, ' ').trim() : '' }
 
-function docHeaderBar(text) {
+function dH(text) {
   return new Paragraph({
-    alignment: AlignmentType.LEFT,
-    spacing: { before: 300, after: 120 },
-    shading: { type: ShadingType.CLEAR, fill: '0B1F3A', color: 'auto' },
-    children: [
-      new TextRun({ text: '  ' }),
-      new TextRun({ text: clean(text), bold: true, color: 'FFFFFF', font: 'Calibri', size: 24 }),
-    ],
+    spacing: { before: 280, after: 100 },
+    shading: { type: ShadingType.CLEAR, fill: '0B1F3A' },
+    children: [new TextRun({ text: `  ${clean(text)}`, bold: true, color: 'FFFFFF', font: 'Calibri', size: 24 })],
   })
 }
-
-function docSubBar(text) {
+function dSub(text) {
   return new Paragraph({
-    alignment: AlignmentType.LEFT,
-    spacing: { before: 180, after: 100 },
-    shading: { type: ShadingType.CLEAR, fill: 'EAF1F8', color: 'auto' },
-    children: [
-      new TextRun({ text: '  ' }),
-      new TextRun({ text: clean(text), bold: true, color: '0B1F3A', font: 'Calibri', size: 22 }),
-    ],
+    spacing: { before: 160, after: 80 },
+    shading: { type: ShadingType.CLEAR, fill: 'EAF1F8' },
+    children: [new TextRun({ text: `  ${clean(text)}`, bold: true, color: '0B1F3A', font: 'Calibri', size: 22 })],
   })
 }
-
-function docBody(text) {
+function dBody(text) {
   return new Paragraph({
-    spacing: { after: 80, line: 276 },
-    indent: { left: 120 },
+    spacing: { after: 80, line: 276 }, indent: { left: 120 },
     children: [new TextRun({ text: clean(text), font: 'Calibri', size: 22, color: '1E293B' })],
   })
 }
-
-function docLabel(label, value) {
-  if (!value) return null
+function dBullet(text) {
   return new Paragraph({
-    spacing: { after: 80, line: 276 },
-    indent: { left: 120 },
-    children: [
-      new TextRun({ text: `${label}: `, bold: true, font: 'Calibri', size: 22, color: '0B1F3A' }),
-      new TextRun({ text: clean(value), font: 'Calibri', size: 22, color: '1E293B' }),
-    ],
-  })
-}
-
-function docBullet(text) {
-  return new Paragraph({
-    bullet: { level: 0 },
-    spacing: { after: 70, line: 260 },
-    indent: { left: 360, hanging: 240 },
+    bullet: { level: 0 }, spacing: { after: 60, line: 260 }, indent: { left: 360, hanging: 240 },
     children: [new TextRun({ text: clean(text), font: 'Calibri', size: 22, color: '1E293B' })],
   })
 }
-
-function docSpacer() {
-  return new Paragraph({ children: [new TextRun({ text: '' })], spacing: { before: 60, after: 60 } })
-}
-
-function docDivider() {
+function dSpacer() { return new Paragraph({ children: [new TextRun({ text: '' })], spacing: { before: 60, after: 60 } }) }
+function dDivider() {
   return new Paragraph({
-    spacing: { before: 100, after: 100 },
+    spacing: { before: 80, after: 80 },
     children: [new TextRun({ text: '', font: 'Calibri', size: 4 })],
     border: { bottom: { style: 'single', size: 4, color: 'E2E8F0', space: 1 } },
   })
 }
-
-function tableCell(text, { bold = false, shade = null } = {}) {
-  const cell = new TableCell({
-    margins: { top: 80, bottom: 80, left: 120, right: 120 },
-    children: [new Paragraph({
-      children: [new TextRun({ text: clean(String(text ?? '')), font: 'Calibri', size: 20, bold, color: '1E293B' })],
-    })],
-  })
-  return cell
-}
-
-function tableCellH(text) {
+function tblH(text) {
   return new TableCell({
-    shading: { type: ShadingType.CLEAR, fill: '0B1F3A', color: 'auto' },
+    shading: { type: ShadingType.CLEAR, fill: '0B1F3A' },
     margins: { top: 80, bottom: 80, left: 120, right: 120 },
-    children: [new Paragraph({
-      children: [new TextRun({ text: clean(String(text ?? '')), font: 'Calibri', size: 20, bold: true, color: 'FFFFFF' })],
-    })],
+    children: [new Paragraph({ children: [new TextRun({ text: clean(String(text ?? '')), font: 'Calibri', size: 20, bold: true, color: 'FFFFFF' })] })],
   })
 }
-
-const tblBorders = {
-  top:     { style: BorderStyle.SINGLE, size: 1, color: 'E2E8F0' },
-  bottom:  { style: BorderStyle.SINGLE, size: 1, color: 'E2E8F0' },
-  left:    { style: BorderStyle.SINGLE, size: 1, color: 'E2E8F0' },
-  right:   { style: BorderStyle.SINGLE, size: 1, color: 'E2E8F0' },
+function tblC(text) {
+  return new TableCell({
+    margins: { top: 80, bottom: 80, left: 120, right: 120 },
+    children: [new Paragraph({ children: [new TextRun({ text: clean(String(text ?? '')), font: 'Calibri', size: 20, color: '1E293B' })] })],
+  })
+}
+const TBORDERS = {
+  top: { style: BorderStyle.SINGLE, size: 1, color: 'E2E8F0' },
+  bottom: { style: BorderStyle.SINGLE, size: 1, color: 'E2E8F0' },
+  left: { style: BorderStyle.SINGLE, size: 1, color: 'E2E8F0' },
+  right: { style: BorderStyle.SINGLE, size: 1, color: 'E2E8F0' },
   insideH: { style: BorderStyle.SINGLE, size: 1, color: 'E2E8F0' },
   insideV: { style: BorderStyle.SINGLE, size: 1, color: 'E2E8F0' },
 }
 
-// ── DOCX Export — Triage Report ───────────────────────────────────────────────
-async function exportTriageDocx({ assessment, requirements, company, vendorContext }) {
-  const children = []
+async function exportOIDocx({ oi, requirements, company }) {
+  const a = oi || {}
   const today = new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'long', year: 'numeric' })
-  const a = assessment || {}
-  const relevant    = (requirements || []).filter((r) => r.relevance !== 'Not Relevant')
-  const notRelevant = (requirements || []).filter((r) => r.relevance === 'Not Relevant')
-  const needsVendor = (requirements || []).filter((r) => r.vendor_validation_required)
+  const children = []
 
   // Cover
   children.push(new Paragraph({
-    heading: HeadingLevel.TITLE,
-    spacing: { after: 200 },
-    children: [new TextRun({ text: 'RFP / RFI Triage Report', font: 'Calibri', size: 52, bold: true, color: '0B1F3A' })],
-  }))
-  children.push(new Paragraph({
-    spacing: { after: 140 },
-    children: [new TextRun({ text: company || 'Unknown Prospect', font: 'Calibri', size: 36, bold: true, color: '0B1F3A' })],
+    heading: HeadingLevel.TITLE, spacing: { after: 200 },
+    children: [new TextRun({ text: 'Opportunity Intelligence Assessment', font: 'Calibri', size: 52, bold: true, color: '0B1F3A' })],
   }))
   children.push(new Paragraph({
     spacing: { after: 120 },
+    children: [new TextRun({ text: company || 'Unknown Prospect', font: 'Calibri', size: 36, bold: true, color: '0B1F3A' })],
+  }))
+  children.push(new Paragraph({
+    spacing: { after: 80 },
     children: [new TextRun({ text: `Prepared by Risk Rising  ·  ${today}`, font: 'Calibri', size: 24, color: '64748B' })],
   }))
   children.push(new Paragraph({
     spacing: { after: 80 },
-    children: [new TextRun({ text: 'INTERNAL WORKING DOCUMENT — NOT FOR CUSTOMER DISTRIBUTION', font: 'Calibri', size: 20, bold: true, color: 'DC2626' })],
+    children: [new TextRun({ text: 'INTERNAL — NOT FOR CUSTOMER DISTRIBUTION', font: 'Calibri', size: 20, bold: true, color: 'DC2626' })],
   }))
-  children.push(docDivider())
-  children.push(docSpacer())
+  children.push(dDivider())
+  children.push(dSpacer())
 
-  // Summary
-  children.push(docHeaderBar('1. Triage Summary'))
-  children.push(docSpacer())
-  if (a.triage_summary) children.push(docBody(a.triage_summary))
-  children.push(docSpacer())
-  const pTotal = docLabel('Total requirements', String((requirements || []).length))
-  if (pTotal) children.push(pTotal)
-  const pRel = docLabel('Requiring response', String(relevant.length))
-  if (pRel) children.push(pRel)
-  const pVend = docLabel('Requiring vendor validation', String(needsVendor.length))
-  if (pVend) children.push(pVend)
-  const pNot = docLabel('Not relevant', String(notRelevant.length))
-  if (pNot) children.push(pNot)
-  children.push(docDivider())
-  children.push(docSpacer())
+  const pushList = (items, label) => {
+    if (!items?.length) return
+    children.push(dSub(label))
+    items.forEach((item) => children.push(dBullet(typeof item === 'string' ? item : JSON.stringify(item))))
+    children.push(dSpacer())
+  }
 
-  // Worklist
-  if (relevant.length) {
-    children.push(docHeaderBar('2. Requirement Worklist'))
-    children.push(docSpacer())
-    const hdr = new TableRow({
-      tableHeader: true,
-      children: ['Ref', 'Requirement', 'Why Relevant', 'Owner', 'LG Mapping', 'Response Req', 'Vendor Val', 'Confidence'].map(tableCellH),
+  // Objectives
+  children.push(dH('1. Customer Objectives'))
+  children.push(dSpacer())
+  pushList(a.customer_objectives, '')
+  children.push(dDivider())
+
+  // Use cases
+  children.push(dH('2. Business Use Cases'))
+  children.push(dSpacer())
+  pushList(a.business_use_cases, '')
+  children.push(dDivider())
+
+  // Capabilities
+  if (Array.isArray(a.capability_requirements) && a.capability_requirements.length) {
+    children.push(dH('3. Capability Requirements'))
+    children.push(dSpacer())
+    const hdr = new TableRow({ tableHeader: true, children: ['Capability', 'RR/LG Area'].map(tblH) })
+    const rows = a.capability_requirements.map((r) => new TableRow({ children: [tblC(r.capability), tblC(r.rr_area)] }))
+    children.push(new Table({ width: { size: 100, type: WidthType.PERCENTAGE }, borders: TBORDERS, rows: [hdr, ...rows] }))
+    children.push(dSpacer())
+    children.push(dDivider())
+  }
+
+  // LG Mapping
+  if (Array.isArray(a.logicgate_mapping) && a.logicgate_mapping.length) {
+    children.push(dH('4. LogicGate Module Mapping'))
+    children.push(dSpacer())
+    const hdr = new TableRow({ tableHeader: true, children: ['Requirement Area', 'LogicGate Module'].map(tblH) })
+    const rows = a.logicgate_mapping.map((r) => new TableRow({ children: [tblC(r.requirement_area), tblC(r.logicgate_module)] }))
+    children.push(new Table({ width: { size: 100, type: WidthType.PERCENTAGE }, borders: TBORDERS, rows: [hdr, ...rows] }))
+    children.push(dSpacer())
+    children.push(dDivider())
+  }
+
+  // Scope
+  const scope = a.scope_assessment || {}
+  children.push(dH('5. Scope Assessment'))
+  children.push(dSpacer())
+  pushList(scope.in_scope, 'In Scope')
+  pushList(scope.mandatory_items, 'Mandatory')
+  pushList(scope.likely_out_of_scope, 'Likely Out of Scope')
+  pushList(scope.optional_items, 'Optional / Phase 2')
+  children.push(dDivider())
+
+  // Delivery phases
+  if (Array.isArray(a.suggested_delivery_phases) && a.suggested_delivery_phases.length) {
+    children.push(dH('6. Suggested Delivery Phases'))
+    children.push(dSpacer())
+    a.suggested_delivery_phases.forEach((ph) => {
+      children.push(dSub(`Phase ${ph.phase}: ${ph.name}`))
+      ;(ph.items || []).forEach((item) => children.push(dBullet(item)))
+      children.push(dSpacer())
     })
-    const rows = relevant.map((r) => new TableRow({ children: [
-      tableCell(r.requirement_id),
-      tableCell(typeof r.original_question === 'string' ? r.original_question.slice(0, 180) : ''),
-      tableCell(r.why_relevant || '—'),
-      tableCell(r.recommended_owner || '—'),
-      tableCell(r.logicgate_mapping || '—'),
-      tableCell(r.response_required ? 'Y' : 'N'),
-      tableCell(r.vendor_validation_required ? 'Y' : 'N'),
-      tableCell(r.confidence || '—'),
+    children.push(dDivider())
+  }
+
+  // Resources
+  if (Array.isArray(a.resource_assessment) && a.resource_assessment.length) {
+    children.push(dH('7. Resource Assessment'))
+    children.push(dSpacer())
+    const hdr = new TableRow({ tableHeader: true, children: ['Role', 'Justification'].map(tblH) })
+    const rows = a.resource_assessment.map((r) => new TableRow({ children: [tblC(r.role), tblC(r.justification)] }))
+    children.push(new Table({ width: { size: 100, type: WidthType.PERCENTAGE }, borders: TBORDERS, rows: [hdr, ...rows] }))
+    children.push(dSpacer())
+    children.push(dDivider())
+  }
+
+  // Integration
+  const integ = a.integration_assessment || {}
+  children.push(dH('8. Integration Assessment'))
+  children.push(dSpacer())
+  pushList(integ.likely_integrations, 'Likely Integrations')
+  pushList(integ.data_sources, 'Data Sources')
+  pushList(integ.api_dependencies, 'API Dependencies')
+  children.push(dDivider())
+
+  // Migration
+  const mig = a.data_migration_assessment || {}
+  children.push(dH('9. Data Migration Assessment'))
+  children.push(dSpacer())
+  children.push(dBody(`Complexity: ${mig.complexity || 'Unknown'}`))
+  pushList(mig.likely_requirements, 'Likely Requirements')
+  pushList(mig.assumptions, 'Assumptions')
+  children.push(dDivider())
+
+  // Support
+  const sup = a.support_assessment || {}
+  children.push(dH('10. Support Assessment'))
+  children.push(dSpacer())
+  pushList(sup.support_expectations, 'Support Expectations')
+  pushList(sup.hypercare_requirements, 'Hypercare Requirements')
+  pushList(sup.training_obligations, 'Training Obligations')
+  children.push(dDivider())
+
+  // Geo
+  const geo = a.geographic_assessment || {}
+  children.push(dH('11. Geographic & Timezone Assessment'))
+  children.push(dSpacer())
+  pushList(geo.operating_regions, 'Operating Regions')
+  pushList(geo.implementation_timezone_impacts, 'Implementation Timezone')
+  pushList(geo.support_timezone_impacts, 'Support Timezone')
+  children.push(dDivider())
+
+  // Risks
+  const risk = a.risk_assessment || {}
+  children.push(dH('12. Risk Assessment'))
+  children.push(dSpacer())
+  pushList(risk.delivery_risks, 'Delivery Risks')
+  pushList(risk.integration_risks, 'Integration Risks')
+  pushList(risk.resource_risks, 'Resource Risks')
+  pushList(risk.platform_risks, 'Platform Risks')
+  children.push(dDivider())
+
+  // Open Questions
+  const oq = a.open_questions || {}
+  children.push(dH('13. Open Questions'))
+  children.push(dSpacer())
+  pushList(oq.customer_clarification, 'Customer Clarification')
+  pushList(oq.vendor_clarification, 'Vendor Clarification')
+  pushList(oq.scope_clarification, 'Scope Clarification')
+  children.push(dDivider())
+
+  // Response candidates (high-level)
+  const rc = a.response_candidates || {}
+  children.push(dH('14. Response Candidates'))
+  children.push(dSpacer())
+  pushList(rc.rr_responds, 'RR Responds')
+  pushList(rc.logicgate_validates, 'LogicGate Validates')
+  pushList(rc.joint_response, 'Joint Response')
+  pushList(rc.can_be_ignored, 'Can Be Ignored')
+  children.push(dDivider())
+
+  // Per-requirement candidates
+  if (requirements?.length) {
+    children.push(dH('Response Candidates — Detail'))
+    children.push(dSpacer())
+    const hdr = new TableRow({ tableHeader: true, children: ['Ref', 'Requirement', 'Bucket', 'M/O', 'Reason'].map(tblH) })
+    const rows = requirements.map((r) => new TableRow({ children: [
+      tblC(r.requirement_id),
+      tblC(typeof r.original_question === 'string' ? r.original_question.slice(0, 180) : ''),
+      tblC(r.bucket),
+      tblC(r.mandatory_optional),
+      tblC(r.reason),
     ]}))
-    children.push(new Table({ width: { size: 100, type: WidthType.PERCENTAGE }, borders: tblBorders, rows: [hdr, ...rows] }))
-    children.push(docSpacer())
-    children.push(docDivider())
-    children.push(docSpacer())
-  }
-
-  // Gaps
-  if (Array.isArray(a.gaps) && a.gaps.length) {
-    children.push(docHeaderBar('3. Gaps and Uncertainties'))
-    children.push(docSpacer())
-    a.gaps.forEach((g) => children.push(docBullet(String(g))))
-    children.push(docDivider())
-    children.push(docSpacer())
-  }
-
-  // Clarification needed
-  if (Array.isArray(a.clarification_needed) && a.clarification_needed.length) {
-    children.push(docHeaderBar('4. Clarification Required'))
-    children.push(docSpacer())
-    a.clarification_needed.forEach((q) => children.push(docBullet(String(q))))
-    children.push(docDivider())
-    children.push(docSpacer())
-  }
-
-  // Vendor validation items
-  if (needsVendor.length) {
-    children.push(docHeaderBar('5. Vendor Validation Required'))
-    children.push(docSpacer())
-    const hdr = new TableRow({ tableHeader: true, children: ['Ref', 'Requirement', 'Owner'].map(tableCellH) })
-    const rows = needsVendor.map((r) => new TableRow({ children: [
-      tableCell(r.requirement_id),
-      tableCell(typeof r.original_question === 'string' ? r.original_question.slice(0, 200) : ''),
-      tableCell(r.recommended_owner || '—'),
-    ]}))
-    children.push(new Table({ width: { size: 100, type: WidthType.PERCENTAGE }, borders: tblBorders, rows: [hdr, ...rows] }))
-    children.push(docSpacer())
-    children.push(docDivider())
-    children.push(docSpacer())
-  }
-
-  // Not relevant
-  if (notRelevant.length) {
-    children.push(docHeaderBar('6. Not Relevant'))
-    children.push(docSpacer())
-    const hdr = new TableRow({ tableHeader: true, children: ['Ref', 'Requirement', 'Notes'].map(tableCellH) })
-    const rows = notRelevant.map((r) => new TableRow({ children: [
-      tableCell(r.requirement_id),
-      tableCell(typeof r.original_question === 'string' ? r.original_question.slice(0, 200) : ''),
-      tableCell(r.notes || '—'),
-    ]}))
-    children.push(new Table({ width: { size: 100, type: WidthType.PERCENTAGE }, borders: tblBorders, rows: [hdr, ...rows] }))
+    children.push(new Table({ width: { size: 100, type: WidthType.PERCENTAGE }, borders: TBORDERS, rows: [hdr, ...rows] }))
   }
 
   const doc = new Document({ sections: [{ children }] })
   const blob = await Packer.toBlob(doc)
-  saveAs(blob, `RR-Triage-${(company || 'Unknown').replace(/\s+/g, '-')}-${new Date().toISOString().slice(0, 10)}.docx`)
+  saveAs(blob, `RR-OI-Assessment-${(company || 'Unknown').replace(/\s+/g, '-')}-${new Date().toISOString().slice(0, 10)}.docx`)
 }
 
-// ── DOCX Export — Mapping Pack ────────────────────────────────────────────────
-async function exportMappingDocx({ assessment, mappingRows, mappingSummary, requirements, company, vendorContext }) {
+async function exportMappingDocx({ oi, mappingRows, mappingSummary, company }) {
   const children = []
   const today = new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'long', year: 'numeric' })
-  const a = assessment || {}
+  const a = oi || {}
 
   children.push(new Paragraph({
-    heading: HeadingLevel.TITLE,
-    spacing: { after: 200 },
-    children: [new TextRun({ text: 'RR RFP Response Mapping Pack', font: 'Calibri', size: 52, bold: true, color: '0B1F3A' })],
-  }))
-  children.push(new Paragraph({
-    spacing: { after: 140 },
-    children: [new TextRun({ text: company || 'Unknown Prospect', font: 'Calibri', size: 36, bold: true, color: '0B1F3A' })],
+    heading: HeadingLevel.TITLE, spacing: { after: 200 },
+    children: [new TextRun({ text: 'RFP / RFI Response Mapping Pack', font: 'Calibri', size: 52, bold: true, color: '0B1F3A' })],
   }))
   children.push(new Paragraph({
     spacing: { after: 120 },
-    children: [new TextRun({ text: `Prepared by Risk Rising  ·  ${today}`, font: 'Calibri', size: 24, color: '64748B' })],
+    children: [new TextRun({ text: company || 'Unknown Prospect', font: 'Calibri', size: 36, bold: true, color: '0B1F3A' })],
   }))
   children.push(new Paragraph({
     spacing: { after: 80 },
-    children: [new TextRun({ text: 'INTERNAL WORKING DOCUMENT — NOT FOR CUSTOMER DISTRIBUTION', font: 'Calibri', size: 20, bold: true, color: 'DC2626' })],
+    children: [new TextRun({ text: `Prepared by Risk Rising  ·  ${today}`, font: 'Calibri', size: 24, color: '64748B' })],
   }))
-  children.push(docDivider())
-  children.push(docSpacer())
+  children.push(dDivider())
+  children.push(dSpacer())
 
-  // Triage summary
-  if (a.triage_summary) {
-    children.push(docHeaderBar('1. Triage Summary'))
-    children.push(docSpacer())
-    children.push(docBody(a.triage_summary))
-    const p1 = docLabel('Total requirements', String(mappingRows.length || (requirements && requirements.length) || '—'))
-    if (p1) children.push(p1)
-    children.push(docDivider())
-    children.push(docSpacer())
+  if (Array.isArray(a.customer_objectives) && a.customer_objectives.length) {
+    children.push(dH('Customer Objectives'))
+    children.push(dSpacer())
+    a.customer_objectives.forEach((o) => children.push(dBullet(String(o))))
+    children.push(dSpacer())
+    children.push(dDivider())
   }
 
-  // Ownership breakdown
-  children.push(docHeaderBar('2. Ownership Breakdown'))
-  children.push(docSpacer())
   if (mappingRows.length) {
-    const ownerCounts = mappingRows.reduce((acc, r) => {
-      const o = String(r.owner || 'Unknown'); acc[o] = (acc[o] || 0) + 1; return acc
-    }, {})
-    const hdr = new TableRow({ tableHeader: true, children: ['Owner', 'Count', '% of Total'].map(tableCellH) })
-    const rows = Object.entries(ownerCounts).sort().map(([owner, count]) => new TableRow({ children: [
-      tableCell(owner), tableCell(String(count)), tableCell(`${Math.round((count / mappingRows.length) * 100)}%`),
-    ]}))
-    children.push(new Table({ width: { size: 50, type: WidthType.PERCENTAGE }, borders: tblBorders, rows: [hdr, ...rows] }))
-    children.push(docSpacer())
-  }
-  children.push(docDivider())
-  children.push(docSpacer())
-
-  // Mapping matrix
-  if (mappingRows.length) {
-    children.push(docHeaderBar('3. Requirement Mapping Matrix'))
-    children.push(docSpacer())
-    const hdr = new TableRow({ tableHeader: true, children: ['Ref', 'Question', 'Category', 'Owner', 'Confidence', 'Vendor Required'].map(tableCellH) })
+    children.push(dH('Response Mapping Matrix'))
+    children.push(dSpacer())
+    const hdr = new TableRow({ tableHeader: true, children: ['Ref', 'Requirement', 'Owner', 'Conf.', 'Vendor?'].map(tblH) })
     const rows = mappingRows.map((r) => new TableRow({ children: [
-      tableCell(r.requirement_id),
-      tableCell(typeof r.original_question === 'string' ? r.original_question.slice(0, 200) : ''),
-      tableCell(r.category), tableCell(r.owner), tableCell(r.confidence),
-      tableCell(r.vendor_validation_required ? 'Yes' : 'No'),
+      tblC(r.requirement_id), tblC(typeof r.original_question === 'string' ? r.original_question.slice(0, 180) : ''),
+      tblC(r.owner), tblC(r.confidence), tblC(r.vendor_validation_required ? 'Yes' : 'No'),
     ]}))
-    children.push(new Table({ width: { size: 100, type: WidthType.PERCENTAGE }, borders: tblBorders, rows: [hdr, ...rows] }))
-    children.push(docSpacer())
-    children.push(docDivider())
-    children.push(docSpacer())
+    children.push(new Table({ width: { size: 100, type: WidthType.PERCENTAGE }, borders: TBORDERS, rows: [hdr, ...rows] }))
+    children.push(dSpacer())
+    children.push(dDivider())
   }
 
-  // RR draft responses
   const rrOwned = mappingRows.filter((r) => r.owner === 'RR' && r.draft_rr_response)
   if (rrOwned.length) {
-    children.push(docHeaderBar('4. RR-Owned Draft Responses'))
-    children.push(docSpacer())
-    const hdr = new TableRow({ tableHeader: true, children: ['Ref', 'Question', 'Draft RR Response', 'Assumptions'].map(tableCellH) })
+    children.push(dH('RR-Owned Draft Responses'))
+    children.push(dSpacer())
+    const hdr = new TableRow({ tableHeader: true, children: ['Ref', 'Question', 'Draft RR Response', 'Assumptions'].map(tblH) })
     const rows = rrOwned.map((r) => new TableRow({ children: [
-      tableCell(r.requirement_id),
-      tableCell(typeof r.original_question === 'string' ? r.original_question.slice(0, 150) : ''),
-      tableCell(r.draft_rr_response), tableCell(r.assumptions || '—'),
+      tblC(r.requirement_id), tblC(typeof r.original_question === 'string' ? r.original_question.slice(0, 150) : ''),
+      tblC(r.draft_rr_response), tblC(r.assumptions || '—'),
     ]}))
-    children.push(new Table({ width: { size: 100, type: WidthType.PERCENTAGE }, borders: tblBorders, rows: [hdr, ...rows] }))
-    children.push(docSpacer())
-    children.push(docDivider())
-    children.push(docSpacer())
+    children.push(new Table({ width: { size: 100, type: WidthType.PERCENTAGE }, borders: TBORDERS, rows: [hdr, ...rows] }))
+    children.push(dSpacer())
+    children.push(dDivider())
   }
 
-  // Vendor validation
-  const vendorItems = mappingRows.filter((r) => (r.owner === 'LogicGate' || r.owner === 'Panorays') && r.vendor_validation_required)
-  if (vendorItems.length) {
-    children.push(docHeaderBar('5. Vendor Validation Required'))
-    children.push(docSpacer())
-    const hdr = new TableRow({ tableHeader: true, children: ['Ref', 'Question', 'Vendor', 'Validation Prompt'].map(tableCellH) })
-    const rows = vendorItems.map((r) => new TableRow({ children: [
-      tableCell(r.requirement_id),
-      tableCell(typeof r.original_question === 'string' ? r.original_question.slice(0, 150) : ''),
-      tableCell(r.owner), tableCell(r.vendor_question_or_prompt || '—'),
-    ]}))
-    children.push(new Table({ width: { size: 100, type: WidthType.PERCENTAGE }, borders: tblBorders, rows: [hdr, ...rows] }))
-    children.push(docSpacer())
-    children.push(docDivider())
-    children.push(docSpacer())
-  }
-
-  // Joint
-  const jointItems = mappingRows.filter((r) => r.owner === 'Joint')
-  if (jointItems.length) {
-    children.push(docHeaderBar('6. Joint Response Items'))
-    children.push(docSpacer())
-    const hdr = new TableRow({ tableHeader: true, children: ['Ref', 'Question', 'RR Response Element', 'Vendor Input Needed'].map(tableCellH) })
-    const rows = jointItems.map((r) => new TableRow({ children: [
-      tableCell(r.requirement_id),
-      tableCell(typeof r.original_question === 'string' ? r.original_question.slice(0, 150) : ''),
-      tableCell(r.draft_rr_response || '—'), tableCell(r.vendor_question_or_prompt || '—'),
-    ]}))
-    children.push(new Table({ width: { size: 100, type: WidthType.PERCENTAGE }, borders: tblBorders, rows: [hdr, ...rows] }))
-    children.push(docSpacer())
-    children.push(docDivider())
-    children.push(docSpacer())
-  }
-
-  // Pack summary
   if (mappingSummary) {
-    if (Array.isArray(mappingSummary.gaps_and_risks) && mappingSummary.gaps_and_risks.length) {
-      children.push(docHeaderBar('7. Gaps and Risks'))
-      children.push(docSpacer())
-      mappingSummary.gaps_and_risks.forEach((item) => children.push(docBullet(String(item))))
-      children.push(docDivider())
-      children.push(docSpacer())
-    }
-    if (Array.isArray(mappingSummary.recommended_next_actions) && mappingSummary.recommended_next_actions.length) {
-      children.push(docHeaderBar('8. Recommended Next Actions'))
-      children.push(docSpacer())
-      mappingSummary.recommended_next_actions.forEach((item, i) => children.push(new Paragraph({
-        spacing: { after: 80, line: 276 }, indent: { left: 120 },
-        children: [
-          new TextRun({ text: `${i + 1}.  `, bold: true, font: 'Calibri', size: 22, color: '0B1F3A' }),
-          new TextRun({ text: clean(String(item)), font: 'Calibri', size: 22, color: '1E293B' }),
-        ],
-      })))
-    }
+    children.push(dH('Pack Summary'))
+    children.push(dSpacer())
+    ;['gaps_and_risks', 'assumptions', 'commercial_delivery_considerations', 'recommended_next_actions'].forEach((k) => {
+      const items = mappingSummary[k]
+      if (Array.isArray(items) && items.length) {
+        const label = k.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
+        children.push(dSub(label))
+        items.forEach((item) => children.push(dBullet(String(item))))
+        children.push(dSpacer())
+      }
+    })
   }
 
   const doc = new Document({ sections: [{ children }] })
@@ -434,156 +466,181 @@ async function exportMappingDocx({ assessment, mappingRows, mappingSummary, requ
   saveAs(blob, `RR-Mapping-Pack-${(company || 'Unknown').replace(/\s+/g, '-')}-${new Date().toISOString().slice(0, 10)}.docx`)
 }
 
-// ── UI Components ─────────────────────────────────────────────────────────────
-function Badge({ label, colour }) {
+// ── OI Section Components ─────────────────────────────────────────────────────
+function OISection({ number, title, icon, children }) {
+  const [open, setOpen] = useState(true)
   return (
-    <span style={{
-      display: 'inline-block', padding: '2px 8px', borderRadius: 12, fontSize: 11,
-      fontWeight: 600, background: colour.bg, color: colour.text, whiteSpace: 'nowrap',
-    }}>{label}</span>
-  )
-}
-
-function Card({ children, style }) {
-  return (
-    <div style={{ background: WHITE, border: `1px solid ${BORDER}`, borderRadius: 8, padding: '20px 24px', ...style }}>
-      {children}
+    <div style={{ background: WHITE, border: `1px solid ${BORDER}`, borderRadius: 8, overflow: 'hidden', marginBottom: 10 }}>
+      <button onClick={() => setOpen((p) => !p)}
+        style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 8, padding: '10px 16px', background: 'none', border: 'none', cursor: 'pointer', textAlign: 'left' }}>
+        <span style={{ fontSize: 10, fontWeight: 800, color: WHITE, background: NAVY, padding: '2px 6px', borderRadius: 4, fontVariantNumeric: 'tabular-nums', flexShrink: 0 }}>{number}</span>
+        {icon && <span style={{ fontSize: 14 }}>{icon}</span>}
+        <span style={{ fontSize: 13, fontWeight: 600, color: NAVY, flex: 1 }}>{title}</span>
+        <span style={{ fontSize: 10, color: MUTED }}>{open ? '▲' : '▼'}</span>
+      </button>
+      {open && <div style={{ borderTop: `1px solid ${BORDER}`, padding: '16px' }}>{children}</div>}
     </div>
   )
 }
 
-function Spinner() {
+function TwoCol({ children }) {
+  return <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>{children}</div>
+}
+
+function MiniTable({ headers, rows }) {
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: MUTED, fontSize: 13 }}>
-      <div style={{ width: 16, height: 16, border: `2px solid ${BORDER}`, borderTopColor: NAVY, borderRadius: '50%', animation: 'spin 0.8s linear infinite' }} />
-      Processing…
+    <div style={{ overflowX: 'auto' }}>
+      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+        <thead>
+          <tr style={{ background: '#F8FAFC' }}>
+            {headers.map((h, i) => (
+              <th key={i} style={{ padding: '7px 10px', textAlign: 'left', fontWeight: 600, color: MUTED, fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.05em', borderBottom: `2px solid ${BORDER}` }}>{h}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row, i) => (
+            <tr key={i} style={{ borderBottom: `1px solid ${BORDER}`, background: i % 2 === 0 ? WHITE : '#FAFBFC' }}>
+              {row.map((cell, j) => (
+                <td key={j} style={{ padding: '7px 10px', color: '#1E293B', lineHeight: 1.4, verticalAlign: 'top' }}>{cell}</td>
+              ))}
+            </tr>
+          ))}
+          {!rows.length && (
+            <tr><td colSpan={headers.length} style={{ padding: '12px', color: MUTED, textAlign: 'center', fontSize: 12 }}>—</td></tr>
+          )}
+        </tbody>
+      </table>
     </div>
   )
 }
 
-function ProgressBar({ progress, color = NAVY }) {
-  if (!progress) return null
-  const pct = progress.total > 0 ? Math.round(progress.done / progress.total * 100) : 5
+function ChipGrid({ items, colorFn }) {
+  if (!items || !items.length) return <span style={{ fontSize: 12, color: MUTED }}>—</span>
   return (
-    <div style={{ marginBottom: 8 }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 5 }}>
-        <span style={{ fontSize: 12, color: MUTED }}>{progress.stage}</span>
-        <span style={{ fontSize: 11, color: MUTED, fontVariantNumeric: 'tabular-nums' }}>{progress.done}/{progress.total}</span>
+    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+      {items.map((item, i) => {
+        const label = typeof item === 'string' ? item : (item.use_case || JSON.stringify(item))
+        const c = colorFn ? colorFn(item) : { bg: LBLUE, text: NAVY }
+        return <span key={i} style={{ padding: '3px 10px', borderRadius: 14, fontSize: 12, fontWeight: 500, background: c.bg, color: c.text }}>{label}</span>
+      })}
+    </div>
+  )
+}
+
+function PhaseCard({ phase }) {
+  return (
+    <div style={{ border: `1px solid ${BORDER}`, borderRadius: 6, overflow: 'hidden' }}>
+      <div style={{ padding: '7px 12px', background: LBLUE, display: 'flex', alignItems: 'center', gap: 8 }}>
+        <span style={{ fontSize: 11, fontWeight: 800, color: WHITE, background: NAVY, padding: '1px 7px', borderRadius: 10 }}>Phase {phase.phase}</span>
+        <span style={{ fontSize: 12, fontWeight: 600, color: NAVY }}>{phase.name}</span>
       </div>
-      <div style={{ height: 4, background: BORDER, borderRadius: 2, overflow: 'hidden' }}>
-        <div style={{ height: '100%', background: color, borderRadius: 2, width: `${pct}%`, transition: 'width 0.4s ease', minWidth: 8 }} />
+      <div style={{ padding: '10px 12px' }}>
+        <BulletList items={phase.items} />
       </div>
     </div>
   )
 }
 
-function StatBox({ label, count, colour }) {
+function RiskGrid({ risk }) {
+  const categories = [
+    { key: 'delivery_risks',    label: 'Delivery',    cat: 'delivery' },
+    { key: 'integration_risks', label: 'Integration', cat: 'integration' },
+    { key: 'resource_risks',    label: 'Resource',    cat: 'resource' },
+    { key: 'platform_risks',    label: 'Platform',    cat: 'platform' },
+  ]
   return (
-    <div style={{ padding: '12px 18px', background: WHITE, border: `1px solid ${BORDER}`, borderRadius: 6, display: 'flex', flexDirection: 'column', gap: 2 }}>
-      <div style={{ fontSize: 22, fontWeight: 700, color: colour || NAVY, fontVariantNumeric: 'tabular-nums' }}>{count}</div>
-      <div style={{ fontSize: 11, color: MUTED }}>{label}</div>
+    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+      {categories.map(({ key, label, cat }) => {
+        const items = (risk || {})[key] || []
+        const c = riskColor(cat)
+        return (
+          <div key={key} style={{ border: `1px solid ${BORDER}`, borderRadius: 6, overflow: 'hidden' }}>
+            <div style={{ padding: '5px 10px', background: c.bg, borderBottom: `1px solid ${BORDER}` }}>
+              <span style={{ fontSize: 10, fontWeight: 700, color: c.accent, textTransform: 'uppercase', letterSpacing: '0.05em' }}>{label}</span>
+            </div>
+            <div style={{ padding: '10px 12px' }}>
+              <BulletList items={items} color={c.accent} emptyText='None identified' />
+            </div>
+          </div>
+        )
+      })}
     </div>
   )
 }
 
-function YN({ value }) {
-  return value
-    ? <span style={{ fontWeight: 700, color: GREEN, fontSize: 12 }}>Y</span>
-    : <span style={{ color: MUTED, fontSize: 12 }}>N</span>
+function ResponseCandidateBuckets({ rc }) {
+  const buckets = [
+    { key: 'rr_responds',        label: 'RR Responds',        color: { bg: '#DBEAFE', text: BLUE } },
+    { key: 'logicgate_validates', label: 'LogicGate Validates', color: { bg: '#F3E8FF', text: PURPLE } },
+    { key: 'joint_response',     label: 'Joint Response',      color: { bg: '#D1FAE5', text: '#065F46' } },
+    { key: 'can_be_ignored',     label: 'Can Be Ignored',      color: { bg: '#F1F5F9', text: MUTED } },
+  ]
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+      {buckets.map(({ key, label, color }) => {
+        const items = (rc || {})[key] || []
+        return (
+          <div key={key} style={{ border: `1px solid ${BORDER}`, borderRadius: 6, overflow: 'hidden' }}>
+            <div style={{ padding: '6px 12px', background: color.bg, borderBottom: `1px solid ${BORDER}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <span style={{ fontSize: 11, fontWeight: 700, color: color.text }}>{label}</span>
+              <span style={{ fontSize: 11, fontWeight: 600, color: color.text }}>{items.length}</span>
+            </div>
+            <div style={{ padding: '10px 12px' }}>
+              <BulletList items={items} color={color.text} emptyText='None identified' />
+            </div>
+          </div>
+        )
+      })}
+    </div>
+  )
 }
 
 // ── Main Component ────────────────────────────────────────────────────────────
 export default function RFPModule() {
-  const [company, setCompany] = useState('')
+  const [company, setCompany]           = useState('')
   const [vendorContext, setVendorContext] = useState('LogicGate')
-  const [documents, setDocuments] = useState([])
-  const [pasteText, setPasteText] = useState('')
-  const [pasteName, setPasteName] = useState('RFP Document')
-  const fileInputRef = useRef(null)
-  const [uploading, setUploading] = useState(false)
+  const [documents, setDocuments]       = useState([])
+  const [pasteText, setPasteText]       = useState('')
+  const [pasteName, setPasteName]       = useState('RFP Document')
+  const fileInputRef                    = useRef(null)
+  const [uploading, setUploading]       = useState(false)
 
-  const [assessment, setAssessment] = useState(null)
-  const [rfpUnderstanding, setRfpUnderstanding] = useState(null)
+  // OI Assessment results
+  const [oiAssessment, setOiAssessment] = useState(null)
   const [documentClassifications, setDocumentClassifications] = useState([])
-  const [requirements, setRequirements] = useState([])
-
-  const [mappingRows, setMappingRows] = useState([])
+  // Response Candidates (per-requirement, optional)
+  const [candidates, setCandidates]     = useState([])
+  // Mapping Pack
+  const [mappingRows, setMappingRows]   = useState([])
   const [mappingSummary, setMappingSummary] = useState(null)
 
-  const [loading, setLoading] = useState(null)
-  const [error, setError] = useState(null)
-
-  // Worklist filters
-  const [wlFilter, setWlFilter] = useState('relevant')  // 'all' | 'relevant' | 'vendor' | 'uncertain' | 'low'
-  const [wlOwner, setWlOwner] = useState('All')
-  const [wlExpanded, setWlExpanded] = useState(null)
-
-  // Mapping filters
-  const [mapFilterOwner, setMapFilterOwner] = useState('All')
-  const [mapFilterCategory, setMapFilterCategory] = useState('All')
-  const [mapFilterConfidence, setMapFilterConfidence] = useState('All')
-  const [mapExpanded, setMapExpanded] = useState(null)
-  const [regeneratingRow, setRegeneratingRow] = useState(null)
-
+  const [loading, setLoading]           = useState(null)  // 'oi' | 'map'
+  const [error, setError]               = useState(null)
   const [extractProgress, setExtractProgress] = useState(null)
-  const [mapProgress, setMapProgress] = useState(null)
-  const pollRef = useRef(null)
+  const [mapProgress, setMapProgress]   = useState(null)
+
+  // Candidate table state
+  const [candFilter, setCandFilter]     = useState('All')
+  const [candExpanded, setCandExpanded] = useState(null)
+  // Mapping table state
+  const [mapFilterOwner, setMapFilterOwner] = useState('All')
+  const [mapExpanded, setMapExpanded]   = useState(null)
+  const [regenRow, setRegenRow]         = useState(null)
+
+  const pollRef    = useRef(null)
   const mapPollRef = useRef(null)
 
-  useEffect(() => () => {
-    if (pollRef.current) clearInterval(pollRef.current)
-    if (mapPollRef.current) clearInterval(mapPollRef.current)
-  }, [])
+  function getDocType(id) { return documentClassifications.find((c) => c.id === id)?.docType || null }
 
-  // Derived counts
-  const counts = {
-    total:    requirements.length,
-    relevant: requirements.filter((r) => r.relevance === 'Relevant').length,
-    response: requirements.filter((r) => r.response_required).length,
-    vendor:   requirements.filter((r) => r.vendor_validation_required).length,
-    uncertain: requirements.filter((r) => r.relevance === 'Uncertain').length,
-    low:      requirements.filter((r) => r.confidence === 'Low').length,
-    notRel:   requirements.filter((r) => r.relevance === 'Not Relevant').length,
-  }
-
-  // Filtered worklist
-  const baseList = (() => {
-    switch (wlFilter) {
-      case 'relevant':  return requirements.filter((r) => r.relevance === 'Relevant')
-      case 'vendor':    return requirements.filter((r) => r.vendor_validation_required)
-      case 'uncertain': return requirements.filter((r) => r.relevance === 'Uncertain' || r.confidence === 'Low')
-      case 'notrel':    return requirements.filter((r) => r.relevance === 'Not Relevant')
-      default:          return requirements
-    }
-  })()
-  const visibleList = wlOwner === 'All' ? baseList : baseList.filter((r) => r.recommended_owner === wlOwner)
-
-  const wlOwners = ['All', ...Array.from(new Set(requirements.map((r) => r.recommended_owner).filter(Boolean)))]
-
-  // Mapping table filtered
-  const visibleMapping = mappingRows.filter((r) => {
-    if (mapFilterOwner !== 'All' && r.owner !== mapFilterOwner) return false
-    if (mapFilterCategory !== 'All' && r.category !== mapFilterCategory) return false
-    if (mapFilterConfidence !== 'All' && r.confidence !== mapFilterConfidence) return false
-    return true
-  })
-  const mapOwnerCounts = ['RR', 'LogicGate', 'Panorays', 'Joint', 'Unknown'].reduce((acc, o) => {
-    acc[o] = mappingRows.filter((r) => r.owner === o).length; return acc
-  }, {})
-  const mapCategories = [...new Set(mappingRows.map((r) => r.category).filter(Boolean))].sort()
-
-  function getDocType(docId) {
-    return documentClassifications.find((c) => c.id === docId)?.docType || null
-  }
-
-  async function addPastedDoc() {
+  async function addPasted() {
     if (!pasteText.trim()) return
     setUploading(true); setError(null)
     try {
-      const meta = await rfpStoreText({ name: pasteName || 'RFP Document', text: pasteText.trim() })
-      setDocuments((p) => [...p, { id: meta.id, name: meta.name, charCount: meta.charCount }])
+      const m = await rfpStoreText({ name: pasteName || 'RFP Document', text: pasteText.trim() })
+      setDocuments((p) => [...p, { id: m.id, name: m.name, charCount: m.charCount }])
       setPasteText(''); setPasteName('RFP Document')
-    } catch (e) { setError('Failed to store document: ' + e.message) }
+    } catch (e) { setError('Failed to store: ' + e.message) }
     finally { setUploading(false) }
   }
 
@@ -607,13 +664,12 @@ export default function RFPModule() {
   function handleDrop(e) { e.preventDefault(); e.stopPropagation(); const f = e.dataTransfer?.files; if (f?.length) handleFiles(Array.from(f)) }
   function handleDragOver(e) { e.preventDefault(); e.stopPropagation() }
 
-  async function runTriage() {
+  async function runOI() {
     if (!documents.length) return
-    setLoading('extract'); setError(null)
+    setLoading('oi'); setError(null)
     setExtractProgress({ done: 0, total: 1, stage: 'Submitting…' })
-    setRequirements([]); setAssessment(null); setRfpUnderstanding(null)
+    setOiAssessment(null); setCandidates([])
     setDocumentClassifications([]); setMappingRows([]); setMappingSummary(null)
-    setWlExpanded(null); setMapExpanded(null)
 
     try {
       const { jobId } = await rfpExtractRequirements({ documentIds: documents.map((d) => d.id), vendorContext, company })
@@ -624,14 +680,13 @@ export default function RFPModule() {
           setExtractProgress(job.progress)
           if (job.status === 'done') {
             clearInterval(pollRef.current); pollRef.current = null
-            setAssessment(job.assessment || null)
-            setRfpUnderstanding(job.rfpUnderstanding || null)
+            setOiAssessment(job.assessment || null)
             setDocumentClassifications(job.documentClassifications || [])
-            setRequirements(job.requirements || [])
+            setCandidates(job.requirements || [])
             setLoading(null); setExtractProgress(null)
           } else if (job.status === 'error') {
             clearInterval(pollRef.current); pollRef.current = null
-            setError(job.error || 'Triage failed'); setLoading(null); setExtractProgress(null)
+            setError(job.error || 'Assessment failed'); setLoading(null); setExtractProgress(null)
           }
         } catch { /* keep polling */ }
       }, 2000)
@@ -639,13 +694,14 @@ export default function RFPModule() {
   }
 
   async function runMappingPack() {
-    if (!requirements.length) return
+    const toMap = candidates.length ? candidates : []
+    if (!toMap.length) return
     setLoading('map'); setError(null)
     setMapProgress({ done: 0, total: 1, stage: 'Submitting…' })
     setMappingRows([]); setMappingSummary(null); setMapExpanded(null)
 
     try {
-      const { jobId } = await rfpGenerateMappingPack({ requirements, vendorContext, company, rfpUnderstanding })
+      const { jobId } = await rfpGenerateMappingPack({ requirements: toMap, vendorContext, company, rfpUnderstanding: oiAssessment })
       if (mapPollRef.current) clearInterval(mapPollRef.current)
       mapPollRef.current = setInterval(async () => {
         try {
@@ -670,62 +726,57 @@ export default function RFPModule() {
   }
 
   async function regenerateRow(req) {
-    setRegeneratingRow(req.requirement_id)
+    setRegenRow(req.requirement_id)
     try {
-      const { row } = await rfpRegenerateMappingRow({
-        requirement: {
-          requirement_id: req.requirement_id,
-          source_document: req.source_document,
-          original_question: req.original_question,
-          category: req.category,
-          mandatory_optional: req.mandatory_optional,
-          why_relevant: req.why_relevant,
-          recommended_owner: req.recommended_owner,
-          logicgate_mapping: req.logicgate_mapping,
-          rr_mapping: req.rr_mapping,
-          confidence: req.confidence,
-        },
-        vendorContext, company, rfpUnderstanding,
-      })
+      const { row } = await rfpRegenerateMappingRow({ requirement: req, vendorContext, company, rfpUnderstanding: oiAssessment })
       if (row) updateMappingRow(req.requirement_id, row)
-    } catch (e) { setError('Regenerate failed: ' + e.message) }
-    finally { setRegeneratingRow(null) }
+    } catch (e) { setError('Regen failed: ' + e.message) }
+    finally { setRegenRow(null) }
   }
 
-  const hasTriage = requirements.length > 0
-  const hasMappingPack = mappingRows.length > 0
+  const hasOI     = !!oiAssessment
+  const hasCands  = candidates.length > 0
+  const hasMap    = mappingRows.length > 0
 
-  // Tab filter config
-  const tabs = [
-    { key: 'relevant',  label: 'Relevant',          count: counts.relevant },
-    { key: 'vendor',    label: 'Vendor Validation',  count: counts.vendor },
-    { key: 'uncertain', label: 'Uncertain / Review', count: counts.uncertain + counts.low },
-    { key: 'notrel',    label: 'Not Relevant',       count: counts.notRel },
-    { key: 'all',       label: 'All',                count: counts.total },
-  ]
+  const oi = oiAssessment || {}
+
+  // Candidate filters
+  const candBuckets = ['All', 'RR', 'LogicGate', 'Joint', 'Ignore']
+  const visibleCands = candFilter === 'All' ? candidates : candidates.filter((c) => c.bucket === candFilter)
+  const candCounts = candBuckets.reduce((acc, b) => {
+    acc[b] = b === 'All' ? candidates.length : candidates.filter((c) => c.bucket === b).length
+    return acc
+  }, {})
+
+  // Mapping filters
+  const mapOwners = ['All', ...Array.from(new Set(mappingRows.map((r) => r.owner).filter(Boolean)))]
+  const visibleMap = mapFilterOwner === 'All' ? mappingRows : mappingRows.filter((r) => r.owner === mapFilterOwner)
+  const mapOwnerCounts = ['RR', 'LogicGate', 'Panorays', 'Joint', 'Unknown'].reduce((acc, o) => {
+    acc[o] = mappingRows.filter((r) => r.owner === o).length; return acc
+  }, {})
 
   return (
-    <div style={{ fontFamily: 'Inter, Arial, sans-serif', background: '#F8FAFC', minHeight: '100vh', color: TEXT }}>
-      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+    <div style={{ fontFamily: 'Inter, Arial, sans-serif', background: BG, minHeight: '100vh', color: '#1E293B' }}>
+      <style>{`@keyframes spin { to { transform: rotate(360deg); } } button:hover { opacity: 0.9; }`}</style>
 
       {/* Header */}
-      <div style={{ background: NAVY, padding: '18px 32px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+      <div style={{ background: NAVY, padding: '16px 32px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
         <div>
-          <div style={{ fontSize: 17, fontWeight: 700, color: WHITE }}>RFP / RFI Response Manager</div>
-          <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.5)', marginTop: 2 }}>Triage · Map · Own · Validate · Export</div>
+          <div style={{ fontSize: 16, fontWeight: 700, color: WHITE }}>Opportunity Intelligence Assessment</div>
+          <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.45)', marginTop: 2 }}>Understand · Map · Own · Validate · Export</div>
         </div>
-        <div style={{ display: 'flex', gap: 10 }}>
-          {hasTriage && (
+        <div style={{ display: 'flex', gap: 8 }}>
+          {hasOI && (
             <button
-              onClick={() => exportTriageDocx({ assessment, requirements, company, vendorContext }).catch((e) => setError('Export failed: ' + e.message))}
-              style={{ background: 'rgba(255,255,255,0.1)', border: '1px solid rgba(255,255,255,0.25)', borderRadius: 6, color: WHITE, padding: '7px 16px', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>
-              ⬇ Export Triage Report
+              onClick={() => exportOIDocx({ oi: oiAssessment, requirements: candidates, company }).catch((e) => setError('Export failed: ' + e.message))}
+              style={{ background: 'rgba(255,255,255,0.1)', border: '1px solid rgba(255,255,255,0.2)', borderRadius: 6, color: WHITE, padding: '6px 14px', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>
+              ⬇ Export OI Assessment
             </button>
           )}
-          {hasMappingPack && (
+          {hasMap && (
             <button
-              onClick={() => exportMappingDocx({ assessment, mappingRows, mappingSummary, requirements, company, vendorContext }).catch((e) => setError('Export failed: ' + e.message))}
-              style={{ background: 'rgba(255,255,255,0.1)', border: '1px solid rgba(255,255,255,0.25)', borderRadius: 6, color: WHITE, padding: '7px 16px', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>
+              onClick={() => exportMappingDocx({ oi: oiAssessment, mappingRows, mappingSummary, company }).catch((e) => setError('Export failed: ' + e.message))}
+              style={{ background: 'rgba(255,255,255,0.1)', border: '1px solid rgba(255,255,255,0.2)', borderRadius: 6, color: WHITE, padding: '6px 14px', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>
               ⬇ Export Mapping Pack
             </button>
           )}
@@ -734,8 +785,8 @@ export default function RFPModule() {
 
       <div style={{ maxWidth: 1280, margin: '0 auto', padding: '20px 24px' }}>
 
-        {/* Setup card */}
-        <Card style={{ marginBottom: 20 }}>
+        {/* ── Setup Card ── */}
+        <div style={{ background: WHITE, border: `1px solid ${BORDER}`, borderRadius: 8, padding: '20px 24px', marginBottom: 20 }}>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 16 }}>
             <div>
               <label style={{ fontSize: 11, fontWeight: 600, color: NAVY, display: 'block', marginBottom: 5, textTransform: 'uppercase', letterSpacing: '0.04em' }}>Company / Prospect</label>
@@ -746,42 +797,36 @@ export default function RFPModule() {
               <label style={{ fontSize: 11, fontWeight: 600, color: NAVY, display: 'block', marginBottom: 5, textTransform: 'uppercase', letterSpacing: '0.04em' }}>Vendor Context</label>
               <select value={vendorContext} onChange={(e) => setVendorContext(e.target.value)}
                 style={{ width: '100%', padding: '8px 12px', border: `1px solid ${BORDER}`, borderRadius: 6, fontSize: 13, background: WHITE }}>
-                <option>LogicGate</option>
-                <option>Panorays</option>
-                <option>Both</option>
-                <option>Unknown</option>
+                <option>LogicGate</option><option>Panorays</option><option>Both</option><option>Unknown</option>
               </select>
             </div>
           </div>
 
           {/* Paste zone */}
           <div style={{ marginBottom: 12 }}>
-            <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', marginBottom: 8 }}>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', marginBottom: 6 }}>
               <div style={{ flex: 1 }}>
-                <label style={{ fontSize: 11, fontWeight: 600, color: NAVY, display: 'block', marginBottom: 5, textTransform: 'uppercase', letterSpacing: '0.04em' }}>Document name</label>
-                <input value={pasteName} onChange={(e) => setPasteName(e.target.value)} placeholder="e.g. Acme RFP Section 3"
+                <label style={{ fontSize: 11, fontWeight: 600, color: NAVY, display: 'block', marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.04em' }}>Document name</label>
+                <input value={pasteName} onChange={(e) => setPasteName(e.target.value)} placeholder="e.g. Acme RFP"
                   style={{ width: '100%', padding: '7px 12px', border: `1px solid ${BORDER}`, borderRadius: 6, fontSize: 13, boxSizing: 'border-box' }} />
               </div>
-              <button onClick={addPastedDoc} disabled={!pasteText.trim()}
-                style={{ background: pasteText.trim() ? NAVY : '#CBD5E1', color: WHITE, border: 'none', borderRadius: 6, padding: '8px 16px', fontSize: 12, fontWeight: 600, cursor: pasteText.trim() ? 'pointer' : 'not-allowed', whiteSpace: 'nowrap' }}>
+              <button onClick={addPasted} disabled={!pasteText.trim()}
+                style={{ background: pasteText.trim() ? NAVY : '#CBD5E1', color: WHITE, border: 'none', borderRadius: 6, padding: '8px 14px', fontSize: 12, fontWeight: 600, cursor: pasteText.trim() ? 'pointer' : 'not-allowed', whiteSpace: 'nowrap' }}>
                 + Add
               </button>
             </div>
             <textarea value={pasteText} onChange={(e) => setPasteText(e.target.value)}
-              placeholder="Paste RFP or RFI content here…"
-              rows={3}
+              placeholder="Paste RFP, RFI, or scope content here…" rows={3}
               style={{ width: '100%', padding: '8px 12px', border: `1px solid ${BORDER}`, borderRadius: 6, fontSize: 13, fontFamily: 'inherit', resize: 'vertical', boxSizing: 'border-box', lineHeight: 1.5 }} />
           </div>
 
-          {/* File drop zone */}
+          {/* Drop zone */}
           <div onDrop={handleDrop} onDragOver={handleDragOver}
             style={{ border: `1px dashed ${BORDER}`, borderRadius: 6, padding: '8px 16px', marginBottom: documents.length ? 10 : 0, background: '#FAFBFC', display: 'flex', alignItems: 'center', gap: 10 }}>
             <span style={{ fontSize: 15 }}>{uploading ? '⏳' : '📎'}</span>
-            <span style={{ fontSize: 12, color: MUTED }}>
-              {uploading ? 'Uploading…' : 'Drop files — Word, PDF, Excel, text'}
-            </span>
+            <span style={{ fontSize: 12, color: MUTED }}>{uploading ? 'Uploading…' : 'Drop files — Word, PDF, Excel, text'}</span>
             <button onClick={() => fileInputRef.current?.click()} disabled={uploading}
-              style={{ marginLeft: 'auto', fontSize: 11, color: NAVY, background: 'none', border: `1px solid ${BORDER}`, borderRadius: 4, padding: '3px 10px', cursor: uploading ? 'not-allowed' : 'pointer' }}>
+              style={{ marginLeft: 'auto', fontSize: 11, color: NAVY, background: 'none', border: `1px solid ${BORDER}`, borderRadius: 4, padding: '3px 10px', cursor: 'pointer' }}>
               Browse
             </button>
             <input ref={fileInputRef} type="file" multiple
@@ -795,17 +840,16 @@ export default function RFPModule() {
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 10, marginBottom: 14 }}>
               {documents.map((d) => {
                 const dt = getDocType(d.id)
-                const dtCol = dt ? docTypeColour(dt) : null
+                const dtCol = dt ? docTypeColor(dt) : null
                 return (
-                  <div key={d.id} style={{ display: 'flex', alignItems: 'center', gap: 5, background: BLUE_LIGHT, borderRadius: 20, padding: '3px 10px', fontSize: 12 }}>
-                    <span style={{ fontSize: 12 }}>{d.fileType === 'excel' ? '📊' : '📄'}</span>
+                  <div key={d.id} style={{ display: 'flex', alignItems: 'center', gap: 5, background: LBLUE, borderRadius: 20, padding: '3px 10px', fontSize: 12 }}>
+                    <span>{d.fileType === 'excel' ? '📊' : '📄'}</span>
                     <span>{d.name}</span>
                     {dt && <span style={{ padding: '1px 6px', borderRadius: 10, fontSize: 10, fontWeight: 600, background: dtCol.bg, color: dtCol.text }}>{dt}</span>}
-                    {d.fileType === 'excel' && d.rowCount
-                      ? <span style={{ color: MUTED, fontSize: 10 }}>({d.rowCount} rows)</span>
+                    {d.rowCount ? <span style={{ color: MUTED, fontSize: 10 }}>({d.rowCount} rows)</span>
                       : d.charCount ? <span style={{ color: MUTED, fontSize: 10 }}>({Math.round(d.charCount / 1000)}k chars)</span> : null}
                     <button onClick={() => { rfpRemoveDocument(d.id); setDocuments((p) => p.filter((x) => x.id !== d.id)) }}
-                      style={{ background: 'none', border: 'none', cursor: 'pointer', color: MUTED, fontSize: 13, lineHeight: 1, padding: 0, marginLeft: 2 }}>×</button>
+                      style={{ background: 'none', border: 'none', cursor: 'pointer', color: MUTED, fontSize: 13, padding: 0, marginLeft: 2 }}>×</button>
                   </div>
                 )
               })}
@@ -813,160 +857,434 @@ export default function RFPModule() {
           )}
 
           {/* Progress */}
-          {loading === 'extract' && extractProgress && <div style={{ marginTop: 10 }}><ProgressBar progress={extractProgress} color={NAVY} /></div>}
-          {loading === 'map' && mapProgress && <div style={{ marginTop: 10 }}><ProgressBar progress={mapProgress} color='#059669' /></div>}
+          {loading === 'oi'  && extractProgress && <div style={{ marginTop: 10 }}><ProgressBar progress={extractProgress} /></div>}
+          {loading === 'map' && mapProgress     && <div style={{ marginTop: 10 }}><ProgressBar progress={mapProgress} /></div>}
 
           {/* Buttons */}
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 14 }}>
-            <button onClick={runTriage} disabled={!documents.length || !!loading}
+            <button onClick={runOI} disabled={!documents.length || !!loading}
               style={{ background: documents.length && !loading ? NAVY : '#CBD5E1', color: WHITE, border: 'none', borderRadius: 6, padding: '8px 18px', fontSize: 13, fontWeight: 600, cursor: documents.length && !loading ? 'pointer' : 'not-allowed' }}>
-              {loading === 'extract' ? 'Triaging…' : '1. Triage Requirements'}
+              {loading === 'oi' ? 'Assessing opportunity…' : '1. Run Opportunity Intelligence Assessment'}
             </button>
-            {hasTriage && (
+            {hasCands && (
               <button onClick={runMappingPack} disabled={!!loading}
                 style={{ background: !loading ? '#059669' : '#CBD5E1', color: WHITE, border: 'none', borderRadius: 6, padding: '8px 18px', fontSize: 13, fontWeight: 600, cursor: !loading ? 'pointer' : 'not-allowed' }}>
-                {loading === 'map' ? 'Generating…' : `2. Generate Mapping Pack (${counts.response} requirements)`}
+                {loading === 'map' ? 'Drafting responses…' : `2. Generate Mapping Pack (${candidates.length} candidates)`}
               </button>
             )}
           </div>
 
-          {loading && !extractProgress && !mapProgress && <div style={{ marginTop: 10 }}><Spinner /></div>}
           {error && <div style={{ marginTop: 10, color: RED, fontSize: 12, background: '#FEE2E2', padding: '7px 12px', borderRadius: 6 }}>{error}</div>}
-        </Card>
+        </div>
 
-        {/* ════════════════════════════════════════════════════ */}
-        {/* TRIAGE RESULTS                                      */}
-        {/* ════════════════════════════════════════════════════ */}
-        {hasTriage && (
+        {/* ══════════════════════════════════════════════════════════════════ */}
+        {/* OI ASSESSMENT SECTIONS                                            */}
+        {/* ══════════════════════════════════════════════════════════════════ */}
+        {hasOI && (
           <>
-            {/* Stats bar */}
-            <div style={{ display: 'flex', gap: 10, marginBottom: 16, flexWrap: 'wrap' }}>
-              <StatBox label="Requirements found"    count={counts.total}     colour={NAVY} />
-              <StatBox label="Relevant / respond"    count={counts.response}  colour={GREEN} />
-              <StatBox label="Vendor validation"     count={counts.vendor}    colour='#7C3AED' />
-              <StatBox label="Uncertain / review"    count={counts.uncertain + counts.low} colour={AMBER} />
-              <StatBox label="Not relevant"          count={counts.notRel}    colour={MUTED} />
+            <div style={{ fontSize: 11, fontWeight: 700, color: MUTED, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 10 }}>
+              Opportunity Intelligence Assessment — {company || 'Unknown Prospect'}
             </div>
 
-            {/* Triage summary (1–2 lines) */}
-            {assessment?.triage_summary && (
-              <div style={{ background: WHITE, border: `1px solid ${BORDER}`, borderRadius: 6, padding: '12px 18px', marginBottom: 16, fontSize: 13, color: TEXT, lineHeight: 1.6 }}>
-                {assessment.triage_summary}
+            {/* 1. Customer Objectives */}
+            <OISection number="1" title="Customer Objectives" icon="🎯">
+              <BulletList items={oi.customer_objectives} color={NAVY} emptyText="No objectives extracted." />
+            </OISection>
+
+            {/* 2. Business Use Cases */}
+            <OISection number="2" title="Business Use Cases" icon="📋">
+              <ChipGrid items={oi.business_use_cases} colorFn={() => ({ bg: LBLUE, text: NAVY })} />
+            </OISection>
+
+            {/* 3. Capability Requirements */}
+            <OISection number="3" title="Capability Requirements" icon="⚙️">
+              <MiniTable
+                headers={['Capability', 'RR / LG Area']}
+                rows={(oi.capability_requirements || []).map((r) => [r.capability, r.rr_area])}
+              />
+            </OISection>
+
+            {/* 4. LogicGate Mapping */}
+            <OISection number="4" title="LogicGate Module Mapping" icon="🔷">
+              <MiniTable
+                headers={['Requirement Area', 'LogicGate Module']}
+                rows={(oi.logicgate_mapping || []).map((r) => [r.requirement_area, <span style={{ fontWeight: 600, color: PURPLE }}>{r.logicgate_module}</span>])}
+              />
+            </OISection>
+
+            {/* 5. Scope Assessment */}
+            <OISection number="5" title="Scope Assessment" icon="🔭">
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+                <div style={{ border: `1px solid ${BORDER}`, borderRadius: 6, overflow: 'hidden' }}>
+                  <div style={{ padding: '5px 10px', background: '#D1FAE5', borderBottom: `1px solid ${BORDER}` }}>
+                    <span style={{ fontSize: 10, fontWeight: 700, color: GREEN, textTransform: 'uppercase' }}>In Scope</span>
+                  </div>
+                  <div style={{ padding: '10px 12px' }}>
+                    <BulletList items={(oi.scope_assessment || {}).in_scope} color={GREEN} emptyText="Not specified" />
+                  </div>
+                </div>
+                <div style={{ border: `1px solid ${BORDER}`, borderRadius: 6, overflow: 'hidden' }}>
+                  <div style={{ padding: '5px 10px', background: '#FEE2E2', borderBottom: `1px solid ${BORDER}` }}>
+                    <span style={{ fontSize: 10, fontWeight: 700, color: RED, textTransform: 'uppercase' }}>Likely Out of Scope</span>
+                  </div>
+                  <div style={{ padding: '10px 12px' }}>
+                    <BulletList items={(oi.scope_assessment || {}).likely_out_of_scope} color={RED} emptyText="Not identified" />
+                  </div>
+                </div>
+                <div style={{ border: `1px solid ${BORDER}`, borderRadius: 6, overflow: 'hidden' }}>
+                  <div style={{ padding: '5px 10px', background: '#FEF9C3', borderBottom: `1px solid ${BORDER}` }}>
+                    <span style={{ fontSize: 10, fontWeight: 700, color: AMBER, textTransform: 'uppercase' }}>Mandatory</span>
+                  </div>
+                  <div style={{ padding: '10px 12px' }}>
+                    <BulletList items={(oi.scope_assessment || {}).mandatory_items} color={AMBER} emptyText="None identified" />
+                  </div>
+                </div>
+                <div style={{ border: `1px solid ${BORDER}`, borderRadius: 6, overflow: 'hidden' }}>
+                  <div style={{ padding: '5px 10px', background: '#F1F5F9', borderBottom: `1px solid ${BORDER}` }}>
+                    <span style={{ fontSize: 10, fontWeight: 700, color: MUTED, textTransform: 'uppercase' }}>Optional / Phase 2</span>
+                  </div>
+                  <div style={{ padding: '10px 12px' }}>
+                    <BulletList items={(oi.scope_assessment || {}).optional_items} color={MUTED} emptyText="None identified" />
+                  </div>
+                </div>
+              </div>
+            </OISection>
+
+            {/* 6. Delivery Phases */}
+            <OISection number="6" title="Suggested Delivery Phases" icon="🗓️">
+              {(oi.suggested_delivery_phases || []).length > 0 ? (
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 10 }}>
+                  {(oi.suggested_delivery_phases || []).map((ph, i) => <PhaseCard key={i} phase={ph} />)}
+                </div>
+              ) : <span style={{ fontSize: 12, color: MUTED }}>No phases suggested.</span>}
+            </OISection>
+
+            {/* 7. Resource Assessment */}
+            <OISection number="7" title="Resource Assessment" icon="👤">
+              <MiniTable
+                headers={['Role', 'Justification']}
+                rows={(oi.resource_assessment || []).map((r) => [<span style={{ fontWeight: 600 }}>{r.role}</span>, r.justification])}
+              />
+            </OISection>
+
+            {/* 8. Integration Assessment */}
+            <OISection number="8" title="Integration Assessment" icon="🔗">
+              <TwoCol>
+                <div>
+                  <SubSection title="Likely Integrations" color={TEAL}>
+                    <BulletList items={(oi.integration_assessment || {}).likely_integrations} color={TEAL} />
+                  </SubSection>
+                  <SubSection title="Data Sources" color={TEAL}>
+                    <BulletList items={(oi.integration_assessment || {}).data_sources} color={TEAL} />
+                  </SubSection>
+                </div>
+                <div>
+                  <SubSection title="API Dependencies" color={TEAL}>
+                    <BulletList items={(oi.integration_assessment || {}).api_dependencies} color={TEAL} emptyText="None identified" />
+                  </SubSection>
+                </div>
+              </TwoCol>
+            </OISection>
+
+            {/* 9. Data Migration */}
+            <OISection number="9" title="Data Migration Assessment" icon="🗃️">
+              <TwoCol>
+                <div>
+                  <SubSection title="Likely Requirements">
+                    <BulletList items={(oi.data_migration_assessment || {}).likely_requirements} />
+                  </SubSection>
+                  <SubSection title="Assumptions" color={AMBER}>
+                    <BulletList items={(oi.data_migration_assessment || {}).assumptions} color={AMBER} emptyText="None stated" />
+                  </SubSection>
+                </div>
+                <div>
+                  <SubSection title="Complexity">
+                    {(() => {
+                      const c = (oi.data_migration_assessment || {}).complexity || 'Unknown'
+                      const col = c === 'High' ? { bg: '#FEE2E2', text: RED } : c === 'Medium' ? { bg: '#FEF9C3', text: AMBER } : c === 'Low' ? { bg: '#D1FAE5', text: GREEN } : { bg: '#F1F5F9', text: MUTED }
+                      return <span style={{ padding: '4px 12px', borderRadius: 14, fontWeight: 700, fontSize: 13, background: col.bg, color: col.text }}>{c}</span>
+                    })()}
+                  </SubSection>
+                </div>
+              </TwoCol>
+            </OISection>
+
+            {/* 10. Support Assessment */}
+            <OISection number="10" title="Support Assessment" icon="🛎️">
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 16 }}>
+                <div>
+                  <SubSection title="Support Expectations">
+                    <BulletList items={(oi.support_assessment || {}).support_expectations} />
+                  </SubSection>
+                </div>
+                <div>
+                  <SubSection title="Hypercare Requirements" color={AMBER}>
+                    <BulletList items={(oi.support_assessment || {}).hypercare_requirements} color={AMBER} emptyText="None identified" />
+                  </SubSection>
+                </div>
+                <div>
+                  <SubSection title="Training Obligations">
+                    <BulletList items={(oi.support_assessment || {}).training_obligations} emptyText="None identified" />
+                  </SubSection>
+                </div>
+              </div>
+            </OISection>
+
+            {/* 11. Geographic & Timezone */}
+            <OISection number="11" title="Geographic & Timezone Assessment" icon="🌍">
+              <TwoCol>
+                <div>
+                  <SubSection title="Operating Regions" color={TEAL}>
+                    <ChipGrid items={(oi.geographic_assessment || {}).operating_regions} colorFn={() => ({ bg: '#CCFBF1', text: TEAL })} />
+                  </SubSection>
+                  <SubSection title="Implementation Timezone" style={{ marginTop: 12 }}>
+                    <BulletList items={(oi.geographic_assessment || {}).implementation_timezone_impacts} emptyText="Not specified" />
+                  </SubSection>
+                </div>
+                <div>
+                  <SubSection title="Support Timezone">
+                    <BulletList items={(oi.geographic_assessment || {}).support_timezone_impacts} emptyText="Not specified" />
+                  </SubSection>
+                </div>
+              </TwoCol>
+            </OISection>
+
+            {/* 12. Risk Assessment */}
+            <OISection number="12" title="Risk Assessment" icon="⚠️">
+              <RiskGrid risk={oi.risk_assessment} />
+            </OISection>
+
+            {/* 13. Open Questions */}
+            <OISection number="13" title="Open Questions" icon="❓">
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 16 }}>
+                <div>
+                  <SubSection title="Customer Clarification" color={NAVY}>
+                    <QList items={(oi.open_questions || {}).customer_clarification} color={NAVY} emptyText="None identified" />
+                  </SubSection>
+                </div>
+                <div>
+                  <SubSection title="Vendor Clarification" color={PURPLE}>
+                    <QList items={(oi.open_questions || {}).vendor_clarification} color={PURPLE} emptyText="None identified" />
+                  </SubSection>
+                </div>
+                <div>
+                  <SubSection title="Scope Clarification" color={AMBER}>
+                    <QList items={(oi.open_questions || {}).scope_clarification} color={AMBER} emptyText="None identified" />
+                  </SubSection>
+                </div>
+              </div>
+            </OISection>
+
+            {/* 14. Response Candidates (high-level) */}
+            <OISection number="14" title="Response Candidates" icon="📬">
+              <ResponseCandidateBuckets rc={oi.response_candidates} />
+            </OISection>
+
+            {/* ── Per-requirement candidates table ── */}
+            {hasCands && (
+              <div style={{ marginTop: 24 }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: MUTED, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 10 }}>
+                  Response Candidates — {candidates.length} requirements
+                </div>
+
+                {/* Bucket tab filter */}
+                <div style={{ display: 'flex', gap: 0, border: `1px solid ${BORDER}`, borderBottom: 'none', borderRadius: '6px 6px 0 0', overflow: 'hidden', background: WHITE }}>
+                  {candBuckets.map((b) => (
+                    <button key={b} onClick={() => { setCandFilter(b); setCandExpanded(null) }}
+                      style={{
+                        padding: '9px 16px', fontSize: 12, fontWeight: candFilter === b ? 700 : 500,
+                        border: 'none', cursor: 'pointer', whiteSpace: 'nowrap',
+                        background: candFilter === b ? NAVY : WHITE,
+                        color: candFilter === b ? WHITE : MUTED,
+                        borderRight: `1px solid ${BORDER}`,
+                      }}>
+                      {b} <span style={{ fontWeight: 400, opacity: 0.75 }}>({candCounts[b]})</span>
+                    </button>
+                  ))}
+                </div>
+
+                <div style={{ background: WHITE, border: `1px solid ${BORDER}`, borderRadius: '0 0 6px 6px', overflow: 'hidden', marginBottom: 24 }}>
+                  <div style={{ overflowX: 'auto' }}>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                      <thead>
+                        <tr style={{ background: '#F8FAFC', borderBottom: `2px solid ${BORDER}` }}>
+                          {['Ref', 'Requirement', 'Bucket', 'M/O', 'Reason', ''].map((h, i) => (
+                            <th key={i} style={{ padding: '8px 12px', textAlign: 'left', fontWeight: 600, color: MUTED, fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.05em', whiteSpace: 'nowrap', width: i === 5 ? 24 : 'auto' }}>{h}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {visibleCands.map((c, i) => {
+                          const bc = bucketColor(c.bucket)
+                          const exp = candExpanded === c.requirement_id
+                          return (
+                            <React.Fragment key={c.requirement_id || i}>
+                              <tr onClick={() => setCandExpanded(exp ? null : c.requirement_id)}
+                                style={{ borderBottom: `1px solid ${BORDER}`, cursor: 'pointer', background: exp ? LBLUE : i % 2 === 0 ? WHITE : '#FAFBFC' }}>
+                                <td style={{ padding: '8px 12px', fontWeight: 700, color: NAVY, fontSize: 11, whiteSpace: 'nowrap' }}>{c.requirement_id}</td>
+                                <td style={{ padding: '8px 12px', maxWidth: 320 }}>
+                                  <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.original_question}</div>
+                                </td>
+                                <td style={{ padding: '8px 12px', whiteSpace: 'nowrap' }}><Badge label={c.bucket || '—'} color={bc} /></td>
+                                <td style={{ padding: '8px 12px', color: MUTED, fontSize: 11, whiteSpace: 'nowrap' }}>{c.mandatory_optional || '—'}</td>
+                                <td style={{ padding: '8px 12px', maxWidth: 260 }}>
+                                  <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: MUTED }}>{c.reason || '—'}</div>
+                                </td>
+                                <td style={{ padding: '8px 8px', textAlign: 'center', color: MUTED, fontSize: 9 }}>{exp ? '▲' : '▼'}</td>
+                              </tr>
+                              {exp && (
+                                <tr style={{ background: LBLUE }}>
+                                  <td colSpan={6} style={{ padding: '14px 18px' }}>
+                                    <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 20 }}>
+                                      <div>
+                                        <div style={{ fontSize: 10, fontWeight: 700, color: MUTED, textTransform: 'uppercase', marginBottom: 5 }}>Full Requirement</div>
+                                        <div style={{ fontSize: 13, color: '#1E293B', lineHeight: 1.6, padding: '10px 12px', background: WHITE, borderRadius: 5, border: `1px solid ${BORDER}`, marginBottom: 10 }}>{c.original_question}</div>
+                                        <div style={{ fontSize: 11, color: MUTED }}>
+                                          {c.source_document && <><strong>Source:</strong> {c.source_document}{'  '}</>}
+                                          {c.category && <><strong>Category:</strong> {c.category}</>}
+                                        </div>
+                                      </div>
+                                      <div>
+                                        <div style={{ fontSize: 10, fontWeight: 700, color: MUTED, textTransform: 'uppercase', marginBottom: 5 }}>Reason</div>
+                                        <div style={{ fontSize: 12, color: '#1E293B', lineHeight: 1.5 }}>{c.reason || '—'}</div>
+                                      </div>
+                                    </div>
+                                  </td>
+                                </tr>
+                              )}
+                            </React.Fragment>
+                          )
+                        })}
+                        {!visibleCands.length && (
+                          <tr><td colSpan={6} style={{ padding: 24, textAlign: 'center', color: MUTED }}>No candidates in this filter.</td></tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                  <div style={{ padding: '7px 14px', borderTop: `1px solid ${BORDER}`, fontSize: 11, color: MUTED, background: '#FAFBFC' }}>
+                    Showing {visibleCands.length} of {candidates.length}
+                  </div>
+                </div>
               </div>
             )}
+          </>
+        )}
 
-            {/* Worklist tab filter */}
-            <div style={{ display: 'flex', gap: 0, marginBottom: 0, borderBottom: `1px solid ${BORDER}`, background: WHITE, borderRadius: '6px 6px 0 0', overflow: 'hidden', border: `1px solid ${BORDER}` }}>
-              {tabs.map((tab) => (
-                <button key={tab.key} onClick={() => { setWlFilter(tab.key); setWlExpanded(null) }}
-                  style={{
-                    padding: '10px 16px', fontSize: 12, fontWeight: wlFilter === tab.key ? 700 : 500,
-                    border: 'none', cursor: 'pointer', whiteSpace: 'nowrap',
-                    background: wlFilter === tab.key ? NAVY : WHITE,
-                    color: wlFilter === tab.key ? WHITE : MUTED,
-                    borderRight: `1px solid ${BORDER}`,
-                  }}>
-                  {tab.label} <span style={{ fontWeight: 400, opacity: 0.75 }}>({tab.count})</span>
-                </button>
-              ))}
-              {/* Owner filter */}
-              <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', padding: '0 12px', borderLeft: `1px solid ${BORDER}` }}>
-                <select value={wlOwner} onChange={(e) => setWlOwner(e.target.value)}
-                  style={{ border: 'none', fontSize: 12, color: TEXT, background: 'transparent', cursor: 'pointer' }}>
-                  {wlOwners.map((o) => <option key={o}>{o}</option>)}
-                </select>
-              </div>
+        {/* ══════════════════════════════════════════════════════════════════ */}
+        {/* MAPPING PACK                                                       */}
+        {/* ══════════════════════════════════════════════════════════════════ */}
+        {hasMap && (
+          <div>
+            <div style={{ fontSize: 11, fontWeight: 700, color: MUTED, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 10 }}>
+              Response Mapping Pack — {mappingRows.length} requirements mapped
             </div>
 
-            {/* Worklist table */}
-            <div style={{ background: WHITE, border: `1px solid ${BORDER}`, borderTop: 'none', borderRadius: '0 0 6px 6px', overflow: 'hidden', marginBottom: 20 }}>
+            {/* Owner filter */}
+            <div style={{ display: 'flex', gap: 6, marginBottom: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+              {['All', 'RR', 'LogicGate', 'Panorays', 'Joint', 'Unknown'].map((o) => {
+                const count = o === 'All' ? mappingRows.length : mapOwnerCounts[o] || 0
+                if (o !== 'All' && count === 0) return null
+                const active = mapFilterOwner === o
+                const c = ownerColor(o)
+                return (
+                  <button key={o} onClick={() => setMapFilterOwner(o)}
+                    style={{ padding: '4px 10px', borderRadius: 20, fontSize: 11, fontWeight: 600, cursor: 'pointer', border: `1px solid ${active ? c.text : BORDER}`, background: active ? c.bg : WHITE, color: active ? c.text : MUTED }}>
+                    {o} ({count})
+                  </button>
+                )
+              })}
+              <span style={{ marginLeft: 'auto', fontSize: 11, color: MUTED }}>{visibleMap.length} / {mappingRows.length}</span>
+            </div>
+
+            <div style={{ background: WHITE, border: `1px solid ${BORDER}`, borderRadius: 8, overflow: 'hidden', marginBottom: 20 }}>
               <div style={{ overflowX: 'auto' }}>
                 <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
                   <thead>
-                    <tr style={{ background: '#F8FAFC', borderBottom: `2px solid ${BORDER}` }}>
-                      <th style={{ padding: '9px 12px', textAlign: 'left', color: MUTED, fontWeight: 600, whiteSpace: 'nowrap', fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.04em' }}>Ref</th>
-                      <th style={{ padding: '9px 12px', textAlign: 'left', color: MUTED, fontWeight: 600, fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.04em' }}>Requirement</th>
-                      <th style={{ padding: '9px 12px', textAlign: 'left', color: MUTED, fontWeight: 600, fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.04em' }}>Why Relevant</th>
-                      <th style={{ padding: '9px 12px', textAlign: 'left', color: MUTED, fontWeight: 600, whiteSpace: 'nowrap', fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.04em' }}>Owner</th>
-                      <th style={{ padding: '9px 12px', textAlign: 'left', color: MUTED, fontWeight: 600, fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.04em' }}>LG Mapping</th>
-                      <th style={{ padding: '9px 12px', textAlign: 'center', color: MUTED, fontWeight: 600, whiteSpace: 'nowrap', fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.04em' }}>Resp.</th>
-                      <th style={{ padding: '9px 12px', textAlign: 'center', color: MUTED, fontWeight: 600, whiteSpace: 'nowrap', fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.04em' }}>Vendor</th>
-                      <th style={{ padding: '9px 12px', textAlign: 'left', color: MUTED, fontWeight: 600, whiteSpace: 'nowrap', fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.04em' }}>Conf.</th>
-                      <th style={{ width: 24 }} />
+                    <tr style={{ background: NAVY, color: WHITE }}>
+                      {['Ref', 'Requirement', 'Category', 'Owner', 'Conf.', 'Vendor?', 'Status', ''].map((h, i) => (
+                        <th key={i} style={{ padding: '9px 12px', textAlign: 'left', fontWeight: 600, whiteSpace: i === 1 ? 'normal' : 'nowrap', width: i === 7 ? 28 : 'auto' }}>{h}</th>
+                      ))}
                     </tr>
                   </thead>
                   <tbody>
-                    {visibleList.map((req, i) => {
-                      const confCol = confidenceColour(req.confidence)
-                      const isExpanded = wlExpanded === req.requirement_id
+                    {visibleMap.map((req, i) => {
+                      const exp = mapExpanded === req.requirement_id
+                      const oc = ownerColor(req.owner)
+                      const confCol = req.confidence === 'High' ? GREEN : req.confidence === 'Medium' ? AMBER : RED
                       return (
                         <React.Fragment key={req.requirement_id || i}>
-                          <tr
-                            onClick={() => setWlExpanded(isExpanded ? null : req.requirement_id)}
-                            style={{ borderBottom: `1px solid ${BORDER}`, cursor: 'pointer', background: isExpanded ? BLUE_LIGHT : (i % 2 === 0 ? WHITE : '#FAFBFC') }}>
-                            <td style={{ padding: '9px 12px', fontWeight: 700, color: NAVY, whiteSpace: 'nowrap', fontSize: 11 }}>{req.requirement_id}</td>
-                            <td style={{ padding: '9px 12px', maxWidth: 260 }}>
-                              <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: TEXT }}>{req.original_question}</div>
+                          <tr onClick={() => setMapExpanded(exp ? null : req.requirement_id)}
+                            style={{ borderBottom: `1px solid ${BORDER}`, cursor: 'pointer', background: i % 2 === 0 ? WHITE : '#FAFBFC' }}>
+                            <td style={{ padding: '8px 12px', fontWeight: 700, color: NAVY, fontSize: 11, whiteSpace: 'nowrap' }}>{req.requirement_id}</td>
+                            <td style={{ padding: '8px 12px', maxWidth: 340 }}>
+                              <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{req.original_question}</div>
                             </td>
-                            <td style={{ padding: '9px 12px', maxWidth: 200 }}>
-                              {req.why_relevant
-                                ? <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: MUTED }}>{req.why_relevant}</div>
-                                : <span style={{ color: BORDER }}>—</span>}
+                            <td style={{ padding: '8px 12px', color: MUTED, fontSize: 11, whiteSpace: 'nowrap' }}>{req.category}</td>
+                            <td style={{ padding: '8px 12px', whiteSpace: 'nowrap' }}>
+                              {req.owner ? <Badge label={req.owner} color={oc} /> : <span style={{ color: BORDER }}>—</span>}
                             </td>
-                            <td style={{ padding: '9px 12px', whiteSpace: 'nowrap' }}>
-                              <Badge label={req.recommended_owner || '—'} colour={ownerColour(req.recommended_owner)} />
+                            <td style={{ padding: '8px 12px', fontWeight: 600, fontSize: 11, color: confCol, whiteSpace: 'nowrap' }}>{req.confidence || '—'}</td>
+                            <td style={{ padding: '8px 12px', textAlign: 'center', fontWeight: 700, fontSize: 12, color: req.vendor_validation_required ? GREEN : MUTED }}>
+                              {req.vendor_validation_required ? 'Y' : 'N'}
                             </td>
-                            <td style={{ padding: '9px 12px', maxWidth: 200 }}>
-                              {req.logicgate_mapping
-                                ? <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: TEXT, fontSize: 11 }}>{req.logicgate_mapping}</div>
-                                : <span style={{ color: BORDER }}>—</span>}
-                            </td>
-                            <td style={{ padding: '9px 12px', textAlign: 'center' }}><YN value={req.response_required} /></td>
-                            <td style={{ padding: '9px 12px', textAlign: 'center' }}><YN value={req.vendor_validation_required} /></td>
-                            <td style={{ padding: '9px 12px' }}>
-                              <span style={{ fontWeight: 600, fontSize: 11, color: confCol.text }}>{req.confidence || '—'}</span>
-                            </td>
-                            <td style={{ padding: '9px 8px', textAlign: 'center', color: MUTED, fontSize: 9 }}>{isExpanded ? '▲' : '▼'}</td>
+                            <td style={{ padding: '8px 12px', color: MUTED, fontSize: 11 }}>{req.status || 'Draft'}</td>
+                            <td style={{ padding: '8px 8px', textAlign: 'center', color: MUTED, fontSize: 9 }}>{exp ? '▲' : '▼'}</td>
                           </tr>
 
-                          {/* Expanded row */}
-                          {isExpanded && (
-                            <tr style={{ background: BLUE_LIGHT }}>
-                              <td colSpan={9} style={{ padding: '16px 20px' }}>
+                          {exp && (
+                            <tr style={{ background: LBLUE }}>
+                              <td colSpan={8} style={{ padding: '18px 22px' }}>
                                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>
                                   <div>
-                                    <div style={{ fontSize: 10, fontWeight: 700, color: MUTED, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 5 }}>Full Requirement</div>
-                                    <div style={{ fontSize: 13, color: TEXT, lineHeight: 1.6, padding: '10px 12px', background: WHITE, borderRadius: 5, border: `1px solid ${BORDER}`, marginBottom: 12 }}>{req.original_question}</div>
-                                    {req.why_relevant && (
+                                    <div style={{ fontSize: 10, fontWeight: 700, color: MUTED, textTransform: 'uppercase', marginBottom: 5 }}>Requirement</div>
+                                    <div style={{ fontSize: 13, color: '#1E293B', lineHeight: 1.5, marginBottom: 14 }}>{req.original_question}</div>
+                                    {req.rr_capability_mapping && (
                                       <div style={{ marginBottom: 10 }}>
-                                        <div style={{ fontSize: 10, fontWeight: 700, color: MUTED, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 4 }}>Why Relevant</div>
-                                        <div style={{ fontSize: 12, color: TEXT, lineHeight: 1.5 }}>{req.why_relevant}</div>
+                                        <div style={{ fontSize: 10, fontWeight: 700, color: BLUE, textTransform: 'uppercase', marginBottom: 4 }}>RR Capability</div>
+                                        <div style={{ fontSize: 12, lineHeight: 1.5, padding: '8px 10px', background: '#EFF6FF', borderRadius: 5 }}>{req.rr_capability_mapping}</div>
                                       </div>
                                     )}
-                                    <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', fontSize: 11, color: MUTED }}>
-                                      {req.source_document && <span><strong>Source:</strong> {req.source_document}</span>}
-                                      {req.category && <span><strong>Category:</strong> {req.category}</span>}
-                                      {req.mandatory_optional && <span><strong>M/O:</strong> {req.mandatory_optional}</span>}
-                                    </div>
+                                    {req.logicgate_mapping && (
+                                      <div style={{ marginBottom: 10 }}>
+                                        <div style={{ fontSize: 10, fontWeight: 700, color: PURPLE, textTransform: 'uppercase', marginBottom: 4 }}>LogicGate</div>
+                                        <div style={{ fontSize: 12, lineHeight: 1.5, padding: '8px 10px', background: '#F5F3FF', borderRadius: 5 }}>{req.logicgate_mapping}</div>
+                                      </div>
+                                    )}
+                                    {req.assumptions && <div style={{ fontSize: 11, color: AMBER }}><strong>Assumptions:</strong> {req.assumptions}</div>}
+                                    {req.notes && <div style={{ fontSize: 11, color: MUTED, marginTop: 6 }}><strong>Note:</strong> {req.notes}</div>}
                                   </div>
                                   <div>
-                                    {req.logicgate_mapping && (
+                                    <div style={{ marginBottom: 12 }}>
+                                      <div style={{ fontSize: 10, fontWeight: 700, color: NAVY, textTransform: 'uppercase', marginBottom: 5 }}>Owner</div>
+                                      <select value={req.owner || 'Unknown'} onChange={(e) => updateMappingRow(req.requirement_id, { owner: e.target.value })} onClick={(e) => e.stopPropagation()}
+                                        style={{ padding: '5px 10px', border: `1px solid ${BORDER}`, borderRadius: 5, fontSize: 12, background: WHITE }}>
+                                        {['RR', 'LogicGate', 'Panorays', 'Joint', 'Unknown'].map((o) => <option key={o}>{o}</option>)}
+                                      </select>
+                                    </div>
+                                    <div style={{ marginBottom: 12 }}>
+                                      <div style={{ fontSize: 10, fontWeight: 700, color: GREEN, textTransform: 'uppercase', marginBottom: 5 }}>Draft RR Response</div>
+                                      <textarea value={req.draft_rr_response || ''} onChange={(e) => updateMappingRow(req.requirement_id, { draft_rr_response: e.target.value })} onClick={(e) => e.stopPropagation()}
+                                        rows={4} placeholder="No RR-owned response drafted"
+                                        style={{ width: '100%', padding: '7px 10px', border: `1px solid ${BORDER}`, borderRadius: 5, fontSize: 12, fontFamily: 'inherit', resize: 'vertical', boxSizing: 'border-box', lineHeight: 1.5 }} />
+                                    </div>
+                                    {(req.vendor_validation_required || req.vendor_question_or_prompt) && (
                                       <div style={{ marginBottom: 12 }}>
-                                        <div style={{ fontSize: 10, fontWeight: 700, color: '#7C3AED', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 4 }}>LogicGate Mapping</div>
-                                        <div style={{ fontSize: 12, color: TEXT, lineHeight: 1.5, padding: '8px 12px', background: '#F5F3FF', borderRadius: 5 }}>{req.logicgate_mapping}</div>
+                                        <div style={{ fontSize: 10, fontWeight: 700, color: PURPLE, textTransform: 'uppercase', marginBottom: 5 }}>Vendor Prompt</div>
+                                        <textarea value={req.vendor_question_or_prompt || ''} onChange={(e) => updateMappingRow(req.requirement_id, { vendor_question_or_prompt: e.target.value })} onClick={(e) => e.stopPropagation()}
+                                          rows={2}
+                                          style={{ width: '100%', padding: '7px 10px', border: `1px solid ${BORDER}`, borderRadius: 5, fontSize: 12, fontFamily: 'inherit', resize: 'vertical', boxSizing: 'border-box', lineHeight: 1.5 }} />
                                       </div>
                                     )}
-                                    {req.rr_mapping && (
-                                      <div style={{ marginBottom: 12 }}>
-                                        <div style={{ fontSize: 10, fontWeight: 700, color: '#1D4ED8', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 4 }}>RR Mapping</div>
-                                        <div style={{ fontSize: 12, color: TEXT, lineHeight: 1.5, padding: '8px 12px', background: '#EFF6FF', borderRadius: 5 }}>{req.rr_mapping}</div>
-                                      </div>
-                                    )}
-                                    {req.notes && (
-                                      <div style={{ padding: '8px 12px', background: '#FFFBEB', borderRadius: 5, border: `1px solid #FDE68A`, fontSize: 12, color: TEXT }}>
-                                        <strong style={{ color: AMBER }}>⚠ </strong>{req.notes}
-                                      </div>
-                                    )}
+                                    <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                                      <select value={req.status || 'Draft'} onChange={(e) => updateMappingRow(req.requirement_id, { status: e.target.value })} onClick={(e) => e.stopPropagation()}
+                                        style={{ padding: '5px 8px', border: `1px solid ${BORDER}`, borderRadius: 5, fontSize: 12 }}>
+                                        {['Draft', 'In Review', 'Approved', 'Sent'].map((s) => <option key={s}>{s}</option>)}
+                                      </select>
+                                      <button onClick={(e) => { e.stopPropagation(); regenerateRow(req) }} disabled={regenRow === req.requirement_id}
+                                        style={{ padding: '5px 12px', background: regenRow === req.requirement_id ? '#CBD5E1' : NAVY, color: WHITE, border: 'none', borderRadius: 5, fontSize: 11, cursor: regenRow === req.requirement_id ? 'not-allowed' : 'pointer', fontWeight: 600 }}>
+                                        {regenRow === req.requirement_id ? '…' : '↻ Regen'}
+                                      </button>
+                                    </div>
                                   </div>
                                 </div>
                               </td>
@@ -975,243 +1293,50 @@ export default function RFPModule() {
                         </React.Fragment>
                       )
                     })}
-                    {visibleList.length === 0 && (
-                      <tr><td colSpan={9} style={{ padding: '24px', textAlign: 'center', color: MUTED, fontSize: 13 }}>No requirements in this filter.</td></tr>
-                    )}
                   </tbody>
                 </table>
               </div>
-              <div style={{ padding: '8px 14px', borderTop: `1px solid ${BORDER}`, fontSize: 11, color: MUTED, background: '#FAFBFC' }}>
-                Showing {visibleList.length} of {requirements.length} requirements
-              </div>
             </div>
-
-            {/* Gaps & Clarification */}
-            {assessment && (
-              (Array.isArray(assessment.gaps) && assessment.gaps.length > 0) ||
-              (Array.isArray(assessment.clarification_needed) && assessment.clarification_needed.length > 0) ||
-              (Array.isArray(assessment.items_flagged_for_review) && assessment.items_flagged_for_review.length > 0)
-            ) && (
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 24 }}>
-                {Array.isArray(assessment?.gaps) && assessment.gaps.length > 0 && (
-                  <Card style={{ padding: '16px 20px' }}>
-                    <div style={{ fontSize: 11, fontWeight: 700, color: NAVY, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 10 }}>Gaps & Uncertainties</div>
-                    {assessment.gaps.map((g, i) => (
-                      <div key={i} style={{ display: 'flex', gap: 7, alignItems: 'flex-start', marginBottom: 6, fontSize: 12, color: TEXT, lineHeight: 1.5 }}>
-                        <span style={{ color: AMBER, flexShrink: 0 }}>⚠</span> {g}
-                      </div>
-                    ))}
-                    {Array.isArray(assessment.items_flagged_for_review) && assessment.items_flagged_for_review.length > 0 && (
-                      <>
-                        <div style={{ fontSize: 11, fontWeight: 700, color: RED, textTransform: 'uppercase', letterSpacing: '0.05em', marginTop: 12, marginBottom: 8 }}>Flagged for Review</div>
-                        {assessment.items_flagged_for_review.map((item, i) => (
-                          <div key={i} style={{ fontSize: 12, color: TEXT, lineHeight: 1.5, marginBottom: 4 }}>• {item}</div>
-                        ))}
-                      </>
-                    )}
-                  </Card>
-                )}
-                {Array.isArray(assessment?.clarification_needed) && assessment.clarification_needed.length > 0 && (
-                  <Card style={{ padding: '16px 20px' }}>
-                    <div style={{ fontSize: 11, fontWeight: 700, color: NAVY, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 10 }}>Clarification Required</div>
-                    {assessment.clarification_needed.map((q, i) => (
-                      <div key={i} style={{ display: 'flex', gap: 7, alignItems: 'flex-start', marginBottom: 6, fontSize: 12, color: TEXT, lineHeight: 1.5 }}>
-                        <span style={{ color: NAVY, fontWeight: 700, flexShrink: 0 }}>Q{i + 1}</span> {q}
-                      </div>
-                    ))}
-                  </Card>
-                )}
-              </div>
-            )}
-          </>
-        )}
-
-        {/* ════════════════════════════════════════════════════ */}
-        {/* MAPPING PACK RESULTS                                */}
-        {/* ════════════════════════════════════════════════════ */}
-        {hasMappingPack && (
-          <div>
-            <div style={{ fontSize: 13, fontWeight: 700, color: NAVY, marginBottom: 12 }}>
-              Mapping Pack — {mappingRows.length} requirements mapped
-            </div>
-
-            {/* Mapping filter bar */}
-            <div style={{ display: 'flex', gap: 6, marginBottom: 10, flexWrap: 'wrap', alignItems: 'center' }}>
-              <button onClick={() => setMapFilterOwner('All')}
-                style={{ padding: '4px 10px', borderRadius: 20, fontSize: 11, fontWeight: 600, cursor: 'pointer', border: `1px solid ${mapFilterOwner === 'All' ? NAVY : BORDER}`, background: mapFilterOwner === 'All' ? NAVY : WHITE, color: mapFilterOwner === 'All' ? WHITE : MUTED }}>
-                All ({mappingRows.length})
-              </button>
-              {['RR', 'LogicGate', 'Panorays', 'Joint', 'Unknown'].filter((o) => mapOwnerCounts[o] > 0).map((o) => {
-                const col = ownerColour(o); const active = mapFilterOwner === o
-                return (
-                  <button key={o} onClick={() => setMapFilterOwner(active ? 'All' : o)}
-                    style={{ padding: '4px 10px', borderRadius: 20, fontSize: 11, fontWeight: 600, cursor: 'pointer', border: `1px solid ${active ? col.text : BORDER}`, background: active ? col.bg : WHITE, color: active ? col.text : MUTED }}>
-                    {o} ({mapOwnerCounts[o]})
-                  </button>
-                )
-              })}
-              {mapCategories.length > 0 && (
-                <select value={mapFilterCategory} onChange={(e) => setMapFilterCategory(e.target.value)}
-                  style={{ padding: '4px 10px', border: `1px solid ${BORDER}`, borderRadius: 6, fontSize: 12, marginLeft: 6 }}>
-                  <option value="All">All categories</option>
-                  {mapCategories.map((c) => <option key={c}>{c}</option>)}
-                </select>
-              )}
-              <select value={mapFilterConfidence} onChange={(e) => setMapFilterConfidence(e.target.value)}
-                style={{ padding: '4px 10px', border: `1px solid ${BORDER}`, borderRadius: 6, fontSize: 12 }}>
-                <option value="All">All confidence</option>
-                <option>High</option><option>Medium</option><option>Low</option>
-              </select>
-              <span style={{ marginLeft: 'auto', fontSize: 11, color: MUTED }}>{visibleMapping.length} / {mappingRows.length}</span>
-            </div>
-
-            {/* Mapping table */}
-            <Card style={{ padding: 0, overflow: 'hidden', marginBottom: 20 }}>
-              <div style={{ overflowX: 'auto' }}>
-                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
-                  <thead>
-                    <tr style={{ background: NAVY, color: WHITE }}>
-                      {['Ref', 'Question', 'Category', 'Owner', 'Conf.', 'Vendor?', 'Status', ''].map((h, i) => (
-                        <th key={i} style={{ padding: '9px 12px', textAlign: 'left', fontWeight: 600, whiteSpace: i === 1 ? 'normal' : 'nowrap', width: i === 7 ? 28 : 'auto' }}>{h}</th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {visibleMapping.map((req, i) => (
-                      <React.Fragment key={req.requirement_id || i}>
-                        <tr onClick={() => setMapExpanded(mapExpanded === req.requirement_id ? null : req.requirement_id)}
-                          style={{ borderBottom: `1px solid ${BORDER}`, cursor: 'pointer', background: i % 2 === 0 ? WHITE : '#FAFBFC' }}>
-                          <td style={{ padding: '8px 12px', fontWeight: 700, color: NAVY, whiteSpace: 'nowrap', fontSize: 11 }}>{req.requirement_id}</td>
-                          <td style={{ padding: '8px 12px', maxWidth: 340 }}>
-                            <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: TEXT }}>{req.original_question}</div>
-                          </td>
-                          <td style={{ padding: '8px 12px', color: MUTED, fontSize: 11, whiteSpace: 'nowrap' }}>{req.category}</td>
-                          <td style={{ padding: '8px 12px' }}>
-                            {req.owner ? <Badge label={req.owner} colour={ownerColour(req.owner)} /> : <span style={{ color: BORDER }}>—</span>}
-                          </td>
-                          <td style={{ padding: '8px 12px' }}>
-                            <span style={{ fontWeight: 600, fontSize: 11, color: confidenceColour(req.confidence).text }}>{req.confidence || '—'}</span>
-                          </td>
-                          <td style={{ padding: '8px 12px', textAlign: 'center' }}><YN value={req.vendor_validation_required} /></td>
-                          <td style={{ padding: '8px 12px', color: MUTED, fontSize: 11 }}>{req.status || 'Draft'}</td>
-                          <td style={{ padding: '8px 8px', textAlign: 'center', color: MUTED, fontSize: 9 }}>
-                            {mapExpanded === req.requirement_id ? '▲' : '▼'}
-                          </td>
-                        </tr>
-
-                        {mapExpanded === req.requirement_id && (
-                          <tr style={{ background: BLUE_LIGHT }}>
-                            <td colSpan={8} style={{ padding: '18px 22px' }}>
-                              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>
-                                <div>
-                                  <div style={{ fontSize: 10, fontWeight: 700, color: MUTED, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 5 }}>Question</div>
-                                  <div style={{ fontSize: 13, color: TEXT, marginBottom: 14, lineHeight: 1.5 }}>{req.original_question}</div>
-                                  {req.rr_capability_mapping && (
-                                    <div style={{ marginBottom: 12 }}>
-                                      <div style={{ fontSize: 10, fontWeight: 700, color: '#1D4ED8', marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.05em' }}>RR Capability</div>
-                                      <div style={{ fontSize: 12, color: TEXT, lineHeight: 1.5, padding: '8px 10px', background: '#EFF6FF', borderRadius: 5 }}>{req.rr_capability_mapping}</div>
-                                    </div>
-                                  )}
-                                  {req.logicgate_mapping && (
-                                    <div style={{ marginBottom: 12 }}>
-                                      <div style={{ fontSize: 10, fontWeight: 700, color: '#7C3AED', marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.05em' }}>LogicGate</div>
-                                      <div style={{ fontSize: 12, color: TEXT, lineHeight: 1.5, padding: '8px 10px', background: '#F5F3FF', borderRadius: 5 }}>{req.logicgate_mapping}</div>
-                                    </div>
-                                  )}
-                                  {req.panorays_mapping && (
-                                    <div style={{ marginBottom: 12 }}>
-                                      <div style={{ fontSize: 10, fontWeight: 700, color: '#BE185D', marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Panorays</div>
-                                      <div style={{ fontSize: 12, color: TEXT, lineHeight: 1.5, padding: '8px 10px', background: '#FDF2F8', borderRadius: 5 }}>{req.panorays_mapping}</div>
-                                    </div>
-                                  )}
-                                  {req.assumptions && (
-                                    <div style={{ fontSize: 11, color: AMBER }}><strong>Assumptions:</strong> {req.assumptions}</div>
-                                  )}
-                                  {req.notes && <div style={{ fontSize: 11, color: MUTED, marginTop: 6 }}><strong>Note:</strong> {req.notes}</div>}
-                                </div>
-                                <div>
-                                  <div style={{ marginBottom: 12 }}>
-                                    <div style={{ fontSize: 10, fontWeight: 700, color: NAVY, marginBottom: 5, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Owner</div>
-                                    <select value={req.owner || 'Unknown'} onChange={(e) => updateMappingRow(req.requirement_id, { owner: e.target.value })} onClick={(e) => e.stopPropagation()}
-                                      style={{ padding: '5px 10px', border: `1px solid ${BORDER}`, borderRadius: 5, fontSize: 12, background: WHITE }}>
-                                      {['RR', 'LogicGate', 'Panorays', 'Joint', 'Unknown'].map((o) => <option key={o}>{o}</option>)}
-                                    </select>
-                                  </div>
-                                  <div style={{ marginBottom: 12 }}>
-                                    <div style={{ fontSize: 10, fontWeight: 700, color: GREEN, marginBottom: 5, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Draft RR Response</div>
-                                    <textarea value={req.draft_rr_response || ''} onChange={(e) => updateMappingRow(req.requirement_id, { draft_rr_response: e.target.value })} onClick={(e) => e.stopPropagation()}
-                                      rows={4} placeholder="No RR-owned response drafted"
-                                      style={{ width: '100%', padding: '7px 10px', border: `1px solid ${BORDER}`, borderRadius: 5, fontSize: 12, fontFamily: 'inherit', resize: 'vertical', boxSizing: 'border-box', lineHeight: 1.5 }} />
-                                  </div>
-                                  {(req.vendor_validation_required || req.vendor_question_or_prompt) && (
-                                    <div style={{ marginBottom: 12 }}>
-                                      <div style={{ fontSize: 10, fontWeight: 700, color: '#7C3AED', marginBottom: 5, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Vendor Prompt</div>
-                                      <textarea value={req.vendor_question_or_prompt || ''} onChange={(e) => updateMappingRow(req.requirement_id, { vendor_question_or_prompt: e.target.value })} onClick={(e) => e.stopPropagation()}
-                                        rows={2}
-                                        style={{ width: '100%', padding: '7px 10px', border: `1px solid ${BORDER}`, borderRadius: 5, fontSize: 12, fontFamily: 'inherit', resize: 'vertical', boxSizing: 'border-box', lineHeight: 1.5 }} />
-                                    </div>
-                                  )}
-                                  <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                                    <select value={req.status || 'Draft'} onChange={(e) => updateMappingRow(req.requirement_id, { status: e.target.value })} onClick={(e) => e.stopPropagation()}
-                                      style={{ padding: '5px 8px', border: `1px solid ${BORDER}`, borderRadius: 5, fontSize: 12, background: WHITE }}>
-                                      {['Draft', 'In Review', 'Approved', 'Sent'].map((s) => <option key={s}>{s}</option>)}
-                                    </select>
-                                    <button onClick={(e) => { e.stopPropagation(); regenerateRow(req) }} disabled={regeneratingRow === req.requirement_id}
-                                      style={{ padding: '5px 12px', background: regeneratingRow === req.requirement_id ? '#CBD5E1' : NAVY, color: WHITE, border: 'none', borderRadius: 5, fontSize: 11, cursor: regeneratingRow === req.requirement_id ? 'not-allowed' : 'pointer', fontWeight: 600 }}>
-                                      {regeneratingRow === req.requirement_id ? '…' : '↻ Regen'}
-                                    </button>
-                                  </div>
-                                </div>
-                              </div>
-                            </td>
-                          </tr>
-                        )}
-                      </React.Fragment>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </Card>
 
             {/* Pack summary */}
             {mappingSummary && (
-              <Card style={{ marginBottom: 24 }}>
-                <div style={{ fontSize: 12, fontWeight: 700, color: NAVY, marginBottom: 14, textTransform: 'uppercase', letterSpacing: '0.04em' }}>Pack Summary</div>
+              <div style={{ background: WHITE, border: `1px solid ${BORDER}`, borderRadius: 8, padding: '20px 24px', marginBottom: 24 }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: NAVY, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 16 }}>Pack Summary</div>
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>
                   <div>
                     {Array.isArray(mappingSummary.gaps_and_risks) && mappingSummary.gaps_and_risks.length > 0 && (
-                      <div style={{ marginBottom: 14 }}>
-                        <div style={{ fontSize: 10, fontWeight: 700, color: MUTED, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 8 }}>Gaps & Risks</div>
+                      <SubSection title="Gaps & Risks" color={AMBER}>
                         {mappingSummary.gaps_and_risks.map((item, i) => (
-                          <div key={i} style={{ display: 'flex', gap: 6, alignItems: 'flex-start', marginBottom: 4, fontSize: 12, color: TEXT, lineHeight: 1.5 }}>
+                          <div key={i} style={{ display: 'flex', gap: 6, alignItems: 'flex-start', marginBottom: 4, fontSize: 12, lineHeight: 1.5 }}>
                             <span style={{ color: AMBER, flexShrink: 0 }}>⚠</span> {item}
                           </div>
                         ))}
-                      </div>
+                      </SubSection>
                     )}
                     {Array.isArray(mappingSummary.assumptions) && mappingSummary.assumptions.length > 0 && (
-                      <div>
-                        <div style={{ fontSize: 10, fontWeight: 700, color: MUTED, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 8 }}>Assumptions</div>
-                        {mappingSummary.assumptions.map((item, i) => (
-                          <div key={i} style={{ fontSize: 12, color: TEXT, lineHeight: 1.5, marginBottom: 3 }}>• {item}</div>
-                        ))}
-                      </div>
+                      <SubSection title="Assumptions">
+                        <BulletList items={mappingSummary.assumptions} />
+                      </SubSection>
                     )}
                   </div>
                   <div>
                     {Array.isArray(mappingSummary.recommended_next_actions) && mappingSummary.recommended_next_actions.length > 0 && (
-                      <div>
-                        <div style={{ fontSize: 10, fontWeight: 700, color: MUTED, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 8 }}>Next Actions</div>
+                      <SubSection title="Next Actions" color={GREEN}>
                         {mappingSummary.recommended_next_actions.map((item, i) => (
-                          <div key={i} style={{ display: 'flex', gap: 7, alignItems: 'flex-start', marginBottom: 4, fontSize: 12, color: TEXT, lineHeight: 1.5 }}>
+                          <div key={i} style={{ display: 'flex', gap: 7, alignItems: 'flex-start', marginBottom: 4, fontSize: 12, lineHeight: 1.5 }}>
                             <span style={{ color: NAVY, fontWeight: 700, flexShrink: 0 }}>{i + 1}.</span> {item}
                           </div>
                         ))}
-                      </div>
+                      </SubSection>
+                    )}
+                    {Array.isArray(mappingSummary.commercial_delivery_considerations) && mappingSummary.commercial_delivery_considerations.length > 0 && (
+                      <SubSection title="Commercial & Delivery">
+                        <BulletList items={mappingSummary.commercial_delivery_considerations} />
+                      </SubSection>
                     )}
                   </div>
                 </div>
-              </Card>
+              </div>
             )}
           </div>
         )}
