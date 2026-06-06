@@ -1204,6 +1204,366 @@ function addDetailedSectionsFromText(children, resultText, skipSet) {
   })
 }
 
+// ── Proposal DOCX export ──────────────────────────────────────────────────
+// Builds a consulting-style proposal document directly from proposalSections
+// + proposalPricing state. Each section gets a section-specific renderer
+// (benefit cards, phase timeline bars, commercial ledger, standard tables).
+
+function proposalSectionHeader(num, title) {
+  return new Paragraph({
+    spacing: { before: 300, after: 120 },
+    shading: { type: ShadingType.CLEAR, fill: '0B1F3A', color: 'auto' },
+    children: [
+      new TextRun({ text: `  ${num}.  `, bold: true, color: 'FFFFFF', font: 'Arial', size: 24 }),
+      new TextRun({ text: title, bold: true, color: 'FFFFFF', font: 'Arial', size: 24 }),
+    ],
+  })
+}
+
+function proposalPhaseBar(text) {
+  return new Paragraph({
+    spacing: { before: 160, after: 80 },
+    shading: { type: ShadingType.CLEAR, fill: '1D4ED8', color: 'auto' },
+    children: [new TextRun({ text: `  ${text}`, bold: true, color: 'FFFFFF', font: 'Arial', size: 22 })],
+  })
+}
+
+function proposalBodyPara(text) {
+  return new Paragraph({
+    spacing: { after: 80, line: 280 },
+    children: parseInlineBoldToRuns(text),
+  })
+}
+
+function proposalBullet(text) {
+  return new Paragraph({
+    numbering: { reference: 'rr-bullets', level: 0 },
+    spacing: { before: 40, after: 40, line: 276 },
+    children: parseInlineBoldToRuns(text.replace(/^[-*]\s+/, '')),
+  })
+}
+
+// Build benefit rows (markdown table) as a 2-column card grid.
+function buildBenefitCardsTable(rowLines) {
+  const splitRow = (line) => line.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map(c => c.trim())
+  const isSep = (cells) => cells.every(c => /^:?-+:?$/.test(c))
+  const allRows = rowLines.map(splitRow).filter(r => !isSep(r))
+  const body = allRows[0]?.[0]?.toLowerCase() === 'benefit' ? allRows.slice(1) : allRows
+  if (!body.length) return null
+
+  const CARD_WIDTH = 4356
+  const cardBorder = (side) => ({
+    top: side === 'top' ? { style: BorderStyle.SINGLE, size: 10, color: '3333A3' }
+                        : { style: BorderStyle.SINGLE, size: 2, color: 'D1D5DB' },
+    bottom: { style: BorderStyle.SINGLE, size: 2, color: 'D1D5DB' },
+    left: { style: BorderStyle.SINGLE, size: 2, color: 'D1D5DB' },
+    right: { style: BorderStyle.SINGLE, size: 2, color: 'D1D5DB' },
+  })
+
+  const makeCard = (row) => {
+    const title = (row?.[0] || '').replace(/\*\*/g, '').trim()
+    const desc = (row?.[1] || '').trim()
+    return new TableCell({
+      shading: { type: ShadingType.CLEAR, fill: 'EFF6FF', color: 'auto' },
+      borders: cardBorder('top'),
+      width: { size: CARD_WIDTH, type: WidthType.DXA },
+      margins: { top: 120, bottom: 120, left: 160, right: 160 },
+      children: [
+        new Paragraph({
+          spacing: { before: 0, after: 60 },
+          children: [new TextRun({ text: title, font: 'Arial', size: 20, bold: true, color: '0B1F3A' })],
+        }),
+        new Paragraph({
+          spacing: { before: 0, after: 0, line: 268 },
+          children: parseInlineBoldToRuns(desc, { size: 18, color: '334155' }),
+        }),
+      ],
+    })
+  }
+
+  const noBorder = { style: BorderStyle.NONE }
+  const blankCell = () => new TableCell({
+    borders: { top: noBorder, bottom: noBorder, left: noBorder, right: noBorder },
+    width: { size: CARD_WIDTH, type: WidthType.DXA },
+    children: [new Paragraph({ children: [new TextRun({ text: '' })] })],
+  })
+
+  const tableRows = []
+  for (let i = 0; i < body.length; i += 2) {
+    tableRows.push(new TableRow({
+      children: [makeCard(body[i]), body[i + 1] ? makeCard(body[i + 1]) : blankCell()],
+    }))
+  }
+
+  return new Table({
+    width: { size: 9072, type: WidthType.DXA },
+    columnWidths: [CARD_WIDTH, CARD_WIDTH],
+    rows: tableRows,
+    borders: { top: noBorder, bottom: noBorder, left: noBorder, right: noBorder, insideHorizontal: noBorder, insideVertical: noBorder },
+  })
+}
+
+// Build commercial section as a two-column ledger (no header row).
+function buildCommercialLedger(rowLines) {
+  const splitRow = (line) => line.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map(c => c.trim())
+  const isSep = (cells) => cells.every(c => /^:?-+:?$/.test(c))
+  const allRows = rowLines.map(splitRow).filter(r => !isSep(r))
+  const body = allRows[0]?.[0]?.toLowerCase() === 'item' ? allRows.slice(1) : allRows
+  if (!body.length) return null
+
+  const rowBorder = { style: BorderStyle.SINGLE, size: 4, color: 'E2E8F0' }
+  const noBorder = { style: BorderStyle.NONE }
+  const borders = { top: rowBorder, bottom: rowBorder, left: noBorder, right: noBorder }
+
+  const rows = body.map(([label = '', value = ''], ri) => new TableRow({
+    children: [
+      new TableCell({
+        shading: ri % 2 === 0 ? { type: ShadingType.CLEAR, fill: 'EFF6FF', color: 'auto' } : undefined,
+        borders,
+        width: { size: 4200, type: WidthType.DXA },
+        margins: { top: 100, bottom: 100, left: 160, right: 120 },
+        children: [new Paragraph({
+          children: [new TextRun({ text: label.replace(/\*\*/g, ''), font: 'Arial', size: 20, bold: true, color: '0B1F3A' })],
+        })],
+      }),
+      new TableCell({
+        shading: ri % 2 === 0 ? { type: ShadingType.CLEAR, fill: 'EFF6FF', color: 'auto' } : undefined,
+        borders,
+        width: { size: 4872, type: WidthType.DXA },
+        margins: { top: 100, bottom: 100, left: 160, right: 140 },
+        children: [new Paragraph({
+          children: parseInlineBoldToRuns(value, { size: 20, bold: true, color: '1F2937' }),
+        })],
+      }),
+    ],
+  }))
+
+  return new Table({
+    width: { size: 9072, type: WidthType.DXA },
+    columnWidths: [4200, 4872],
+    rows,
+    borders: { top: noBorder, bottom: noBorder, left: noBorder, right: noBorder, insideHorizontal: noBorder, insideVertical: noBorder },
+  })
+}
+
+// Build commercial ledger from proposalPricing state when section not generated.
+function buildCommercialFromPricing(pricing) {
+  if (!pricing) return []
+  const noBorder = { style: BorderStyle.NONE }
+  const rowBorder = { style: BorderStyle.SINGLE, size: 4, color: 'E2E8F0' }
+  const borders = { top: rowBorder, bottom: rowBorder, left: noBorder, right: noBorder }
+  const rows = [
+    pricing.licenceAnnual ? ['Platform Licence (Annual)', pricing.licenceAnnual] : null,
+    pricing.implementationTotal ? ['Implementation Investment', pricing.implementationTotal] : null,
+    pricing.term ? ['Contract Term', pricing.term] : null,
+    pricing.billingFrequency ? ['Billing Frequency', pricing.billingFrequency] : null,
+  ].filter(Boolean)
+  if (!rows.length) return []
+  const tableRows = rows.map(([label, value], ri) => new TableRow({
+    children: [
+      new TableCell({
+        shading: ri % 2 === 0 ? { type: ShadingType.CLEAR, fill: 'EFF6FF', color: 'auto' } : undefined,
+        borders,
+        width: { size: 4200, type: WidthType.DXA },
+        margins: { top: 100, bottom: 100, left: 160, right: 120 },
+        children: [new Paragraph({ children: [new TextRun({ text: label, font: 'Arial', size: 20, bold: true, color: '0B1F3A' })] })],
+      }),
+      new TableCell({
+        shading: ri % 2 === 0 ? { type: ShadingType.CLEAR, fill: 'EFF6FF', color: 'auto' } : undefined,
+        borders,
+        width: { size: 4872, type: WidthType.DXA },
+        margins: { top: 100, bottom: 100, left: 160, right: 140 },
+        children: [new Paragraph({ children: [new TextRun({ text: value, font: 'Arial', size: 20, bold: true, color: '1F2937' })] })],
+      }),
+    ],
+  }))
+  return [new Table({
+    width: { size: 9072, type: WidthType.DXA },
+    columnWidths: [4200, 4872],
+    rows: tableRows,
+    borders: { top: noBorder, bottom: noBorder, left: noBorder, right: noBorder, insideHorizontal: noBorder, insideVertical: noBorder },
+  })]
+}
+
+// Parse a section's markdown content into docx elements.
+// Handles: phase bars (**Phase N — ...**), markdown tables, bullets, paragraphs.
+function parseProposalContent(content, sectionId) {
+  const lines = (content || '').split('\n')
+  const elements = []
+  let i = 0
+  while (i < lines.length) {
+    const line = lines[i]
+    const trimmed = line.trim()
+    if (!trimmed) { i++; continue }
+
+    // Phase heading — bold-only line in delivery_scope
+    if (/^\*\*[^*]+\*\*$/.test(trimmed) && sectionId === 'delivery_scope') {
+      elements.push(proposalPhaseBar(trimmed.replace(/\*\*/g, '')))
+      i++; continue
+    }
+
+    // Table block
+    if (trimmed.startsWith('|')) {
+      const tableLines = []
+      while (i < lines.length && lines[i].trim().startsWith('|')) { tableLines.push(lines[i]); i++ }
+      if (sectionId === 'value_benefits') {
+        const t = buildBenefitCardsTable(tableLines)
+        if (t) elements.push(t)
+      } else if (sectionId === 'commercial') {
+        const t = buildCommercialLedger(tableLines)
+        if (t) elements.push(t)
+      } else {
+        const t = buildRichBriefingTable(tableLines)
+        if (t) {
+          elements.push(t)
+          elements.push(new Paragraph({ spacing: { after: 120 }, children: [new TextRun({ text: '' })] }))
+        }
+      }
+      continue
+    }
+
+    // Bullets
+    if (/^[-*]\s+/.test(trimmed)) {
+      while (i < lines.length && /^[-*]\s+/.test(lines[i].trim())) {
+        elements.push(proposalBullet(lines[i].trim()))
+        i++
+      }
+      continue
+    }
+
+    // Bold-only line (subheading in non-delivery sections)
+    if (/^\*\*[^*]+\*\*$/.test(trimmed)) {
+      elements.push(new Paragraph({
+        spacing: { before: 120, after: 60 },
+        children: [new TextRun({ text: trimmed.replace(/\*\*/g, ''), font: 'Arial', size: 20, bold: true, color: RR_NAVY })],
+      }))
+      i++; continue
+    }
+
+    // Plain paragraph — join consecutive non-special lines
+    const paraLines = []
+    while (
+      i < lines.length && lines[i].trim() &&
+      !lines[i].trim().startsWith('|') &&
+      !/^[-*]\s+/.test(lines[i].trim()) &&
+      !/^\*\*[^*]+\*\*$/.test(lines[i].trim())
+    ) { paraLines.push(lines[i].trim()); i++ }
+    const text = paraLines.join(' ')
+    if (text) elements.push(proposalBodyPara(text))
+  }
+  return elements
+}
+
+// Top-level proposal DOCX builder. Accepts section content + pricing directly
+// so it can apply per-section visual treatment (cards, ledger, phase bars).
+async function exportProposalDocx(sections, pricing, company) {
+  const dateStr = new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'long', year: 'numeric' })
+  const safeCompany = (company || 'prospect').toString().trim().replace(/[^a-z0-9]/gi, '_').toLowerCase() || 'prospect'
+  const filename = `${safeCompany}_logicgate_proposal.docx`
+  const companyDisplay = (company || 'Prospect').toString().trim()
+
+  const children = []
+
+  // ── Cover page ─────────────────────────────────────────────────────────
+  children.push(
+    new Paragraph({ spacing: { before: 1400, after: 0 }, children: [new TextRun({ text: '' })] }),
+    new Paragraph({
+      spacing: { before: 0, after: 80 },
+      children: [new TextRun({ text: companyDisplay, font: 'Arial', size: 72, bold: true, color: '0B1F3A' })],
+    }),
+    new Paragraph({
+      spacing: { before: 0, after: 40 },
+      children: [new TextRun({ text: 'LogicGate Risk Cloud', font: 'Arial', size: 44, color: '3333A3' })],
+    }),
+    new Paragraph({
+      spacing: { before: 0, after: 0 },
+      children: [new TextRun({ text: 'Proposal', font: 'Arial', size: 44, bold: true, color: '0B1F3A' })],
+    }),
+    new Paragraph({
+      spacing: { before: 360, after: 60 },
+      border: { bottom: { color: '3333A3', style: BorderStyle.SINGLE, size: 8, space: 1 } },
+      children: [new TextRun({ text: '' })],
+    }),
+    new Paragraph({
+      spacing: { before: 60, after: 0 },
+      children: [new TextRun({ text: `Prepared by Risk Rising  ·  ${dateStr}  ·  Strictly Confidential`, font: 'Arial', size: 18, italics: true, color: '6B7280' })],
+    }),
+    new Paragraph({ children: [new PageBreak()] }),
+  )
+
+  // ── Section loop ────────────────────────────────────────────────────────
+  let sectionNum = 0
+  for (const s of PROPOSAL_SECTION_ORDER) {
+    const content = sections?.[s.id]?.content
+
+    // Commercial: always include — fall back to pricing inputs if not generated
+    if (s.id === 'commercial' && !content) {
+      const fallbackElements = buildCommercialFromPricing(pricing)
+      if (fallbackElements.length) {
+        sectionNum++
+        children.push(proposalSectionHeader(sectionNum, s.label))
+        children.push(...fallbackElements)
+        children.push(new Paragraph({
+          spacing: { before: 80, after: 0 },
+          children: [new TextRun({ text: 'All commercial figures are indicative and subject to final scope confirmation and contract execution.', font: 'Arial', size: 18, italics: true, color: '6B7280' })],
+        }))
+        children.push(spacerParagraph())
+      }
+      continue
+    }
+
+    if (!content) continue
+    sectionNum++
+    children.push(proposalSectionHeader(sectionNum, s.label))
+    children.push(...parseProposalContent(content, s.id))
+
+    // Commercial note beneath the commercial section
+    if (s.id === 'commercial') {
+      children.push(new Paragraph({
+        spacing: { before: 80, after: 0 },
+        children: [new TextRun({ text: 'All commercial figures are indicative and subject to final scope confirmation and contract execution.', font: 'Arial', size: 18, italics: true, color: '6B7280' })],
+      }))
+    }
+
+    children.push(spacerParagraph())
+  }
+
+  const doc = new Document({
+    creator: 'Risk Rising',
+    title: `${companyDisplay} — LogicGate Risk Cloud Proposal`,
+    description: 'Risk Rising proposal document',
+    styles: {
+      default: { document: { run: { font: 'Arial', size: 20, color: RR_TEXT } } },
+    },
+    numbering: {
+      config: [{
+        reference: 'rr-bullets',
+        levels: [{
+          level: 0,
+          format: LevelFormat.BULLET,
+          text: '\u2022',
+          alignment: AlignmentType.LEFT,
+          style: { paragraph: { indent: { left: 720, hanging: 360 } } },
+        }],
+      }],
+    },
+    sections: [{
+      properties: {
+        page: {
+          size: { width: 12240, height: 15840 },
+          margin: { top: 1700, bottom: 1700, left: 1584, right: 1584 },
+        },
+      },
+      headers: { default: buildRrHeader() },
+      footers: { default: buildRrFooter() },
+      children,
+    }],
+  })
+
+  const blob = await Packer.toBlob(doc)
+  saveAs(blob, filename)
+}
+
 // ── Rich briefing markdown → DOCX ──
 // Layout matches the Risk Rising document template: header with right-aligned
 // logo and navy bottom-border line, footer with company line and navy
@@ -5468,6 +5828,14 @@ export default function LogicGateModule() {
     }
   }
 
+  async function handleDownloadProposalDocx() {
+    try {
+      await exportProposalDocx(proposalSections, proposalPricing, postCompany || company)
+    } catch (err) {
+      console.error('Proposal DOCX export failed:', err)
+    }
+  }
+
   // Build a scorecard-shaped panel from the existing dashboard.
   // No Claude call. The score and statuses are taken verbatim from the dashboard
   // — refreshing this panel must NEVER produce a different score for the same data.
@@ -8083,15 +8451,15 @@ export default function LogicGateModule() {
               >
                 {proposalGeneratingAll ? 'Generating sections…' : Object.keys(proposalSections).length > 0 ? 'Regenerate All Sections' : 'Generate All Sections'}
               </button>
-              {/* Download Proposal — enabled once compiled */}
+              {/* Download Proposal — enabled once any section is generated */}
               <button
-                onClick={() => handleDownloadDocx(proposalDocument, postCompany || company, 'proposal')}
-                disabled={!proposalDocument}
+                onClick={handleDownloadProposalDocx}
+                disabled={Object.values(proposalSections).filter(s => s?.content).length === 0 || opportunityStatus === 'declined'}
                 style={{
                   padding: '10px 16px', borderRadius: 8, border: 'none',
-                  background: !proposalDocument ? '#94a3b8' : NAVY,
+                  background: Object.values(proposalSections).filter(s => s?.content).length === 0 || opportunityStatus === 'declined' ? '#94a3b8' : NAVY,
                   color: '#fff', fontWeight: 600, fontSize: 14, fontFamily: 'inherit',
-                  cursor: !proposalDocument ? 'not-allowed' : 'pointer',
+                  cursor: Object.values(proposalSections).filter(s => s?.content).length === 0 || opportunityStatus === 'declined' ? 'not-allowed' : 'pointer',
                 }}
               >
                 Download Proposal
