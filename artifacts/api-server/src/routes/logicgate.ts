@@ -710,54 +710,117 @@ Return ONLY valid JSON with no markdown fences:
 
 const PROPOSAL_SECTION_DEFS: Record<string, { instruction: string; maxTokens: number }> = {
   executive_summary: {
-    maxTokens: 500,
-    instruction: `Write the "Executive Summary" section for this company's LogicGate Risk Cloud proposal.
-3-4 concise paragraphs: who they are, their core challenge, why LogicGate + Risk Rising fits, expected outcome.
-Be specific — no generic filler. Tone: consultative, confident, outcome-focused.
-Return only the section text — no JSON wrapper, no code fences, no headings.`,
+    maxTokens: 380,
+    instruction: `Write the Executive Summary for this company's LogicGate Risk Cloud proposal.
+
+STRUCTURE — follow exactly:
+Paragraph 1 (max 45 words): who they are and their primary risk/compliance challenge.
+Paragraph 2 (max 45 words): why LogicGate Risk Cloud + Risk Rising is the right fit and the expected outcome.
+
+Then this markdown table (4 rows):
+| Dimension | Detail |
+|-----------|--------|
+| Sector | ... |
+| Key Regulatory Driver | ... |
+| Primary Use Case | ... |
+| Engagement Type | New Logo / Expansion |
+
+Return only section text — no JSON, no code fences, no headings.`,
   },
   current_challenges: {
-    maxTokens: 500,
-    instruction: `Write the "Current Challenges" section.
-4-6 bullet points describing the prospect's specific risk, compliance, or operational pain points surfaced in discovery/demo.
-Ground each in the provided evidence. Do not invent challenges not mentioned.
-Return only the section text — no JSON wrapper, no code fences, no headings.`,
+    maxTokens: 420,
+    instruction: `Write the Current Challenges section as a markdown table. No prose.
+
+| Challenge | Business Impact | Regulatory / Risk Driver |
+|-----------|----------------|--------------------------|
+| ... | ... | ... |
+
+5–7 rows. Ground every row in the provided deal context. Do not invent challenges.
+Return only the table — no JSON, no code fences, no headings.`,
   },
   recommended_approach: {
-    maxTokens: 600,
-    instruction: `Write the "Recommended Approach" section.
-Explain why LogicGate Risk Cloud + Risk Rising is the right fit. Cover: relevant platform strengths, Risk Rising's delivery methodology, how it directly addresses their challenges.
-3-4 concise paragraphs. Tone: expert, evidence-based, not salesy.
-Return only the section text — no JSON wrapper, no code fences, no headings.`,
+    maxTokens: 450,
+    instruction: `Write the Recommended Approach section. Follow this structure exactly:
+
+One short paragraph (max 50 words) on Risk Rising's engagement model and why it fits this client.
+
+Then a markdown table:
+| LogicGate Capability | How It Addresses Their Challenge |
+|---------------------|----------------------------------|
+| ... | ... |
+
+4–6 rows. Be specific — no generic platform claims.
+Return only section text — no JSON, no code fences, no headings.`,
   },
   delivery_scope: {
-    maxTokens: 700,
-    instruction: `Write the "Delivery Scope" section.
-Structure: Phase 1 apps (months 1-6), Phase 2 apps (months 7-18), brief timeline summary.
-Use the proposed scope from the solution breakdown. List each app with a one-line rationale.
-Return only the section text — no JSON wrapper, no code fences, no headings.`,
+    maxTokens: 550,
+    instruction: `Write the Delivery Scope section. Use this exact structure:
+
+**Phase 1 — Foundation (Months 1–6)**
+| App / Workstream | Rationale |
+|-----------------|-----------|
+| ... | one-line rationale |
+
+**Phase 2 — Expand (Months 7–18)**
+| App / Workstream | Rationale |
+|-----------------|-----------|
+| ... | one-line rationale |
+
+Close with one sentence on governance and review cadence.
+Return only section text — no JSON, no code fences, no headings.`,
   },
   value_benefits: {
-    maxTokens: 600,
-    instruction: `Write the "Value & Benefits" section.
-Cover: expected business outcomes (risk reduction, audit efficiency, compliance posture), operational improvements.
-Only cite figures that appear in the provided context — do not invent ROI numbers.
-3-4 paragraphs or a structured bullet list. Tone: outcome-focused, grounded.
-Return only the section text — no JSON wrapper, no code fences, no headings.`,
+    maxTokens: 420,
+    instruction: `Write the Value & Benefits section as a markdown table only. No prose paragraphs.
+
+| Benefit | Expected Outcome |
+|---------|-----------------|
+| **[Benefit title]** | One sentence measurable outcome. |
+
+6 rows. Use bold for benefit titles. Only cite figures present in the provided context — never invent ROI numbers.
+Return only the table — no JSON, no code fences, no headings.`,
+  },
+  commercial: {
+    maxTokens: 380,
+    instruction: `Write the Commercial Summary section as a markdown table. No prose.
+
+| Item | Detail |
+|------|--------|
+| Platform Licence (Annual) | £X,XXX per year |
+| Implementation Investment | £X,XXX (one-off) |
+| Phase 1 Apps in Scope | X apps |
+| Phase 2 Apps in Scope | X apps |
+| Contract Term | X years |
+| Billing Frequency | Quarterly / Annual in Advance |
+| Estimated Go-Live | Q[X] [Year] |
+
+Use figures from the provided pricing context. Write "TBC" if a figure is unavailable.
+Add one sentence beneath the table on key pricing assumptions.
+Return only section text — no JSON, no code fences, no headings.`,
   },
   assumptions_dependencies: {
-    maxTokens: 500,
-    instruction: `Write the "Assumptions & Dependencies" section.
-List 5-8 specific assumptions: data availability, stakeholder access, licence model, integration requirements.
-Also note client-side dependencies. Be specific and realistic for this deal.
-Return only the section text — no JSON wrapper, no code fences, no headings.`,
+    maxTokens: 420,
+    instruction: `Write the Assumptions & Dependencies section as a markdown table. No prose.
+
+| Assumption | Owner | Risk if Not Met |
+|-----------|-------|----------------|
+| ... | Risk Rising / Client | ... |
+
+6–8 rows covering: data access, stakeholder availability, integration requirements, licence model, regulatory timeline, client IT dependencies.
+Return only the table — no JSON, no code fences, no headings.`,
   },
   next_steps: {
-    maxTokens: 300,
-    instruction: `Write the "Next Steps" section.
-3 clear action items. For each: owner (Risk Rising or client), action, suggested timeframe.
-Tone: direct, professional, momentum-building.
-Return only the section text — no JSON wrapper, no code fences, no headings.`,
+    maxTokens: 280,
+    instruction: `Write the Next Steps section as a markdown table. No prose.
+
+| # | Action | Owner | Timeframe |
+|---|--------|-------|-----------|
+| 1 | ... | Risk Rising | Within 5 days |
+| 2 | ... | Client | Within 1 week |
+| 3 | ... | Both | Within 2 weeks |
+
+3 rows only. Actions must be concrete and momentum-building.
+Return only the table — no JSON, no code fences, no headings.`,
   },
 };
 

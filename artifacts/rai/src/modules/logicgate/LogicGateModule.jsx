@@ -3670,9 +3670,189 @@ const PROPOSAL_SECTION_ORDER = [
   { id: 'recommended_approach', label: 'Recommended Approach' },
   { id: 'delivery_scope', label: 'Delivery Scope' },
   { id: 'value_benefits', label: 'Value & Benefits' },
+  { id: 'commercial', label: 'Commercial Summary' },
   { id: 'assumptions_dependencies', label: 'Assumptions & Dependencies' },
   { id: 'next_steps', label: 'Next Steps' },
 ]
+
+function inlineMd(text) {
+  const parts = String(text).split(/\*\*([^*]+)\*\*/)
+  if (parts.length === 1) return text
+  return parts.map((p, i) => i % 2 === 1 ? <strong key={i}>{p}</strong> : p)
+}
+
+function parseMarkdownTable(lines) {
+  const rows = []
+  for (const line of lines) {
+    if (/^\|[\s\-:|]+\|$/.test(line.trim())) continue
+    const cols = line.trim().split('|').filter((_, i, a) => i > 0 && i < a.length - 1).map(c => c.trim())
+    if (cols.length) rows.push(cols)
+  }
+  return rows
+}
+
+function ProposalSectionContent({ sectionId, content }) {
+  if (!content) return null
+  const lines = content.split('\n')
+  const blocks = []
+  let tableLines = []
+  let inTable = false
+
+  for (const line of lines) {
+    const trimmed = line.trim()
+    const isTableRow = /^\|.+\|$/.test(trimmed)
+    if (isTableRow) {
+      inTable = true
+      tableLines.push(trimmed)
+    } else {
+      if (inTable) {
+        blocks.push({ type: 'table', lines: tableLines })
+        tableLines = []
+        inTable = false
+      }
+      if (!trimmed) continue
+      if (/^\*\*.*\*\*$/.test(trimmed)) {
+        blocks.push({ type: 'phase-heading', text: trimmed.replace(/\*\*/g, '') })
+      } else if (/^[-*] /.test(trimmed)) {
+        blocks.push({ type: 'bullet', text: trimmed.slice(2) })
+      } else {
+        blocks.push({ type: 'para', text: trimmed })
+      }
+    }
+  }
+  if (inTable && tableLines.length) blocks.push({ type: 'table', lines: tableLines })
+
+  const NAVY_DARK = '#1e3a5f'
+  const BORDER_C = '#e2e8f0'
+
+  return (
+    <div style={{ fontSize: 12, lineHeight: 1.5 }}>
+      {blocks.map((block, i) => {
+        if (block.type === 'table') {
+          const rows = parseMarkdownTable(block.lines)
+          if (!rows.length) return null
+          const [header, ...body] = rows
+
+          if (sectionId === 'value_benefits') {
+            return (
+              <div key={i} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginTop: 6 }}>
+                {body.map((row, ri) => (
+                  <div key={ri} style={{
+                    background: '#eff6ff', borderLeft: `3px solid ${NAVY_DARK}`,
+                    borderRadius: 6, padding: '8px 10px',
+                  }}>
+                    <div style={{ fontSize: 11, fontWeight: 700, color: NAVY_DARK, marginBottom: 3 }}>
+                      {inlineMd(row[0] || '')}
+                    </div>
+                    <div style={{ fontSize: 11, color: '#334155', lineHeight: 1.4 }}>{row[1] || ''}</div>
+                  </div>
+                ))}
+              </div>
+            )
+          }
+
+          if (sectionId === 'delivery_scope') {
+            return (
+              <table key={i} style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11, marginTop: 4 }}>
+                <thead>
+                  <tr>
+                    {header.map((h, hi) => (
+                      <th key={hi} style={{ padding: '5px 8px', background: '#334155', color: '#fff', textAlign: 'left', fontSize: 10, fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase' }}>
+                        {h}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {body.map((row, ri) => (
+                    <tr key={ri} style={{ background: ri % 2 === 0 ? '#f8fafc' : '#fff' }}>
+                      {row.map((cell, ci) => (
+                        <td key={ci} style={{ padding: '5px 8px', borderBottom: `1px solid ${BORDER_C}`, fontSize: 11, color: '#334155', verticalAlign: 'top', fontWeight: ci === 0 ? 600 : 400 }}>
+                          {inlineMd(cell)}
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )
+          }
+
+          if (sectionId === 'commercial') {
+            return (
+              <table key={i} style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11, marginTop: 4 }}>
+                <tbody>
+                  {body.map((row, ri) => (
+                    <tr key={ri} style={{ background: ri % 2 === 0 ? '#f0f9ff' : '#fff' }}>
+                      <td style={{ padding: '6px 10px', borderBottom: `1px solid ${BORDER_C}`, fontSize: 11, fontWeight: 600, color: NAVY_DARK, width: '45%' }}>
+                        {inlineMd(row[0] || '')}
+                      </td>
+                      <td style={{ padding: '6px 10px', borderBottom: `1px solid ${BORDER_C}`, fontSize: 12, color: '#1e293b', fontWeight: 700 }}>
+                        {inlineMd(row[1] || '')}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )
+          }
+
+          return (
+            <table key={i} style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11, marginTop: 6 }}>
+              <thead>
+                <tr>
+                  {header.map((h, hi) => (
+                    <th key={hi} style={{ padding: '5px 8px', background: NAVY_DARK, color: '#fff', textAlign: 'left', fontSize: 10, fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase' }}>
+                      {h}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {body.map((row, ri) => (
+                  <tr key={ri} style={{ background: ri % 2 === 0 ? '#f8fafc' : '#fff' }}>
+                    {row.map((cell, ci) => (
+                      <td key={ci} style={{ padding: '5px 8px', borderBottom: `1px solid ${BORDER_C}`, fontSize: 11, color: '#334155', verticalAlign: 'top' }}>
+                        {inlineMd(cell)}
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )
+        }
+
+        if (block.type === 'phase-heading') {
+          return (
+            <div key={i} style={{
+              marginTop: i === 0 ? 4 : 12, marginBottom: 4,
+              padding: '5px 10px', background: '#1e3a5f', borderRadius: 5,
+              fontSize: 11, fontWeight: 700, color: '#fff', letterSpacing: '0.02em',
+            }}>
+              {block.text}
+            </div>
+          )
+        }
+
+        if (block.type === 'bullet') {
+          return (
+            <div key={i} style={{ display: 'flex', gap: 6, marginBottom: 3, paddingLeft: 4 }}>
+              <span style={{ color: NAVY_DARK, fontWeight: 700, flexShrink: 0, fontSize: 11 }}>•</span>
+              <span style={{ fontSize: 11, color: '#334155', lineHeight: 1.5 }}>{inlineMd(block.text)}</span>
+            </div>
+          )
+        }
+
+        return (
+          <p key={i} style={{ fontSize: 11, color: '#334155', lineHeight: 1.6, margin: '0 0 6px 0' }}>
+            {inlineMd(block.text)}
+          </p>
+        )
+      })}
+    </div>
+  )
+}
 
 export default function LogicGateModule() {
   const fileRef = useRef(null)
@@ -8027,13 +8207,9 @@ export default function LogicGateModule() {
                         {hasContent && (
                           <div style={{
                             background: '#f8fafc', border: `1px solid ${BORDER}`, borderRadius: 6,
-                            padding: '10px 12px', maxHeight: 200, overflowY: 'auto', marginLeft: 32,
+                            padding: '10px 12px', maxHeight: 320, overflowY: 'auto', marginLeft: 32,
                           }}>
-                            <pre style={{
-                              margin: 0, fontSize: 11, lineHeight: 1.6, color: '#334155',
-                              whiteSpace: 'pre-wrap', wordBreak: 'break-word',
-                              fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
-                            }}>{sec.content}</pre>
+                            <ProposalSectionContent sectionId={s.id} content={sec.content} />
                           </div>
                         )}
                       </div>
