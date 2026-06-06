@@ -8,8 +8,10 @@ import { createJob, getJob, updateJob, updateProgress, appendRequirements, appen
 import { parseExcelForRequirements, batchRows, chunkText, type ParsedRow } from "../lib/xlsxParser";
 import type { Logger } from "pino";
 
-const MAX_CHARS_PER_CHUNK = 18_000;   // hard ceiling per Claude call
-const ROWS_PER_BATCH      = 30;       // Excel rows per Claude call
+const MAX_CHARS_PER_CHUNK  = 18_000;
+const ROWS_PER_BATCH       = 30;
+const MAX_UNDERSTANDING_CHARS = 60_000;
+const MAPPING_BATCH_SIZE   = 25;
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -18,7 +20,8 @@ const upload = multer({
 
 const router = Router();
 
-// ── Shared prompts ────────────────────────────────────────────────────────────
+// ── Shared context ────────────────────────────────────────────────────────────
+
 const RR_CONTEXT = `Risk Rising is a specialist GRC implementation and advisory consultancy partnering with LogicGate (Risk Cloud) and Panorays (third-party cyber / supply chain risk). Risk Rising owns all implementation, configuration, project delivery, training, UAT, hypercare, support, managed service and commercial aspects. Software vendors own functional platform capability, technical architecture, security, hosting, product roadmap and platform SLAs.
 
 Risk Rising delivery capabilities: GRC programme design and advisory; LogicGate Risk Cloud implementation and configuration; Panorays implementation; agile and waterfall project delivery; stakeholder workshops; app configuration and workflow design; system integration and data migration support; user training and train-the-trainer; UAT support and go-live hypercare; post-go-live managed service and ongoing optimisation; commercial negotiation support.
@@ -33,92 +36,183 @@ const OWNERSHIP_GUIDE = `Ownership categories:
 - Unknown: ownership unclear — flag for human review, never guess silently.`;
 
 const CATEGORIES = [
-  "Functional capability","Technical architecture","Security","Compliance",
-  "Data / integrations","Reporting / dashboards","Workflow / configuration",
-  "Implementation approach","Project delivery","Training","UAT / testing",
-  "Hypercare","Support","Managed service","Commercials","Legal / contractual",
-  "Case studies / references","Company information","Other / unknown",
+  "Functional capability", "Technical architecture", "Security", "Compliance",
+  "Data / integrations", "Reporting / dashboards", "Workflow / configuration",
+  "Implementation approach", "Project delivery", "Training", "UAT / testing",
+  "Hypercare", "Support", "Managed service", "Commercials", "Legal / contractual",
+  "Case studies / references", "Company information", "Other / unknown",
 ];
 
-// ── Claude helpers ────────────────────────────────────────────────────────────
+const DOC_TYPES = [
+  "Requirements Matrix",
+  "RFP Overview",
+  "Scope Document",
+  "Evaluation Criteria",
+  "Procurement Instructions",
+  "Commercial Requirements",
+  "Security Requirements",
+  "Supporting Material",
+] as const;
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
 
 function padId(n: number): string {
   return `REQ-${String(n).padStart(3, "0")}`;
 }
 
-/**
- * Extract requirements from a prose text chunk.
- * Returns an empty array on any parse failure so the job continues.
- */
-async function claudeExtractFromTextChunk(
-  text: string,
-  docName: string,
-  vendorContext: string,
-  company: string,
-  startIndex: number,
+// ── Stage 1: Classify documents ───────────────────────────────────────────────
+
+async function claudeClassifyDocuments(
+  docs: ReturnType<typeof getDocs>,
   log: Logger
-): Promise<Record<string, unknown>[]> {
-  const system = `You are an expert GRC procurement analyst. Extract every identifiable question or requirement from the following document text chunk.
-${RR_CONTEXT}
+): Promise<Record<string, string>[]> {
+  const docList = docs.map((d) => ({
+    id: d.id,
+    name: d.name,
+    fileType: d.fileType,
+    preview: d.text
+      ? d.text.slice(0, 500)
+      : `[Excel spreadsheet: ${(d.structuredRows ?? []).length} rows]`,
+  }));
+
+  const system = `Classify each document uploaded to an RFP/RFI response tool.
+
+Document types:
+${DOC_TYPES.map((t) => `- ${t}`).join("\n")}
 
 Rules:
-- Extract EVERY distinct question or requirement, even brief ones.
-- Do not merge multiple requirements into one.
-- Ignore table of contents, headers, page numbers, footers.
-- If the chunk contains no requirements, return an empty array.
+- Excel spreadsheets with requirement rows → always "Requirements Matrix".
+- PDFs/Word with RFP background, executive overview, context → "RFP Overview".
+- Documents defining project scope, deliverables, coverage → "Scope Document".
+- Documents with scoring methodology, evaluation rubric, award criteria → "Evaluation Criteria".
+- Bidder instructions, submission requirements, clarification process → "Procurement Instructions".
+- Pricing structures, contract terms, commercial model → "Commercial Requirements".
+- Security standards, data handling, certifications required → "Security Requirements".
+- Anything else → "Supporting Material".
 
 Output ONLY valid JSON — no prose, no code fences:
-{
-  "requirements": [
-    {
-      "requirement_id": "REQ-NNN",
-      "source_document": "<filename>",
-      "original_question": "<verbatim or closely paraphrased>",
-      "category": "<category from list>",
-      "mandatory_optional": "<Mandatory|Optional|Unknown>"
-    }
-  ]
-}
-Categories: ${CATEGORIES.join(", ")}.`;
+{ "classifications": [ { "id": "<id>", "name": "<name>", "docType": "<type>" } ] }`;
 
-  const user = `Vendor context: ${vendorContext}\nCompany: ${company}\nDocument: ${docName}\n\n${text}`;
+  const user = `Documents to classify:\n${JSON.stringify(docList, null, 2)}`;
 
   try {
-    const result = await callClaudeJSON<{ requirements: Record<string, unknown>[] }>(
-      system, user, { maxTokens: 4000 }
+    const result = await callClaudeJSON<{ classifications: Record<string, string>[] }>(
+      system, user, { maxTokens: 1000 }
     );
-    const reqs = Array.isArray(result?.requirements) ? result.requirements : [];
-    return reqs.map((r, i) => ({
-      ...r,
-      requirement_id: padId(startIndex + i + 1),
-      source_document: docName,
-    }));
+    return Array.isArray(result?.classifications) ? result.classifications : [];
   } catch (err) {
-    log.warn({ err, docName }, "claudeExtractFromTextChunk failed — skipping chunk");
-    return [];
+    log.warn({ err }, "claudeClassifyDocuments failed — using defaults");
+    return docs.map((d) => ({
+      id: d.id,
+      name: d.name,
+      docType: d.fileType === "excel" ? "Requirements Matrix" : "RFP Overview",
+    }));
   }
 }
 
-/**
- * Enrich / classify a batch of pre-parsed Excel rows.
- * Rows already have requirement text + optional category/priority from spreadsheet.
- */
-async function claudeEnrichExcelBatch(
+// ── Stage 2: Extract RFP Understanding Model ──────────────────────────────────
+
+async function claudeExtractUnderstanding(
+  combinedText: string,
+  company: string,
+  vendorContext: string,
+  log: Logger
+): Promise<Record<string, unknown>> {
+  const system = `You are a senior GRC consultant at Risk Rising reading an RFP/RFI procurement pack.
+
+Extract a structured understanding of this procurement. Be specific — extract actual content from the document. Do not hallucinate or invent information not present.
+
+Output ONLY valid JSON — no prose, no code fences:
+{
+  "customer_name": "<string or null>",
+  "industry": "<string or null>",
+  "objectives": ["<business objective the procurement aims to achieve>"],
+  "current_challenges": ["<problem or pain point driving this procurement>"],
+  "desired_outcomes": ["<specific outcome they want to achieve>"],
+  "scope": "<scope of the contract or project — what is included and excluded>",
+  "success_criteria": ["<how they will measure success>"],
+  "evaluation_criteria": ["<how responses will be evaluated — include weightings if stated>"],
+  "mandatory_requirements": ["<non-negotiable requirements explicitly stated in the document>"],
+  "timeline": "<key dates, deadlines, or project timeline>",
+  "procurement_process": "<stages of the procurement process>",
+  "commercial_constraints": ["<commercial, budget or contractual constraints>"],
+  "key_themes": ["<overarching themes or priorities that should inform all responses>"]
+}
+
+If a field cannot be determined from the documents, set it to null (strings) or [] (arrays).`;
+
+  const user = `Company: ${company}\nVendor context: ${vendorContext}\n\nDocument content:\n${combinedText}`;
+
+  try {
+    const result = await callClaudeJSON<Record<string, unknown>>(system, user, { maxTokens: 3000 });
+    return result ?? {};
+  } catch (err) {
+    log.warn({ err }, "claudeExtractUnderstanding failed — returning empty model");
+    return {};
+  }
+}
+
+// ── Stage 3a: Enrich worklist from Excel rows ─────────────────────────────────
+
+async function claudeEnrichWorklist(
   rows: ParsedRow[],
   docName: string,
   vendorContext: string,
   company: string,
   startIndex: number,
+  understanding: Record<string, unknown> | null,
   log: Logger
 ): Promise<Record<string, unknown>[]> {
-  const system = `You are an expert GRC procurement analyst. Given these structured requirement rows extracted from a spreadsheet, produce normalized requirement objects.
-${RR_CONTEXT}
+  const understandingCtx = understanding
+    ? `\nRFP Context:
+- Customer objectives: ${JSON.stringify(understanding.objectives ?? [])}
+- Evaluation criteria: ${JSON.stringify(understanding.evaluation_criteria ?? [])}
+- Key themes: ${JSON.stringify(understanding.key_themes ?? [])}
+- Current challenges: ${JSON.stringify(understanding.current_challenges ?? [])}
+- Scope: ${understanding.scope ?? "Not specified"}`
+    : "";
 
-For each row:
-- Use the existing requirement text verbatim as original_question.
-- Use the provided category if present and sensible; otherwise infer from the list.
-- Use the provided priority to set mandatory_optional (Mandatory / Optional / Unknown).
-- Do NOT invent or hallucinate requirements not in the input rows.
+  const system = `You are a senior GRC consultant at Risk Rising triaging an RFP/RFI for the first time.
+
+Your goal is NOT to write responses. Your goal is to assess each requirement and help the team decide where to focus effort.
+
+Think like an experienced consultant reviewing an RFP: "Should we respond to this? Why does it matter? Who should own it? Is it even relevant to us?"
+
+${RR_CONTEXT}
+${OWNERSHIP_GUIDE}
+${understandingCtx}
+
+For each requirement row, produce an enriched worklist entry with these fields:
+- requirement_id: padded ID (REQ-NNN)
+- source_document: document filename
+- original_question: verbatim requirement text from the row
+- category: from the categories list
+- mandatory_optional: Mandatory | Optional | Unknown (use the row's priority field as a guide)
+- relevance: "Relevant" | "Not Relevant" | "Uncertain"
+  - Relevant: RR, LogicGate, or Panorays can meaningfully respond
+  - Not Relevant: administrative, legal boilerplate, or completely outside scope
+  - Uncertain: needs clarification before assessing
+- why_it_matters: one sentence explaining its significance to winning this bid (null if Not Relevant)
+- logicgate_mapping: what LogicGate Risk Cloud provides for this requirement (null if not applicable)
+- rr_mapping: what Risk Rising delivers for this requirement (null if not applicable)
+- recommended_owner: RR | LogicGate | Panorays | Joint | Not Relevant
+- recommended_response_type: 
+  - "Direct" — RR can respond without vendor input
+  - "Vendor Validation" — needs LogicGate or Panorays to confirm
+  - "Collaborative" — RR and vendor each contribute a part
+  - "Decline" — outside scope or not applicable
+- priority: High | Medium | Low
+  - High: mandatory or directly impacts evaluation score
+  - Medium: important but secondary to High items
+  - Low: optional, informational, or low-weight
+- linked_objectives: which customer objectives this requirement addresses (max 2, verbatim from the list above, empty array if none or no objectives known)
+- notes: brief additional context (null if none)
+
+Rules:
+- Use verbatim requirement text — do not paraphrase or summarise original_question.
+- Be selective with priority — not everything can be High.
+- Not Relevant items still need recommended_owner: "Not Relevant" and recommended_response_type: "Decline".
+- Never guess at platform capabilities — if uncertain, use "Vendor Validation" or "Uncertain".
 
 Output ONLY valid JSON — no prose, no code fences:
 {
@@ -126,9 +220,18 @@ Output ONLY valid JSON — no prose, no code fences:
     {
       "requirement_id": "REQ-NNN",
       "source_document": "<filename>",
-      "original_question": "<verbatim requirement text>",
-      "category": "<category from list>",
-      "mandatory_optional": "<Mandatory|Optional|Unknown>"
+      "original_question": "<verbatim text>",
+      "category": "<category>",
+      "mandatory_optional": "<Mandatory|Optional|Unknown>",
+      "relevance": "<Relevant|Not Relevant|Uncertain>",
+      "why_it_matters": "<one sentence or null>",
+      "logicgate_mapping": "<brief description or null>",
+      "rr_mapping": "<brief description or null>",
+      "recommended_owner": "<RR|LogicGate|Panorays|Joint|Not Relevant>",
+      "recommended_response_type": "<Direct|Vendor Validation|Collaborative|Decline>",
+      "priority": "<High|Medium|Low>",
+      "linked_objectives": [],
+      "notes": null
     }
   ]
 }
@@ -143,11 +246,11 @@ Categories: ${CATEGORIES.join(", ")}.`;
     priority: r.priority,
   }));
 
-  const user = `Vendor context: ${vendorContext}\nCompany: ${company}\nDocument: ${docName}\n\nRows:\n${JSON.stringify(rowsSummary, null, 2)}`;
+  const user = `Vendor context: ${vendorContext}\nCompany: ${company}\nDocument: ${docName}\n\nRows to assess:\n${JSON.stringify(rowsSummary, null, 2)}`;
 
   try {
     const result = await callClaudeJSON<{ requirements: Record<string, unknown>[] }>(
-      system, user, { maxTokens: 4000 }
+      system, user, { maxTokens: 8000 }
     );
     const reqs = Array.isArray(result?.requirements) ? result.requirements : [];
     return reqs.map((r, i) => ({
@@ -156,77 +259,197 @@ Categories: ${CATEGORIES.join(", ")}.`;
       source_document: docName,
     }));
   } catch (err) {
-    log.warn({ err, docName }, "claudeEnrichExcelBatch failed — generating fallback rows");
-    // Fallback: create plain requirement objects from rows without Claude enrichment
+    log.warn({ err, docName }, "claudeEnrichWorklist failed — generating fallback rows");
     return rows.map((r, i) => ({
       requirement_id: padId(startIndex + i + 1),
       source_document: docName,
       original_question: r.requirement,
       category: r.category ?? "Other / unknown",
       mandatory_optional: r.priority?.toLowerCase().includes("mand") ? "Mandatory" : "Unknown",
+      relevance: "Uncertain",
+      why_it_matters: null,
+      logicgate_mapping: null,
+      rr_mapping: null,
+      recommended_owner: "Unknown",
+      recommended_response_type: "Vendor Validation",
+      priority: "Medium",
+      linked_objectives: [],
+      notes: "Enrichment failed — please review manually.",
     }));
   }
 }
 
-/**
- * Generate the health/meta summary after all requirements are extracted.
- */
-async function claudeGenerateHealth(
-  requirements: Record<string, unknown>[],
+// ── Stage 3b: Extract worklist from text docs ─────────────────────────────────
+
+async function claudeExtractWorklistFromText(
+  text: string,
+  docName: string,
+  vendorContext: string,
+  company: string,
+  startIndex: number,
+  understanding: Record<string, unknown> | null,
+  log: Logger
+): Promise<Record<string, unknown>[]> {
+  const understandingCtx = understanding
+    ? `\nRFP Context:
+- Customer objectives: ${JSON.stringify(understanding.objectives ?? [])}
+- Evaluation criteria: ${JSON.stringify(understanding.evaluation_criteria ?? [])}
+- Key themes: ${JSON.stringify(understanding.key_themes ?? [])}`
+    : "";
+
+  const system = `You are a senior GRC consultant at Risk Rising triaging an RFP/RFI.
+
+Extract every identifiable question or requirement from this document text, then assess each one.
+${RR_CONTEXT}
+${OWNERSHIP_GUIDE}
+${understandingCtx}
+
+Rules for extraction:
+- Extract EVERY distinct question or requirement, even brief ones.
+- Do not merge multiple requirements into one.
+- Ignore table of contents, headers, page numbers, footers.
+- If the chunk contains no requirements, return an empty array.
+
+For each extracted requirement, produce a worklist entry:
+- requirement_id, source_document, original_question (verbatim), category, mandatory_optional
+- relevance: Relevant | Not Relevant | Uncertain
+- why_it_matters (one sentence or null)
+- logicgate_mapping (brief or null)
+- rr_mapping (brief or null)
+- recommended_owner: RR | LogicGate | Panorays | Joint | Not Relevant
+- recommended_response_type: Direct | Vendor Validation | Collaborative | Decline
+- priority: High | Medium | Low
+- linked_objectives: [] (from objectives list above)
+- notes: null
+
+Output ONLY valid JSON — no prose, no code fences:
+{
+  "requirements": [
+    {
+      "requirement_id": "REQ-NNN",
+      "source_document": "<filename>",
+      "original_question": "<verbatim or closely paraphrased>",
+      "category": "<category>",
+      "mandatory_optional": "<Mandatory|Optional|Unknown>",
+      "relevance": "<Relevant|Not Relevant|Uncertain>",
+      "why_it_matters": "<one sentence or null>",
+      "logicgate_mapping": "<brief or null>",
+      "rr_mapping": "<brief or null>",
+      "recommended_owner": "<RR|LogicGate|Panorays|Joint|Not Relevant>",
+      "recommended_response_type": "<Direct|Vendor Validation|Collaborative|Decline>",
+      "priority": "<High|Medium|Low>",
+      "linked_objectives": [],
+      "notes": null
+    }
+  ]
+}
+Categories: ${CATEGORIES.join(", ")}.`;
+
+  const user = `Vendor context: ${vendorContext}\nCompany: ${company}\nDocument: ${docName}\n\n${text}`;
+
+  try {
+    const result = await callClaudeJSON<{ requirements: Record<string, unknown>[] }>(
+      system, user, { maxTokens: 6000 }
+    );
+    const reqs = Array.isArray(result?.requirements) ? result.requirements : [];
+    return reqs.map((r, i) => ({
+      ...r,
+      requirement_id: padId(startIndex + i + 1),
+      source_document: docName,
+    }));
+  } catch (err) {
+    log.warn({ err, docName }, "claudeExtractWorklistFromText failed — skipping chunk");
+    return [];
+  }
+}
+
+// ── Stage 4: Generate assessment sections ─────────────────────────────────────
+
+async function claudeGenerateAssessmentSections(
+  understanding: Record<string, unknown>,
+  worklist: Record<string, unknown>[],
   company: string,
   vendorContext: string,
   log: Logger
 ): Promise<Record<string, unknown>> {
-  const system = `You are an expert GRC procurement analyst at Risk Rising. Based on the extracted requirements, produce a health/fit assessment.
+  const system = `You are a senior GRC consultant at Risk Rising producing a strategic opportunity assessment.
+
+This is NOT about writing responses. This is about helping the pursuit team decide where to focus effort.
+
 ${RR_CONTEXT}
+${OWNERSHIP_GUIDE}
 
-Output ONLY valid JSON — no prose, no code fences:
-{
-  "company": "<name or Unknown>",
-  "rfp_type": "<RFI|RFP|Security questionnaire|Implementation questionnaire|Procurement pack|Mixed>",
-  "response_deadline": null,
-  "total_requirements": <integer>,
-  "logicgate_fit": "<High|Medium|Low|Unknown>",
-  "panorays_fit": "<High|Medium|Low|Unknown>",
-  "rr_delivery_fit": "<High|Medium|Low|Unknown>",
-  "managed_service_potential": "<High|Medium|Low|Unknown>",
-  "commercial_complexity": "<High|Medium|Low|Unknown>",
-  "key_risks": ["<risk>"],
-  "recommended_action": "<Proceed|Proceed with vendor input|Clarify|Do not proceed>",
-  "recommended_action_rationale": "<one sentence>"
-}`;
+Based on the RFP Understanding Model and the worklist, produce a strategic assessment with these sections:
 
-  const sample = requirements.slice(0, 60).map((r) => ({
-    category: r.category,
-    mandatory_optional: r.mandatory_optional,
-    original_question: typeof r.original_question === "string"
-      ? r.original_question.slice(0, 120) : "",
-  }));
+- opportunity_summary: 2–3 sentence executive overview of what this RFP is about and what winning it means for RR.
+- customer_objectives: list of specific business objectives extracted from the RFP (be specific, not generic).
+- key_themes: overarching themes that should inform all response decisions.
+- logicgate_capability_mapping: list of strings — how LogicGate Risk Cloud modules map to this opportunity. Mention specific LogicGate features or modules where relevant (Risk Cloud, Controls, Frameworks, Assessments, Incidents, Reporting etc.).
+- rr_service_mapping: list of strings — how RR's implementation, delivery, support and managed service capabilities map. Be specific about what RR brings.
+- risks_and_assumptions: { "risks": ["<specific risk>"], "assumptions": ["<assumption>"] }
+  - Risks: real gaps, uncertainties, or potential issues (not boilerplate).
+  - Assumptions: things RR is assuming to be true when assessing this opportunity.
+- recommended_strategy: 3–4 sentence recommended pursuit and response strategy. Where should the team focus? What should they lead with?
+- pursuit_recommendation: "Proceed" | "Qualify" | "Do not pursue"
+- pursuit_rationale: one sentence rationale.
+- response_confidence: "High" | "Medium" | "Low"
 
-  const user = `Company: ${company}\nVendor context: ${vendorContext}\nTotal requirements extracted: ${requirements.length}\n\nSample requirements:\n${JSON.stringify(sample, null, 2)}`;
+Output ONLY valid JSON — no prose, no code fences.`;
+
+  // Summarise the worklist for context
+  const ownerCounts = worklist.reduce<Record<string, number>>((acc, r) => {
+    const k = String(r.recommended_owner ?? "Unknown");
+    acc[k] = (acc[k] ?? 0) + 1;
+    return acc;
+  }, {});
+  const relevanceCounts = worklist.reduce<Record<string, number>>((acc, r) => {
+    const k = String(r.relevance ?? "Uncertain");
+    acc[k] = (acc[k] ?? 0) + 1;
+    return acc;
+  }, {});
+  const highPriority = worklist
+    .filter((r) => r.priority === "High")
+    .slice(0, 10)
+    .map((r) => ({
+      id: r.requirement_id,
+      q: typeof r.original_question === "string" ? r.original_question.slice(0, 100) : "",
+      owner: r.recommended_owner,
+      type: r.recommended_response_type,
+    }));
+
+  const user = `Company: ${company}
+Vendor context: ${vendorContext}
+
+RFP Understanding Model:
+${JSON.stringify(understanding, null, 2)}
+
+Worklist summary:
+- Total requirements: ${worklist.length}
+- By owner: ${JSON.stringify(ownerCounts)}
+- By relevance: ${JSON.stringify(relevanceCounts)}
+- High-priority items: ${JSON.stringify(highPriority)}`;
 
   try {
-    return await callClaudeJSON<Record<string, unknown>>(system, user, { maxTokens: 1500 });
+    const result = await callClaudeJSON<Record<string, unknown>>(system, user, { maxTokens: 3000 });
+    return result ?? {};
   } catch (err) {
-    log.warn({ err }, "claudeGenerateHealth failed — returning minimal health");
+    log.warn({ err }, "claudeGenerateAssessmentSections failed — returning minimal assessment");
     return {
-      company,
-      rfp_type: "Unknown",
-      response_deadline: null,
-      total_requirements: requirements.length,
-      logicgate_fit: "Unknown",
-      panorays_fit: "Unknown",
-      rr_delivery_fit: "Unknown",
-      managed_service_potential: "Unknown",
-      commercial_complexity: "Unknown",
-      key_risks: [],
-      recommended_action: "Clarify",
-      recommended_action_rationale: "Health summary could not be generated automatically.",
+      opportunity_summary: "Assessment generation failed. Please review the worklist manually.",
+      customer_objectives: (understanding.objectives as string[]) ?? [],
+      key_themes: (understanding.key_themes as string[]) ?? [],
+      logicgate_capability_mapping: [],
+      rr_service_mapping: [],
+      risks_and_assumptions: { risks: [], assumptions: [] },
+      recommended_strategy: "Manual review required.",
+      pursuit_recommendation: "Qualify",
+      pursuit_rationale: "Automatic assessment failed — manual review needed.",
+      response_confidence: "Low",
     };
   }
 }
 
-// ── Background job runner ─────────────────────────────────────────────────────
+// ── Background extraction job ─────────────────────────────────────────────────
 
 async function runExtractionJob(
   jobId: string,
@@ -244,60 +467,108 @@ async function runExtractionJob(
       return;
     }
 
-    // Build the step list up-front so we know total
+    // ── Step 1: Classify documents ─────────────────────────────────────────
+    updateProgress(jobId, 0, 1, "Classifying documents…");
+    const classifications = await claudeClassifyDocuments(docs, log);
+    updateJob(jobId, { documentClassifications: classifications });
+    log.info({ jobId, classifications }, "documents classified");
+
+    // Separate contextual docs from requirements docs
+    const requirementIds = new Set(
+      classifications.filter((c) => c.docType === "Requirements Matrix").map((c) => c.id)
+    );
+    const excelIds = new Set(docs.filter((d) => d.fileType === "excel").map((d) => d.id));
+
+    const requirementDocs = docs.filter((d) => excelIds.has(d.id) || requirementIds.has(d.id));
+    const contextualDocs  = docs.filter((d) => !excelIds.has(d.id) && !requirementIds.has(d.id));
+
+    // Build worklist processing steps
     type Step =
-      | { type: "text"; text: string; docName: string }
-      | { type: "excel"; rows: ParsedRow[]; docName: string };
+      | { type: "excel"; rows: ParsedRow[]; docName: string }
+      | { type: "text";  text: string;      docName: string };
 
-    const steps: Step[] = [];
-
-    for (const doc of docs) {
+    const worklistSteps: Step[] = [];
+    for (const doc of requirementDocs) {
       if (doc.fileType === "excel" && doc.structuredRows && doc.structuredRows.length > 0) {
-        const batches = batchRows(doc.structuredRows, ROWS_PER_BATCH);
-        batches.forEach((b) => steps.push({ type: "excel", rows: b, docName: doc.name }));
+        batchRows(doc.structuredRows, ROWS_PER_BATCH).forEach((b) =>
+          worklistSteps.push({ type: "excel", rows: b, docName: doc.name })
+        );
       } else if (doc.text) {
-        const chunks = chunkText(doc.text, MAX_CHARS_PER_CHUNK);
-        chunks.forEach((c) => steps.push({ type: "text", text: c, docName: doc.name }));
+        chunkText(doc.text, MAX_CHARS_PER_CHUNK).forEach((c) =>
+          worklistSteps.push({ type: "text", text: c, docName: doc.name })
+        );
       }
     }
 
-    const totalSteps = steps.length + 1; // +1 for health generation
+    // Build combined contextual text for understanding
+    let contextCombined = "";
+    for (const doc of contextualDocs) {
+      if (doc.text) {
+        const toAdd = `\n\n=== ${doc.name} ===\n${doc.text}`;
+        if (contextCombined.length + toAdd.length <= MAX_UNDERSTANDING_CHARS) {
+          contextCombined += toAdd;
+        }
+      }
+    }
+
+    const hasContext  = contextCombined.trim().length > 0;
+    const totalSteps  = 1 + (hasContext ? 1 : 0) + worklistSteps.length + 1;
+    let stepIdx = 1;
+
+    // ── Step 2: Extract RFP Understanding Model ────────────────────────────
+    let rfpUnderstanding: Record<string, unknown> = {};
+    if (hasContext) {
+      updateProgress(jobId, stepIdx, totalSteps, "Understanding the opportunity…");
+      rfpUnderstanding = await claudeExtractUnderstanding(contextCombined, company, vendorContext, log);
+      updateJob(jobId, { rfpUnderstanding });
+      log.info({ jobId, understanding: rfpUnderstanding }, "understanding model extracted");
+      stepIdx++;
+    }
+
+    // ── Step 3: Build enriched worklist ───────────────────────────────────
     let reqCounter = 0;
-
-    log.info({ jobId, stepCount: steps.length, docCount: docs.length }, "extraction job started");
-
-    for (const [i, step] of steps.entries()) {
-      const stageLabel = steps.length === 1
-        ? `Processing ${step.docName}…`
-        : `${step.docName} — batch ${i + 1} of ${steps.length}`;
-
-      updateProgress(jobId, i, totalSteps, stageLabel);
+    for (const [i, step] of worklistSteps.entries()) {
+      const label =
+        worklistSteps.length === 1
+          ? `Assessing requirements…`
+          : `Assessing requirements — batch ${i + 1} of ${worklistSteps.length}`;
+      updateProgress(jobId, stepIdx, totalSteps, label);
 
       let reqs: Record<string, unknown>[];
-
       if (step.type === "excel") {
-        reqs = await claudeEnrichExcelBatch(step.rows, step.docName, vendorContext, company, reqCounter, log);
+        reqs = await claudeEnrichWorklist(
+          step.rows, step.docName, vendorContext, company, reqCounter, rfpUnderstanding, log
+        );
       } else {
-        reqs = await claudeExtractFromTextChunk(step.text, step.docName, vendorContext, company, reqCounter, log);
+        reqs = await claudeExtractWorklistFromText(
+          step.text, step.docName, vendorContext, company, reqCounter, rfpUnderstanding, log
+        );
       }
 
       reqCounter += reqs.length;
       appendRequirements(jobId, reqs);
-      log.info({ jobId, step: i + 1, totalSteps, reqsThisStep: reqs.length, totalReqs: reqCounter }, "step complete");
+      log.info({ jobId, step: i + 1, totalSteps, batch: reqs.length, total: reqCounter }, "worklist batch done");
+      stepIdx++;
     }
 
-    // Final step: health
-    updateProgress(jobId, steps.length, totalSteps, "Generating assessment…");
-    const job = getJob(jobId)!;
-    const health = await claudeGenerateHealth(job.requirements, company, vendorContext, log);
+    // ── Step 4: Generate high-level assessment sections ────────────────────
+    updateProgress(jobId, stepIdx, totalSteps, "Generating opportunity assessment…");
+    const currentJob = getJob(jobId)!;
+    const assessment = await claudeGenerateAssessmentSections(
+      rfpUnderstanding, currentJob.requirements, company, vendorContext, log
+    );
 
     updateJob(jobId, {
       status: "done",
-      health,
-      progress: { done: totalSteps, total: totalSteps, stage: `Done — ${reqCounter} requirements extracted` },
+      assessment,
+      progress: {
+        done: totalSteps,
+        total: totalSteps,
+        stage: `Done — ${reqCounter} requirements assessed`,
+      },
     });
 
-    log.info({ jobId, requirementCount: reqCounter }, "extraction job complete");
+    log.info({ jobId, reqCounter, hasUnderstanding: hasContext }, "extraction job complete");
   } catch (err) {
     log.error({ jobId, err }, "extraction job crashed");
     updateJob(jobId, { status: "error", error: (err as Error).message });
@@ -310,7 +581,7 @@ router.get("/rfp/health", (_req, res) => {
   res.json({ status: "ok", module: "rfp", storedDocs: storeSize() });
 });
 
-// ── POST /api/rfp/upload-files ───────────────────────────────────────────────
+// ── POST /api/rfp/upload-files ────────────────────────────────────────────────
 router.post("/rfp/upload-files", upload.array("files", 20), async (req, res): Promise<void> => {
   const files = req.files as Express.Multer.File[] | undefined;
   if (!files || files.length === 0) {
@@ -329,10 +600,9 @@ router.post("/rfp/upload-files", upload.array("files", 20), async (req, res): Pr
 
   for (const file of files) {
     const name = file.originalname;
-    const ext = name.split(".").pop()?.toLowerCase() ?? "";
+    const ext  = name.split(".").pop()?.toLowerCase() ?? "";
     try {
       if (ext === "xlsx" || ext === "xls") {
-        // Smart structural parse — no CSV dump
         const parsed = parseExcelForRequirements(file.buffer);
         req.log.info(
           { name, sheets: parsed.sheets, usefulRows: parsed.usefulRows, totalRawRows: parsed.totalRawRows },
@@ -343,10 +613,8 @@ router.post("/rfp/upload-files", upload.array("files", 20), async (req, res): Pr
           continue;
         }
         const entry = storeExcelDoc(name, parsed.rows);
-        req.log.info({ id: entry.id, name, rowCount: entry.rowCount }, "rfp: stored excel doc");
         results.push({ id: entry.id, name, fileType: "excel", rowCount: entry.rowCount });
       } else {
-        // Text extraction for PDF, Word, plain text
         let text = "";
         if (ext === "docx" || ext === "doc") {
           const result = await mammoth.extractRawText({ buffer: file.buffer });
@@ -363,7 +631,6 @@ router.post("/rfp/upload-files", upload.array("files", 20), async (req, res): Pr
           continue;
         }
         const entry = storeTextDoc(name, trimmed);
-        req.log.info({ id: entry.id, name, charCount: entry.charCount }, "rfp: stored text doc");
         results.push({ id: entry.id, name, fileType: "text", charCount: entry.charCount });
       }
     } catch (err) {
@@ -375,7 +642,7 @@ router.post("/rfp/upload-files", upload.array("files", 20), async (req, res): Pr
   res.json({ files: results });
 });
 
-// ── POST /api/rfp/store-text ─────────────────────────────────────────────────
+// ── POST /api/rfp/store-text ──────────────────────────────────────────────────
 router.post("/rfp/store-text", async (req, res): Promise<void> => {
   const { name, text } = req.body as Record<string, unknown>;
   if (typeof text !== "string" || !text.trim()) {
@@ -387,15 +654,13 @@ router.post("/rfp/store-text", async (req, res): Promise<void> => {
   res.json({ id: entry.id, name: entry.name, charCount: entry.charCount, fileType: "text" });
 });
 
-// ── DELETE /api/rfp/documents/:id ────────────────────────────────────────────
+// ── DELETE /api/rfp/documents/:id ─────────────────────────────────────────────
 router.delete("/rfp/documents/:id", (req, res) => {
   removeDoc(req.params.id);
   res.json({ ok: true });
 });
 
 // ── POST /api/rfp/extract-requirements ───────────────────────────────────────
-// Returns {jobId} immediately. Processing runs in the background.
-// Poll GET /api/rfp/jobs/:id for progress and results.
 router.post("/rfp/extract-requirements", (req: Request, res): void => {
   const { documentIds, vendorContext, company } = req.body as Record<string, unknown>;
   if (!Array.isArray(documentIds) || documentIds.length === 0) {
@@ -403,9 +668,8 @@ router.post("/rfp/extract-requirements", (req: Request, res): void => {
   }
 
   const job = createJob();
-  req.log.info({ jobId: job.id, documentIds, company }, "rfp: extraction job created");
+  req.log.info({ jobId: job.id, documentIds, company }, "rfp: assessment job created");
 
-  // Fire-and-forget — runs after response is sent
   void runExtractionJob(
     job.id,
     documentIds as string[],
@@ -427,7 +691,9 @@ router.get("/rfp/jobs/:id", (req, res): void => {
     jobId: job.id,
     status: job.status,
     progress: job.progress,
-    health: job.health,
+    rfpUnderstanding: job.rfpUnderstanding,
+    documentClassifications: job.documentClassifications,
+    assessment: job.assessment,
     requirements: job.requirements,
     mappingRows: job.mappingRows,
     mappingSummary: job.mappingSummary,
@@ -435,56 +701,29 @@ router.get("/rfp/jobs/:id", (req, res): void => {
   });
 });
 
-// ── POST /api/rfp/classify ───────────────────────────────────────────────────
+// ── Legacy routes (preserved for backward compatibility) ──────────────────────
+
 router.post("/rfp/classify", async (req, res): Promise<void> => {
   const { requirements, vendorContext, company } = req.body as Record<string, unknown>;
   if (!Array.isArray(requirements) || requirements.length === 0) {
     res.status(400).json({ error: "requirements array is required" }); return;
   }
-
   const system = `You are an expert GRC procurement analyst at Risk Rising. Classify each requirement by owner.
-${RR_CONTEXT}
-${OWNERSHIP_GUIDE}
-
-Output ONLY valid JSON. No prose, no code fences.
-{
-  "requirements": [
-    {
-      "requirement_id": "<same ID as input>",
-      "owner": "<RR|LogicGate|Panorays|Joint|Unknown>",
-      "vendor_context": "<LogicGate|Panorays|Both|RR only|Unknown>",
-      "priority": "<High|Medium|Low>",
-      "confidence": "<High|Medium|Low>",
-      "vendor_response_needed": <true|false>,
-      "notes": "<brief rationale>"
-    }
-  ],
-  "ownership_summary": {
-    "rr_count": <int>, "logicgate_count": <int>, "panorays_count": <int>, "joint_count": <int>, "unknown_count": <int>
-  }
-}
-Classify EVERY item. Return SAME requirement_id values. If unsure, use Unknown.`;
-
-  // Classify in batches of 50 to stay within token limits
+${RR_CONTEXT}\n${OWNERSHIP_GUIDE}
+Output ONLY valid JSON:
+{ "requirements": [{ "requirement_id": "<id>", "owner": "<RR|LogicGate|Panorays|Joint|Unknown>", "vendor_context": "<string>", "priority": "<High|Medium|Low>", "confidence": "<High|Medium|Low>", "vendor_response_needed": <bool>, "notes": "<string>" }], "ownership_summary": { "rr_count": 0, "logicgate_count": 0, "panorays_count": 0, "joint_count": 0, "unknown_count": 0 } }`;
   const allClassified: Record<string, unknown>[] = [];
-  const reqs = requirements as Record<string, unknown>[];
-  const batches = batchRows(reqs, 50);
-
   try {
-    for (const batch of batches) {
+    for (const batch of batchRows(requirements as Record<string, unknown>[], 50)) {
       const user = `Vendor context: ${String(vendorContext ?? "Unknown")}\nCompany: ${String(company ?? "Unknown")}\n\nRequirements:\n${JSON.stringify(batch, null, 2)}`;
       const result = await callClaudeJSON<{ requirements: Record<string, unknown>[] }>(system, user, { maxTokens: 6000 });
       if (Array.isArray(result?.requirements)) allClassified.push(...result.requirements);
     }
-
-    // Compute ownership summary across all batches
     const ownership_summary = allClassified.reduce<Record<string, number>>((acc, r) => {
       const key = `${String(r.owner ?? "unknown").toLowerCase()}_count`;
       acc[key] = (acc[key] ?? 0) + 1;
       return acc;
     }, {});
-
-    req.log.info({ company, count: allClassified.length }, "rfp classify completed");
     res.json({ requirements: allClassified, ownership_summary });
   } catch (err) {
     req.log.error({ err }, "rfp classify failed");
@@ -492,44 +731,22 @@ Classify EVERY item. Return SAME requirement_id values. If unsure, use Unknown.`
   }
 });
 
-// ── POST /api/rfp/generate-responses ────────────────────────────────────────
 router.post("/rfp/generate-responses", async (req, res): Promise<void> => {
   const { requirements, vendorContext, company } = req.body as Record<string, unknown>;
   if (!Array.isArray(requirements) || requirements.length === 0) {
     res.status(400).json({ error: "requirements array is required" }); return;
   }
-
   const system = `You are a senior consultant at Risk Rising writing RFP/RFI responses.
 ${RR_CONTEXT}
-
-RR-owned items: write a concise, professional response (max 120 words). Be specific about implementation, delivery, support or commercial approach. Flag assumptions. UK spelling. Do NOT overclaim or invent product capabilities.
-Joint items: write the RR element first, then add a "Vendor validation required:" note.
-Vendor-owned (LogicGate/Panorays): provide only a suggested vendor response request.
-
-Output ONLY valid JSON. No prose, no code fences.
-{
-  "responses": [
-    {
-      "requirement_id": "<same ID>",
-      "rr_response_draft": "<drafted response or null if vendor-only>",
-      "vendor_prompt": "<what to ask the vendor, or null if RR-only>",
-      "response_confidence": "<High|Medium|Low>",
-      "assumptions": "<key assumptions or null>"
-    }
-  ]
-}`;
-
+Output ONLY valid JSON:
+{ "responses": [{ "requirement_id": "<id>", "rr_response_draft": "<string or null>", "vendor_prompt": "<string or null>", "response_confidence": "<High|Medium|Low>", "assumptions": "<string or null>" }] }`;
   const allResponses: Record<string, unknown>[] = [];
-  const reqs = requirements as Record<string, unknown>[];
-  const batches = batchRows(reqs, 40);
-
   try {
-    for (const batch of batches) {
+    for (const batch of batchRows(requirements as Record<string, unknown>[], 40)) {
       const user = `Company: ${String(company ?? "Unknown")}\nVendor context: ${String(vendorContext ?? "Unknown")}\n\nRequirements:\n${JSON.stringify(batch, null, 2)}`;
       const result = await callClaudeJSON<{ responses: Record<string, unknown>[] }>(system, user, { maxTokens: 5000 });
       if (Array.isArray(result?.responses)) allResponses.push(...result.responses);
     }
-    req.log.info({ company, count: allResponses.length }, "rfp generate-responses completed");
     res.json({ responses: allResponses });
   } catch (err) {
     req.log.error({ err }, "rfp generate-responses failed");
@@ -537,45 +754,28 @@ Output ONLY valid JSON. No prose, no code fences.
   }
 });
 
-// ── POST /api/rfp/generate-vendor-pack ──────────────────────────────────────
 router.post("/rfp/generate-vendor-pack", async (req, res): Promise<void> => {
   const { requirements, vendorContext, company } = req.body as Record<string, unknown>;
   if (!Array.isArray(requirements) || requirements.length === 0) {
     res.status(400).json({ error: "requirements array is required" }); return;
   }
-
-  const system = `You are a senior consultant at Risk Rising preparing a vendor input request pack to send to LogicGate or Panorays.
+  const system = `You are a senior consultant at Risk Rising preparing a vendor input request pack.
 ${RR_CONTEXT}
-
-Generate a structured vendor response request document in markdown. Include: opportunity summary (2-3 sentences); items requiring vendor input grouped by category; for each item the question, why vendor input is needed, and what to address. UK spelling. No filler.
-
-Output ONLY valid JSON. No prose, no code fences.
-{
-  "logicgate_pack": "<markdown or null>",
-  "panorays_pack": "<markdown or null>",
-  "summary": "<2-3 sentence overview of vendor input needed>"
-}`;
-
+Output ONLY valid JSON:
+{ "logicgate_pack": "<markdown or null>", "panorays_pack": "<markdown or null>", "summary": "<string>" }`;
   const vendorItems = (requirements as Array<Record<string, unknown>>).filter(
     (r) => r.owner === "LogicGate" || r.owner === "Panorays" || r.owner === "Joint"
   );
   const toProcess = vendorItems.length > 0 ? vendorItems : (requirements as Array<Record<string, unknown>>);
-  // Summarise each requirement to avoid huge payloads
   const summary = toProcess.slice(0, 100).map((r) => ({
     requirement_id: r.requirement_id,
     category: r.category,
     owner: r.owner,
     original_question: typeof r.original_question === "string" ? r.original_question.slice(0, 200) : "",
-    vendor_prompt: r.vendor_prompt,
   }));
-
-  const user = `Company: ${String(company ?? "Unknown")}\nVendor context: ${String(vendorContext ?? "Unknown")}\n\nRequirements needing vendor input:\n${JSON.stringify(summary, null, 2)}`;
-
+  const user = `Company: ${String(company ?? "Unknown")}\nVendor context: ${String(vendorContext ?? "Unknown")}\n\n${JSON.stringify(summary, null, 2)}`;
   try {
-    const result = await callClaudeJSON<{ logicgate_pack: string | null; panorays_pack: string | null; summary: string }>(
-      system, user, { maxTokens: 6000 }
-    );
-    req.log.info({ company }, "rfp generate-vendor-pack completed");
+    const result = await callClaudeJSON<Record<string, unknown>>(system, user, { maxTokens: 6000 });
     res.json(result);
   } catch (err) {
     req.log.error({ err }, "rfp generate-vendor-pack failed");
@@ -583,43 +783,25 @@ Output ONLY valid JSON. No prose, no code fences.
   }
 });
 
-// ── POST /api/rfp/generate-gap-analysis ─────────────────────────────────────
 router.post("/rfp/generate-gap-analysis", async (req, res): Promise<void> => {
   const { requirements, vendorContext, company } = req.body as Record<string, unknown>;
   if (!Array.isArray(requirements) || requirements.length === 0) {
     res.status(400).json({ error: "requirements array is required" }); return;
   }
-
-  const system = `You are a senior GRC consultant at Risk Rising conducting a gap and risk analysis on an RFP/RFI response.
+  const system = `You are a senior GRC consultant at Risk Rising conducting a gap and risk analysis.
 ${RR_CONTEXT}
-${OWNERSHIP_GUIDE}
-
-Identify: missing information; product claims needing vendor confirmation; unsupported requirements; risks to response quality; questions for the customer; questions for the vendor.
-
-Output ONLY valid JSON. No prose, no code fences.
-{
-  "gaps": [{ "id": "GAP-001", "description": "<missing>", "severity": "<High|Medium|Low>", "mitigation": "<action>" }],
-  "risks": [{ "id": "RISK-001", "description": "<risk>", "severity": "<High|Medium|Low>", "owner": "<RR|LogicGate|Panorays|Customer>" }],
-  "customer_questions": ["<question>"],
-  "vendor_questions": ["<question>"],
-  "unknown_items": [{ "requirement_id": "<id>", "reason": "<why unclear>" }],
-  "summary": "<2-3 sentence overall summary>"
-}`;
-
-  // Summarise to avoid huge payloads
-  const summary = (requirements as Record<string, unknown>[]).slice(0, 120).map((r) => ({
+Output ONLY valid JSON:
+{ "gaps": [{ "id": "GAP-001", "description": "<string>", "severity": "<High|Medium|Low>", "mitigation": "<string>" }], "risks": [{ "id": "RISK-001", "description": "<string>", "severity": "<High|Medium|Low>", "owner": "<string>" }], "customer_questions": ["<string>"], "vendor_questions": ["<string>"], "unknown_items": [{ "requirement_id": "<id>", "reason": "<string>" }], "summary": "<string>" }`;
+  const reqSummary = (requirements as Record<string, unknown>[]).slice(0, 120).map((r) => ({
     requirement_id: r.requirement_id,
     category: r.category,
-    owner: r.owner,
+    owner: r.owner ?? r.recommended_owner,
     mandatory_optional: r.mandatory_optional,
     original_question: typeof r.original_question === "string" ? r.original_question.slice(0, 150) : "",
   }));
-
-  const user = `Company: ${String(company ?? "Unknown")}\nVendor context: ${String(vendorContext ?? "Unknown")}\n\nRequirements:\n${JSON.stringify(summary, null, 2)}`;
-
+  const user = `Company: ${String(company ?? "Unknown")}\nVendor context: ${String(vendorContext ?? "Unknown")}\n\n${JSON.stringify(reqSummary, null, 2)}`;
   try {
     const result = await callClaudeJSON<Record<string, unknown>>(system, user, { maxTokens: 5000 });
-    req.log.info({ company }, "rfp generate-gap-analysis completed");
     res.json(result);
   } catch (err) {
     req.log.error({ err }, "rfp generate-gap-analysis failed");
@@ -631,42 +813,52 @@ Output ONLY valid JSON. No prose, no code fences.
 // RR MAPPING PACK
 // ═════════════════════════════════════════════════════════════════════════════
 
-const MAPPING_BATCH_SIZE = 25;
-
 async function claudeMapBatch(
   batch: Record<string, unknown>[],
   vendorContext: string,
   company: string,
+  rfpUnderstanding: Record<string, unknown> | null,
   log: Logger
 ): Promise<Record<string, unknown>[]> {
+  const understandingCtx = rfpUnderstanding
+    ? `\nRFP Context (use to inform response quality):
+- Customer objectives: ${JSON.stringify(rfpUnderstanding.objectives ?? [])}
+- Evaluation criteria: ${JSON.stringify(rfpUnderstanding.evaluation_criteria ?? [])}
+- Key themes: ${JSON.stringify(rfpUnderstanding.key_themes ?? [])}
+- Scope: ${rfpUnderstanding.scope ?? "Not specified"}`
+    : "";
+
   const system = `You are a senior GRC consultant at Risk Rising creating a detailed RFP/RFI Response Mapping Pack.
 
 ${RR_CONTEXT}
 ${OWNERSHIP_GUIDE}
+${understandingCtx}
 
 For each requirement, produce a complete mapping entry.
 
-owner: Assign using the ownership guide. Use exactly one of: RR, LogicGate, Panorays, Joint, Unknown.
-rr_capability_mapping: What Risk Rising can genuinely own and deliver. Max 80 words. Null if not relevant.
-logicgate_mapping: What LogicGate Risk Cloud provides for this requirement. Max 80 words. Null if not relevant.
-panorays_mapping: What Panorays provides. Max 80 words. Null if not relevant.
-draft_rr_response: Concise Risk Rising response. Max 120 words. UK English. Rules by owner:
-  - RR: write a specific implementation/delivery/support/commercial response.
+Use the assessment fields already provided (recommended_owner, logicgate_mapping, rr_mapping, why_it_matters) as your starting point — validate and build on them, do not contradict them without good reason.
+
+Fields to produce:
+- owner: RR | LogicGate | Panorays | Joint | Unknown
+- rr_capability_mapping: What Risk Rising can genuinely own and deliver. Max 80 words. Null if not relevant.
+- logicgate_mapping: What LogicGate Risk Cloud provides. Max 80 words. Null if not relevant.
+- panorays_mapping: What Panorays provides. Max 80 words. Null if not relevant.
+- draft_rr_response: Concise RR response. Max 120 words. UK English. Rules by owner:
+  - RR: write a specific implementation/delivery/support/commercial response that addresses the customer's objective.
   - Joint: write only the RR element; vendor element goes in vendor_question_or_prompt.
-  - LogicGate / Panorays / Unknown: null — do not draft a response.
-vendor_validation_required: true if vendor input is needed before a complete answer can be given.
-vendor_question_or_prompt: Specific question to send to the vendor. Null if not needed.
-confidence: High (clear boundary), Medium (some ambiguity), Low (complex or unclear).
-assumptions: Key assumptions. Null if none.
-status: Always "Draft".
-notes: One-sentence rationale for owner assignment.
+  - LogicGate / Panorays / Unknown: null.
+- vendor_validation_required: true if vendor input is needed before a complete answer.
+- vendor_question_or_prompt: Specific question to send to the vendor. Null if not needed.
+- confidence: High (clear) | Medium (some ambiguity) | Low (complex or unclear).
+- assumptions: Key assumptions. Null if none.
+- status: Always "Draft".
+- notes: One-sentence rationale for owner assignment.
 
 Rules:
-- Never invent platform capabilities not listed above.
-- UK English throughout (organisation, recognise, customise, programme).
-- "Risk Rising" not "RiskRising".
+- Never invent platform capabilities.
+- UK English throughout.
 - draft_rr_response max 120 words.
-- Classify every item — never leave owner blank.
+- Responses must reflect the customer's stated objectives and evaluation criteria where relevant.
 
 Output ONLY valid JSON — no prose, no code fences:
 {
@@ -694,6 +886,13 @@ Output ONLY valid JSON — no prose, no code fences:
     original_question: typeof r.original_question === "string" ? r.original_question.slice(0, 300) : "",
     category: r.category,
     mandatory_optional: r.mandatory_optional,
+    // Pass through assessment enrichment fields as context
+    why_it_matters: r.why_it_matters ?? null,
+    recommended_owner: r.recommended_owner ?? null,
+    logicgate_mapping: r.logicgate_mapping ?? null,
+    rr_mapping: r.rr_mapping ?? null,
+    priority: r.priority ?? null,
+    linked_objectives: r.linked_objectives ?? [],
   }));
 
   const user = `Company: ${company}\nVendor context: ${vendorContext}\n\nRequirements to map:\n${JSON.stringify(input, null, 2)}`;
@@ -707,7 +906,7 @@ Output ONLY valid JSON — no prose, no code fences:
       requirement_id: r.requirement_id,
       original_question: r.original_question,
       category: r.category,
-      owner: "Unknown",
+      owner: r.recommended_owner ?? "Unknown",
       rr_capability_mapping: null,
       logicgate_mapping: null,
       panorays_mapping: null,
@@ -726,19 +925,24 @@ async function claudeGenerateMappingSummary(
   mappingRows: Record<string, unknown>[],
   company: string,
   vendorContext: string,
+  rfpUnderstanding: Record<string, unknown> | null,
   log: Logger
 ): Promise<Record<string, unknown>> {
-  const system = `You are a senior GRC consultant at Risk Rising. Based on the complete RFP/RFI Response Mapping Pack, produce an executive summary.
+  const understandingCtx = rfpUnderstanding
+    ? `\nRFP objectives: ${JSON.stringify(rfpUnderstanding.objectives ?? [])}\nKey themes: ${JSON.stringify(rfpUnderstanding.key_themes ?? [])}`
+    : "";
 
+  const system = `You are a senior GRC consultant at Risk Rising. Based on the completed RFP/RFI Response Mapping Pack, produce an executive summary.
 ${RR_CONTEXT}
+${understandingCtx}
 
 Produce four lists:
-- gaps_and_risks: Specific gaps or risks in the response approach (missing vendor input, unclear ownership, unsupported claims). Be specific.
-- assumptions: Key assumptions underpinning the pack as a whole.
-- commercial_delivery_considerations: Commercial, contractual or delivery points to factor into the response or proposal.
+- gaps_and_risks: Specific gaps or risks in the response approach. Be specific and actionable.
+- assumptions: Key assumptions underpinning the pack.
+- commercial_delivery_considerations: Commercial, contractual or delivery points to factor into the response.
 - recommended_next_actions: Ordered list of concrete next actions for the pursuit team.
 
-UK English. Concise. Each item max 40 words.
+UK English. Each item max 40 words.
 
 Output ONLY valid JSON — no prose, no code fences:
 {
@@ -763,7 +967,7 @@ Output ONLY valid JSON — no prose, no code fences:
     original_question: typeof r.original_question === "string" ? r.original_question.slice(0, 100) : "",
   }));
 
-  const user = `Company: ${company}\nVendor context: ${vendorContext}\nTotal requirements: ${mappingRows.length}\nOwnership breakdown: ${JSON.stringify(ownerCounts)}\n\nSample rows:\n${JSON.stringify(sample, null, 2)}`;
+  const user = `Company: ${company}\nVendor context: ${vendorContext}\nTotal: ${mappingRows.length}\nOwnership: ${JSON.stringify(ownerCounts)}\n\nSample rows:\n${JSON.stringify(sample, null, 2)}`;
 
   try {
     return await callClaudeJSON<Record<string, unknown>>(system, user, { maxTokens: 2500 });
@@ -787,6 +991,7 @@ async function runMappingJob(
   requirements: Record<string, unknown>[],
   vendorContext: string,
   company: string,
+  rfpUnderstanding: Record<string, unknown> | null,
   log: Logger
 ): Promise<void> {
   try {
@@ -797,16 +1002,16 @@ async function runMappingJob(
       batches.push(requirements.slice(i, i + MAPPING_BATCH_SIZE));
     }
 
-    const total = batches.length + 1; // +1 for summary
+    const total = batches.length + 1;
     log.info({ jobId, batches: batches.length, requirements: requirements.length }, "mapping job started");
 
     for (const [i, batch] of batches.entries()) {
       const stage = batches.length === 1
-        ? "Mapping requirements…"
-        : `Mapping requirements — batch ${i + 1} of ${batches.length}`;
+        ? "Drafting responses…"
+        : `Drafting responses — batch ${i + 1} of ${batches.length}`;
       updateProgress(jobId, i, total, stage);
 
-      const rows = await claudeMapBatch(batch, vendorContext, company, log);
+      const rows = await claudeMapBatch(batch, vendorContext, company, rfpUnderstanding, log);
       appendMappingRows(jobId, rows);
 
       log.info({ jobId, batch: i + 1, total, rowsThisBatch: rows.length }, "mapping batch done");
@@ -814,16 +1019,14 @@ async function runMappingJob(
 
     updateProgress(jobId, batches.length, total, "Generating pack summary…");
     const job = getJob(jobId)!;
-    const summary = await claudeGenerateMappingSummary(job.mappingRows, company, vendorContext, log);
+    const summary = await claudeGenerateMappingSummary(
+      job.mappingRows, company, vendorContext, rfpUnderstanding, log
+    );
 
     updateJob(jobId, {
       status: "done",
       mappingSummary: summary,
-      progress: {
-        done: total,
-        total,
-        stage: `Done — ${job.mappingRows.length} requirements mapped`,
-      },
+      progress: { done: total, total, stage: `Done — ${job.mappingRows.length} requirements mapped` },
     });
 
     log.info({ jobId, rowCount: job.mappingRows.length }, "mapping job complete");
@@ -834,10 +1037,8 @@ async function runMappingJob(
 }
 
 // ── POST /api/rfp/generate-mapping-pack ──────────────────────────────────────
-// Returns {jobId} immediately. Polls via GET /api/rfp/jobs/:id.
-// Job result: mappingRows[], mappingSummary.
 router.post("/rfp/generate-mapping-pack", (req: Request, res): void => {
-  const { requirements, vendorContext, company } = req.body as Record<string, unknown>;
+  const { requirements, vendorContext, company, rfpUnderstanding } = req.body as Record<string, unknown>;
   if (!Array.isArray(requirements) || requirements.length === 0) {
     res.status(400).json({ error: "requirements array is required" }); return;
   }
@@ -850,6 +1051,7 @@ router.post("/rfp/generate-mapping-pack", (req: Request, res): void => {
     requirements as Record<string, unknown>[],
     String(vendorContext ?? "Unknown"),
     String(company ?? "Unknown"),
+    (rfpUnderstanding as Record<string, unknown> | null) ?? null,
     req.log
   );
 
@@ -857,9 +1059,8 @@ router.post("/rfp/generate-mapping-pack", (req: Request, res): void => {
 });
 
 // ── POST /api/rfp/regenerate-mapping-row ─────────────────────────────────────
-// Synchronous — processes a single row, returns the updated row.
 router.post("/rfp/regenerate-mapping-row", async (req, res): Promise<void> => {
-  const { requirement, vendorContext, company } = req.body as Record<string, unknown>;
+  const { requirement, vendorContext, company, rfpUnderstanding } = req.body as Record<string, unknown>;
   if (!requirement || typeof requirement !== "object") {
     res.status(400).json({ error: "requirement object is required" }); return;
   }
@@ -869,6 +1070,7 @@ router.post("/rfp/regenerate-mapping-row", async (req, res): Promise<void> => {
       [requirement as Record<string, unknown>],
       String(vendorContext ?? "Unknown"),
       String(company ?? "Unknown"),
+      (rfpUnderstanding as Record<string, unknown> | null) ?? null,
       req.log
     );
     req.log.info(

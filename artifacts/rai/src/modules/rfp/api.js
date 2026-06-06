@@ -14,17 +14,15 @@ async function post(path, body) {
   return res.json()
 }
 
-// Store pasted/typed text on the server; returns { id, name, charCount, fileType }
 export async function rfpStoreText({ name, text }) {
   return post('/store-text', { name, text })
 }
 
-// Fire the extraction job — returns { jobId } immediately (background processing)
 export async function rfpExtractRequirements({ documentIds, vendorContext, company }) {
   return post('/extract-requirements', { documentIds, vendorContext, company })
 }
 
-// Poll job status — returns { jobId, status, progress, health, requirements, error }
+// Poll job status — returns { jobId, status, progress, rfpUnderstanding, documentClassifications, assessment, requirements, mappingRows, mappingSummary, error }
 export async function rfpGetJob(jobId) {
   const res = await fetch(`${BASE}/jobs/${jobId}`)
   if (!res.ok) {
@@ -35,33 +33,31 @@ export async function rfpGetJob(jobId) {
   return res.json()
 }
 
-export async function rfpClassify({ requirements, vendorContext, company }) {
-  return post('/classify', { requirements, vendorContext, company })
-}
-
-export async function rfpGenerateResponses({ requirements, vendorContext, company }) {
-  return post('/generate-responses', { requirements, vendorContext, company })
-}
-
-export async function rfpGenerateVendorPack({ requirements, vendorContext, company }) {
-  return post('/generate-vendor-pack', { requirements, vendorContext, company })
-}
-
-export async function rfpGenerateGapAnalysis({ requirements, vendorContext, company }) {
-  return post('/generate-gap-analysis', { requirements, vendorContext, company })
-}
-
-// Fire a mapping pack job — returns { jobId } immediately (background processing)
-export async function rfpGenerateMappingPack({ requirements, vendorContext, company }) {
-  return post('/generate-mapping-pack', { requirements, vendorContext, company })
+// Fire a mapping pack job — returns { jobId } immediately
+export async function rfpGenerateMappingPack({ requirements, vendorContext, company, rfpUnderstanding }) {
+  return post('/generate-mapping-pack', { requirements, vendorContext, company, rfpUnderstanding })
 }
 
 // Regenerate a single row — synchronous, returns { row }
-export async function rfpRegenerateMappingRow({ requirement, vendorContext, company }) {
-  return post('/regenerate-mapping-row', { requirement, vendorContext, company })
+export async function rfpRegenerateMappingRow({ requirement, vendorContext, company, rfpUnderstanding }) {
+  return post('/regenerate-mapping-row', { requirement, vendorContext, company, rfpUnderstanding })
 }
 
 // Remove a stored document from the server
 export async function rfpRemoveDocument(id) {
   await fetch(`${BASE}/documents/${id}`, { method: 'DELETE' })
+}
+
+// Legacy routes (kept for backward compat)
+export async function rfpClassify({ requirements, vendorContext, company }) {
+  return post('/classify', { requirements, vendorContext, company })
+}
+export async function rfpGenerateResponses({ requirements, vendorContext, company }) {
+  return post('/generate-responses', { requirements, vendorContext, company })
+}
+export async function rfpGenerateVendorPack({ requirements, vendorContext, company }) {
+  return post('/generate-vendor-pack', { requirements, vendorContext, company })
+}
+export async function rfpGenerateGapAnalysis({ requirements, vendorContext, company }) {
+  return post('/generate-gap-analysis', { requirements, vendorContext, company })
 }

@@ -12,18 +12,22 @@ export interface ExtractionJob {
   id: string;
   status: JobStatus;
   progress: JobProgress;
-  health: Record<string, unknown> | null;
-  requirements: Record<string, unknown>[];
+  // Assessment-phase outputs
   rfpUnderstanding: Record<string, unknown> | null;
   documentClassifications: Record<string, string>[];
+  assessment: Record<string, unknown> | null;  // high-level opportunity assessment sections
+  requirements: Record<string, unknown>[];     // enriched worklist items
+  // Mapping-pack outputs
   mappingRows: Record<string, unknown>[];
   mappingSummary: Record<string, unknown> | null;
+  // Legacy (kept for backward compat)
+  health: Record<string, unknown> | null;
   error: string | null;
   createdAt: number;
 }
 
 const JOBS = new Map<string, ExtractionJob>();
-const TTL_MS = 2 * 60 * 60 * 1000; // 2 hours
+const TTL_MS = 2 * 60 * 60 * 1000;
 
 setInterval(() => {
   const now = Date.now();
@@ -37,12 +41,13 @@ export function createJob(): ExtractionJob {
     id: randomUUID(),
     status: "pending",
     progress: { done: 0, total: 1, stage: "Starting…" },
-    health: null,
-    requirements: [],
     rfpUnderstanding: null,
     documentClassifications: [],
+    assessment: null,
+    requirements: [],
     mappingRows: [],
     mappingSummary: null,
+    health: null,
     error: null,
     createdAt: Date.now(),
   };
