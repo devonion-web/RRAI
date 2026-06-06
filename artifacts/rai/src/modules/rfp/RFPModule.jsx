@@ -5,11 +5,13 @@ import {
 } from 'docx'
 import { saveAs } from 'file-saver'
 import {
+  rfpStoreText,
   rfpExtractRequirements,
   rfpClassify,
   rfpGenerateResponses,
   rfpGenerateVendorPack,
   rfpGenerateGapAnalysis,
+  rfpRemoveDocument,
 } from './api.js'
 
 // ── Colours ──────────────────────────────────────────────────────────────────
@@ -318,7 +320,7 @@ export default function RFPModule() {
   // Inputs
   const [company, setCompany] = useState('')
   const [vendorContext, setVendorContext] = useState('LogicGate')
-  const [documents, setDocuments] = useState([]) // [{name, text}]
+  const [documents, setDocuments] = useState([]) // [{id, name, charCount}] — text lives on server only
   const [pasteText, setPasteText] = useState('')
   const [pasteName, setPasteName] = useState('RFP Document')
   const fileInputRef = useRef(null)
@@ -346,12 +348,21 @@ export default function RFPModule() {
     return { ...base, ...c, ...resp }
   })
 
-  // ── Add pasted text as a document ───────────────────────────────────────────
-  function addPastedDoc() {
+  // ── Add pasted text — store server-side, keep only metadata ────────────────
+  async function addPastedDoc() {
     if (!pasteText.trim()) return
-    setDocuments((prev) => [...prev, { name: pasteName || 'RFP Document', text: pasteText.trim() }])
-    setPasteText('')
-    setPasteName('RFP Document')
+    setUploading(true)
+    setError(null)
+    try {
+      const meta = await rfpStoreText({ name: pasteName || 'RFP Document', text: pasteText.trim() })
+      setDocuments((prev) => [...prev, { id: meta.id, name: meta.name, charCount: meta.charCount }])
+      setPasteText('')
+      setPasteName('RFP Document')
+    } catch (e) {
+      setError('Failed to store document: ' + e.message)
+    } finally {
+      setUploading(false)
+    }
   }
 
   // ── File upload — server-side parsing for Word/PDF/Excel ────────────────────
@@ -370,9 +381,9 @@ export default function RFPModule() {
         throw new Error(j.error || `Upload failed: ${res.status}`)
       }
       const { files: parsed } = await res.json()
-      const good = parsed.filter((f) => f.text && !f.error)
-      const bad = parsed.filter((f) => f.error || !f.text)
-      if (good.length) setDocuments((prev) => [...prev, ...good.map((f) => ({ name: f.name, text: f.text }))])
+      const good = parsed.filter((f) => f.id && !f.error)
+      const bad = parsed.filter((f) => f.error || !f.id)
+      if (good.length) setDocuments((prev) => [...prev, ...good.map((f) => ({ id: f.id, name: f.name, charCount: f.charCount }))])
       if (bad.length) setError(`Could not extract text from: ${bad.map((f) => f.name).join(', ')}`)
     } catch (e) {
       setError(e.message)
@@ -399,7 +410,7 @@ export default function RFPModule() {
     setLoading('extract')
     setError(null)
     try {
-      const result = await rfpExtractRequirements({ documents, vendorContext, company })
+      const result = await rfpExtractRequirements({ documentIds: documents.map((d) => d.id), vendorContext, company })
       setHealth(result.health || null)
       setRequirements(result.requirements || [])
       setClassified([])
@@ -592,10 +603,11 @@ export default function RFPModule() {
 
           {documents.length > 0 && (
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 16 }}>
-              {documents.map((d, i) => (
-                <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 6, background: BLUE_LIGHT, borderRadius: 20, padding: '4px 12px', fontSize: 12 }}>
+              {documents.map((d) => (
+                <div key={d.id} style={{ display: 'flex', alignItems: 'center', gap: 6, background: BLUE_LIGHT, borderRadius: 20, padding: '4px 12px', fontSize: 12 }}>
                   <span>{d.name}</span>
-                  <button onClick={() => setDocuments((prev) => prev.filter((_, j) => j !== i))}
+                  {d.charCount && <span style={{ color: MUTED, fontSize: 11 }}>({Math.round(d.charCount / 1000)}k chars)</span>}
+                  <button onClick={() => { rfpRemoveDocument(d.id); setDocuments((prev) => prev.filter((x) => x.id !== d.id)) }}
                     style={{ background: 'none', border: 'none', cursor: 'pointer', color: MUTED, fontSize: 14, lineHeight: 1, padding: 0 }}>×</button>
                 </div>
               ))}
@@ -826,8 +838,8 @@ export default function RFPModule() {
             {/* ── Responses tab ── */}
             {activeTab === 'responses' && responses.length > 0 && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-                {merged.filter((r) => r.rr_response_draft || r.vendor_prompt).map((req, i) => (
-                  <Card key={i}>
+                {merged.filter((r) => r.rr_response_draft || r.vendor_prompt).map((req) => (
+                  <Card key={req.requirement_id}>
                     <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start', marginBottom: 10 }}>
                       <span style={{ fontWeight: 700, color: NAVY, whiteSpace: 'nowrap', fontSize: 12 }}>{req.requirement_id}</span>
                       {req.owner && <Badge label={req.owner} colour={ownerColour(req.owner)} />}
@@ -895,7 +907,7 @@ export default function RFPModule() {
                     <Card>
                       <Section title={`Gaps (${gapAnalysis.gaps.length})`}>
                         {gapAnalysis.gaps.map((g, i) => (
-                          <div key={i} style={{ marginBottom: 12, paddingBottom: 12, borderBottom: i < gapAnalysis.gaps.length - 1 ? `1px solid ${BORDER}` : 'none' }}>
+                          <div key={g.id || i} style={{ marginBottom: 12, paddingBottom: 12, borderBottom: i < gapAnalysis.gaps.length - 1 ? `1px solid ${BORDER}` : 'none' }}>
                             <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 4 }}>
                               <SeverityDot s={g.severity} />
                               <span style={{ fontSize: 11, fontWeight: 700, color: MUTED }}>{g.id} · {g.severity}</span>
@@ -912,7 +924,7 @@ export default function RFPModule() {
                     <Card>
                       <Section title={`Risks (${gapAnalysis.risks.length})`}>
                         {gapAnalysis.risks.map((r, i) => (
-                          <div key={i} style={{ marginBottom: 12, paddingBottom: 12, borderBottom: i < gapAnalysis.risks.length - 1 ? `1px solid ${BORDER}` : 'none' }}>
+                          <div key={r.id || i} style={{ marginBottom: 12, paddingBottom: 12, borderBottom: i < gapAnalysis.risks.length - 1 ? `1px solid ${BORDER}` : 'none' }}>
                             <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 4 }}>
                               <SeverityDot s={r.severity} />
                               <span style={{ fontSize: 11, fontWeight: 700, color: MUTED }}>{r.id} · {r.owner}</span>

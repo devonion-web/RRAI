@@ -14,8 +14,14 @@ async function post(path, body) {
   return res.json()
 }
 
-export async function rfpExtractRequirements({ documents, vendorContext, company }) {
-  return post('/extract-requirements', { documents, vendorContext, company })
+// Store pasted/typed text on the server; returns { id, name, charCount }
+export async function rfpStoreText({ name, text }) {
+  return post('/store-text', { name, text })
+}
+
+// documentIds: string[] of server-side UUIDs — no raw text sent from browser
+export async function rfpExtractRequirements({ documentIds, vendorContext, company }) {
+  return post('/extract-requirements', { documentIds, vendorContext, company })
 }
 
 export async function rfpClassify({ requirements, vendorContext, company }) {
@@ -32,4 +38,9 @@ export async function rfpGenerateVendorPack({ requirements, vendorContext, compa
 
 export async function rfpGenerateGapAnalysis({ requirements, vendorContext, company }) {
   return post('/generate-gap-analysis', { requirements, vendorContext, company })
+}
+
+// Remove a stored document from the server
+export async function rfpRemoveDocument(id) {
+  await fetch(`${BASE}/documents/${id}`, { method: 'DELETE' })
 }
