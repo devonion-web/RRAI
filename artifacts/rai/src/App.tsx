@@ -4,6 +4,8 @@ import RaiDashboard from './components/RaiDashboard'
 import LogicGateModule from './modules/logicgate/LogicGateModule'
 // @ts-ignore
 import RFPModule from './modules/rfp/RFPModule'
+// @ts-ignore
+import OIModule from './modules/oi/OIModule'
 
 type ModuleId = string | null
 
@@ -34,6 +36,7 @@ const backButtonStyle: React.CSSProperties = {
 }
 
 const MODULE_LABELS: Record<string, string> = {
+  oi: 'Opportunity Intelligence',
   logicgate: 'LogicGate Specialist',
   rfp: 'RFP / RFI Response Manager',
   proposal: 'Proposal Specialist',
@@ -48,14 +51,17 @@ export default function App() {
   if (activeModule) {
     return (
       <div>
-        <div style={backBarStyle}>
-          <button style={backButtonStyle} onClick={() => setActiveModule(null)}>
-            ← RAI Home
-          </button>
-          <span style={{ opacity: 0.55 }}>
-            {MODULE_LABELS[activeModule] ?? activeModule}
-          </span>
-        </div>
+        {activeModule !== 'oi' && (
+          <div style={backBarStyle}>
+            <button style={backButtonStyle} onClick={() => setActiveModule(null)}>
+              ← RAI Home
+            </button>
+            <span style={{ opacity: 0.55 }}>
+              {MODULE_LABELS[activeModule] ?? activeModule}
+            </span>
+          </div>
+        )}
+        {activeModule === 'oi' && <OIModule onBack={() => setActiveModule(null)} />}
         {activeModule === 'logicgate' && <LogicGateModule />}
         {activeModule === 'rfp' && <RFPModule />}
       </div>

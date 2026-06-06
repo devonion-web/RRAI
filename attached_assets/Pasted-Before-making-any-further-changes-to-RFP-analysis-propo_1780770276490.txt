@@ -1,0 +1,126 @@
+Before making any further changes to RFP analysis, proposals or response generation, implement the Opportunity Intelligence Model.
+
+The Opportunity Intelligence Model becomes the primary object within the RRAI platform.
+
+Every analysis capability should contribute to it.
+
+This includes:
+
+- Opportunity Assessment
+- Discovery Packs
+- SDR Notes
+- BRDs
+- Workshop Outputs
+- RFPs
+- RFIs
+- Requirement Spreadsheets
+- Security Questionnaires
+- Presentation Decks
+
+The model should be persisted and viewable.
+
+Create a new tab:
+
+Opportunity Intelligence
+
+The model should contain:
+
+CUSTOMER
+- Name
+- Industry
+- Geography
+- Stakeholders
+- Sponsors
+
+OBJECTIVES
+- Business objectives
+- Drivers
+- Challenges
+- Desired outcomes
+
+USE CASES
+- Risk Management
+- Controls
+- Audit
+- TPRM
+- Compliance
+- Policy
+- Incident Management
+- Reporting
+- Workflow
+- Other identified use cases
+
+SOLUTION
+- LogicGate modules required
+- Vendor components
+- Integrations
+- Reporting requirements
+- Data model requirements
+
+DELIVERY
+- Discovery requirements
+- Configuration requirements
+- Migration requirements
+- Integration requirements
+- Testing requirements
+- Training requirements
+
+SUPPORT
+- Hypercare requirements
+- Managed service opportunities
+- Support coverage
+- Administrative support
+- Geographic considerations
+
+COMMERCIAL
+- Constraints
+- Assumptions
+- Contractual considerations
+- Delivery complexity indicators
+
+RISKS
+- Delivery risks
+- Integration risks
+- Resource risks
+- Dependency risks
+
+RESPONSE AREAS
+- RR response required
+- LogicGate validation required
+- Joint response required
+
+For every field store:
+
+- Value
+- Source document
+- Source section
+- Confidence
+- Explicit or Inferred
+
+Important:
+
+The model must support incremental enrichment.
+
+Example:
+
+Discovery Pack
+→ populates 40% of the model
+
+RFP
+→ populates another 40%
+
+Security Questionnaire
+→ populates another 10%
+
+Workshop Notes
+→ populate remaining gaps
+
+The objective is to create a single source of truth.
+
+Do not generate proposals.
+Do not generate responses.
+Do not generate decks.
+
+Build the intelligence model first.
+
+Once complete, all future outputs should consume this model rather than re-analysing documents.

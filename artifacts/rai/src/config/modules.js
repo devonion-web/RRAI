@@ -1,5 +1,14 @@
 export const MODULES = [
   {
+    id: 'oi',
+    title: 'Opportunity Intelligence',
+    description:
+      'Build and maintain a living intelligence model for every opportunity. Enrich from RFPs, discovery packs, workshop notes, BRDs and security questionnaires.',
+    status: 'active',
+    icon: '🧠',
+    category: 'Intelligence',
+  },
+  {
     id: 'logicgate',
     title: 'LogicGate Specialist',
     description:
