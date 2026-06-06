@@ -14,6 +14,8 @@ export interface ExtractionJob {
   progress: JobProgress;
   health: Record<string, unknown> | null;
   requirements: Record<string, unknown>[];
+  rfpUnderstanding: Record<string, unknown> | null;
+  documentClassifications: Record<string, string>[];
   mappingRows: Record<string, unknown>[];
   mappingSummary: Record<string, unknown> | null;
   error: string | null;
@@ -37,6 +39,8 @@ export function createJob(): ExtractionJob {
     progress: { done: 0, total: 1, stage: "Starting…" },
     health: null,
     requirements: [],
+    rfpUnderstanding: null,
+    documentClassifications: [],
     mappingRows: [],
     mappingSummary: null,
     error: null,
