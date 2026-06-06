@@ -1,10 +1,16 @@
 import { randomUUID } from "crypto";
+import type { ParsedRow } from "./xlsxParser";
 
 export interface DocEntry {
   id: string;
   name: string;
-  text: string;
+  // Text documents (PDF, Word, pasted text)
+  text?: string;
   charCount: number;
+  // Structured documents (Excel/spreadsheets)
+  structuredRows?: ParsedRow[];
+  rowCount?: number;
+  fileType: "text" | "excel";
   storedAt: number;
 }
 
@@ -18,12 +24,35 @@ setInterval(() => {
   }
 }, 30 * 60 * 1000);
 
-export function storeDoc(name: string, text: string): DocEntry {
+export function storeTextDoc(name: string, text: string): DocEntry {
   const id = randomUUID();
-  const entry: DocEntry = { id, name, text, charCount: text.length, storedAt: Date.now() };
+  const entry: DocEntry = {
+    id, name,
+    text: text.trim(),
+    charCount: text.trim().length,
+    fileType: "text",
+    storedAt: Date.now(),
+  };
   STORE.set(id, entry);
   return entry;
 }
+
+export function storeExcelDoc(name: string, rows: ParsedRow[]): DocEntry {
+  const id = randomUUID();
+  const entry: DocEntry = {
+    id, name,
+    charCount: 0,
+    structuredRows: rows,
+    rowCount: rows.length,
+    fileType: "excel",
+    storedAt: Date.now(),
+  };
+  STORE.set(id, entry);
+  return entry;
+}
+
+// Backward-compat alias
+export const storeDoc = storeTextDoc;
 
 export function getDoc(id: string): DocEntry | null {
   const entry = STORE.get(id);
@@ -33,10 +62,7 @@ export function getDoc(id: string): DocEntry | null {
 }
 
 export function getDocs(ids: string[]): DocEntry[] {
-  return ids.flatMap((id) => {
-    const e = getDoc(id);
-    return e ? [e] : [];
-  });
+  return ids.flatMap((id) => { const e = getDoc(id); return e ? [e] : []; });
 }
 
 export function removeDoc(id: string): void {

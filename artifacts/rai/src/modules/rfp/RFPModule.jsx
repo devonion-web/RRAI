@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react'
+import React, { useState, useRef, useEffect } from 'react'
 import {
   Document, Packer, Paragraph, TextRun, AlignmentType, ShadingType,
   Table, TableRow, TableCell, WidthType, BorderStyle, HeadingLevel,
@@ -7,6 +7,7 @@ import { saveAs } from 'file-saver'
 import {
   rfpStoreText,
   rfpExtractRequirements,
+  rfpGetJob,
   rfpClassify,
   rfpGenerateResponses,
   rfpGenerateVendorPack,
@@ -340,6 +341,11 @@ export default function RFPModule() {
   const [expandedRow, setExpandedRow] = useState(null)
   const [filterOwner, setFilterOwner] = useState('All')
   const [filterPriority, setFilterPriority] = useState('All')
+  const [extractProgress, setExtractProgress] = useState(null) // {done, total, stage}
+  const pollRef = useRef(null)
+
+  // Clean up polling interval on unmount
+  useEffect(() => () => { if (pollRef.current) clearInterval(pollRef.current) }, [])
 
   // Merge classified + responses
   const merged = classified.map((c) => {
@@ -383,7 +389,10 @@ export default function RFPModule() {
       const { files: parsed } = await res.json()
       const good = parsed.filter((f) => f.id && !f.error)
       const bad = parsed.filter((f) => f.error || !f.id)
-      if (good.length) setDocuments((prev) => [...prev, ...good.map((f) => ({ id: f.id, name: f.name, charCount: f.charCount }))])
+      if (good.length) setDocuments((prev) => [...prev, ...good.map((f) => ({
+        id: f.id, name: f.name, fileType: f.fileType,
+        charCount: f.charCount, rowCount: f.rowCount,
+      }))])
       if (bad.length) setError(`Could not extract text from: ${bad.map((f) => f.name).join(', ')}`)
     } catch (e) {
       setError(e.message)
@@ -404,21 +413,52 @@ export default function RFPModule() {
     e.stopPropagation()
   }
 
-  // ── Step 1: Extract ─────────────────────────────────────────────────────────
+  // ── Step 1: Extract (job-based, non-blocking) ────────────────────────────────
   async function runExtract() {
     if (!documents.length) return
     setLoading('extract')
     setError(null)
+    setExtractProgress({ done: 0, total: 1, stage: 'Submitting…' })
+    setClassified([])
+    setResponses([])
+    setVendorPack(null)
+    setGapAnalysis(null)
+
     try {
-      const result = await rfpExtractRequirements({ documentIds: documents.map((d) => d.id), vendorContext, company })
-      setHealth(result.health || null)
-      setRequirements(result.requirements || [])
-      setClassified([])
-      setResponses([])
-      setVendorPack(null)
-      setGapAnalysis(null)
-    } catch (e) { setError(e.message) }
-    finally { setLoading(null) }
+      const { jobId } = await rfpExtractRequirements({
+        documentIds: documents.map((d) => d.id), vendorContext, company,
+      })
+
+      // Poll every 2s until done or error
+      if (pollRef.current) clearInterval(pollRef.current)
+      pollRef.current = setInterval(async () => {
+        try {
+          const job = await rfpGetJob(jobId)
+          setExtractProgress(job.progress)
+
+          if (job.status === 'done') {
+            clearInterval(pollRef.current)
+            pollRef.current = null
+            setHealth(job.health || null)
+            setRequirements(job.requirements || [])
+            setLoading(null)
+            setExtractProgress(null)
+          } else if (job.status === 'error') {
+            clearInterval(pollRef.current)
+            pollRef.current = null
+            setError(job.error || 'Extraction failed')
+            setLoading(null)
+            setExtractProgress(null)
+          }
+        } catch {
+          // Network hiccup during poll — keep retrying
+        }
+      }, 2000)
+    } catch (e) {
+      setError(e.message)
+      setLoading(null)
+      setExtractProgress(null)
+    }
   }
 
   // ── Step 2: Classify ────────────────────────────────────────────────────────
@@ -605,8 +645,11 @@ export default function RFPModule() {
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 16 }}>
               {documents.map((d) => (
                 <div key={d.id} style={{ display: 'flex', alignItems: 'center', gap: 6, background: BLUE_LIGHT, borderRadius: 20, padding: '4px 12px', fontSize: 12 }}>
+                  <span style={{ fontSize: 13 }}>{d.fileType === 'excel' ? '📊' : '📄'}</span>
                   <span>{d.name}</span>
-                  {d.charCount && <span style={{ color: MUTED, fontSize: 11 }}>({Math.round(d.charCount / 1000)}k chars)</span>}
+                  {d.fileType === 'excel' && d.rowCount
+                    ? <span style={{ color: MUTED, fontSize: 11 }}>({d.rowCount} rows)</span>
+                    : d.charCount ? <span style={{ color: MUTED, fontSize: 11 }}>({Math.round(d.charCount / 1000)}k chars)</span> : null}
                   <button onClick={() => { rfpRemoveDocument(d.id); setDocuments((prev) => prev.filter((x) => x.id !== d.id)) }}
                     style={{ background: 'none', border: 'none', cursor: 'pointer', color: MUTED, fontSize: 14, lineHeight: 1, padding: 0 }}>×</button>
                 </div>
@@ -614,10 +657,30 @@ export default function RFPModule() {
             </div>
           )}
 
+          {/* Progress bar — shown while extraction job is running */}
+          {loading === 'extract' && extractProgress && (
+            <div style={{ marginBottom: 14 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                <span style={{ fontSize: 12, color: MUTED }}>{extractProgress.stage}</span>
+                <span style={{ fontSize: 11, color: MUTED, fontVariantNumeric: 'tabular-nums' }}>
+                  {extractProgress.done}/{extractProgress.total}
+                </span>
+              </div>
+              <div style={{ height: 6, background: BORDER, borderRadius: 3, overflow: 'hidden' }}>
+                <div style={{
+                  height: '100%', background: NAVY, borderRadius: 3,
+                  width: `${extractProgress.total > 0 ? Math.round(extractProgress.done / extractProgress.total * 100) : 5}%`,
+                  transition: 'width 0.4s ease',
+                  minWidth: 12,
+                }} />
+              </div>
+            </div>
+          )}
+
           <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
             <button
               onClick={runExtract}
-              disabled={!documents.length || loading === 'extract'}
+              disabled={!documents.length || !!loading}
               style={{
                 background: documents.length && !loading ? NAVY : '#CBD5E1',
                 color: WHITE, border: 'none', borderRadius: 6, padding: '9px 20px',

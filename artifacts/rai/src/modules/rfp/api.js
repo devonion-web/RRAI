@@ -14,14 +14,25 @@ async function post(path, body) {
   return res.json()
 }
 
-// Store pasted/typed text on the server; returns { id, name, charCount }
+// Store pasted/typed text on the server; returns { id, name, charCount, fileType }
 export async function rfpStoreText({ name, text }) {
   return post('/store-text', { name, text })
 }
 
-// documentIds: string[] of server-side UUIDs — no raw text sent from browser
+// Fire the extraction job — returns { jobId } immediately (background processing)
 export async function rfpExtractRequirements({ documentIds, vendorContext, company }) {
   return post('/extract-requirements', { documentIds, vendorContext, company })
+}
+
+// Poll job status — returns { jobId, status, progress, health, requirements, error }
+export async function rfpGetJob(jobId) {
+  const res = await fetch(`${BASE}/jobs/${jobId}`)
+  if (!res.ok) {
+    let msg = `Poll failed: ${res.status}`
+    try { const j = await res.json(); msg = j.error || msg } catch {}
+    throw new Error(msg)
+  }
+  return res.json()
 }
 
 export async function rfpClassify({ requirements, vendorContext, company }) {

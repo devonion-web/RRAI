@@ -1,12 +1,16 @@
-import { Router } from "express";
+import { Router, type Request } from "express";
 import multer from "multer";
 import mammoth from "mammoth";
 import pdfParse from "pdf-parse";
-import * as XLSX from "xlsx";
-import { callClaudeJSONStreamed } from "../lib/anthropic";
-import { storeDoc, getDocs, removeDoc, storeSize } from "../lib/docStore";
+import { callClaudeJSON } from "../lib/anthropic";
+import { storeTextDoc, storeExcelDoc, getDocs, removeDoc, storeSize } from "../lib/docStore";
+import { createJob, getJob, updateJob, updateProgress, appendRequirements } from "../lib/jobStore";
+import { parseExcelForRequirements, batchRows, chunkText, type ParsedRow } from "../lib/xlsxParser";
+import type { Logger } from "pino";
 
-// 50 MB per file — sufficient for large enterprise RFPs / security questionnaires
+const MAX_CHARS_PER_CHUNK = 18_000;   // hard ceiling per Claude call
+const ROWS_PER_BATCH      = 30;       // Excel rows per Claude call
+
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 50 * 1024 * 1024, files: 20 },
@@ -14,6 +18,7 @@ const upload = multer({
 
 const router = Router();
 
+// ── Shared prompts ────────────────────────────────────────────────────────────
 const RR_CONTEXT = `Risk Rising is a specialist GRC implementation and advisory consultancy partnering with LogicGate (Risk Cloud) and Panorays (third-party cyber / supply chain risk). Risk Rising owns all implementation, configuration, project delivery, training, UAT, hypercare, support, managed service and commercial aspects. Software vendors own functional platform capability, technical architecture, security, hosting, product roadmap and platform SLAs.
 
 Risk Rising delivery capabilities: GRC programme design and advisory; LogicGate Risk Cloud implementation and configuration; Panorays implementation; agile and waterfall project delivery; stakeholder workshops; app configuration and workflow design; system integration and data migration support; user training and train-the-trainer; UAT support and go-live hypercare; post-go-live managed service and ongoing optimisation; commercial negotiation support.
@@ -35,56 +40,334 @@ const CATEGORIES = [
   "Case studies / references","Company information","Other / unknown",
 ];
 
-// ── GET /api/rfp/health ──────────────────────────────────────────────────────
-router.get("/rfp/health", (req, res) => {
+// ── Claude helpers ────────────────────────────────────────────────────────────
+
+function padId(n: number): string {
+  return `REQ-${String(n).padStart(3, "0")}`;
+}
+
+/**
+ * Extract requirements from a prose text chunk.
+ * Returns an empty array on any parse failure so the job continues.
+ */
+async function claudeExtractFromTextChunk(
+  text: string,
+  docName: string,
+  vendorContext: string,
+  company: string,
+  startIndex: number,
+  log: Logger
+): Promise<Record<string, unknown>[]> {
+  const system = `You are an expert GRC procurement analyst. Extract every identifiable question or requirement from the following document text chunk.
+${RR_CONTEXT}
+
+Rules:
+- Extract EVERY distinct question or requirement, even brief ones.
+- Do not merge multiple requirements into one.
+- Ignore table of contents, headers, page numbers, footers.
+- If the chunk contains no requirements, return an empty array.
+
+Output ONLY valid JSON — no prose, no code fences:
+{
+  "requirements": [
+    {
+      "requirement_id": "REQ-NNN",
+      "source_document": "<filename>",
+      "original_question": "<verbatim or closely paraphrased>",
+      "category": "<category from list>",
+      "mandatory_optional": "<Mandatory|Optional|Unknown>"
+    }
+  ]
+}
+Categories: ${CATEGORIES.join(", ")}.`;
+
+  const user = `Vendor context: ${vendorContext}\nCompany: ${company}\nDocument: ${docName}\n\n${text}`;
+
+  try {
+    const result = await callClaudeJSON<{ requirements: Record<string, unknown>[] }>(
+      system, user, { maxTokens: 4000 }
+    );
+    const reqs = Array.isArray(result?.requirements) ? result.requirements : [];
+    return reqs.map((r, i) => ({
+      ...r,
+      requirement_id: padId(startIndex + i + 1),
+      source_document: docName,
+    }));
+  } catch (err) {
+    log.warn({ err, docName }, "claudeExtractFromTextChunk failed — skipping chunk");
+    return [];
+  }
+}
+
+/**
+ * Enrich / classify a batch of pre-parsed Excel rows.
+ * Rows already have requirement text + optional category/priority from spreadsheet.
+ */
+async function claudeEnrichExcelBatch(
+  rows: ParsedRow[],
+  docName: string,
+  vendorContext: string,
+  company: string,
+  startIndex: number,
+  log: Logger
+): Promise<Record<string, unknown>[]> {
+  const system = `You are an expert GRC procurement analyst. Given these structured requirement rows extracted from a spreadsheet, produce normalized requirement objects.
+${RR_CONTEXT}
+
+For each row:
+- Use the existing requirement text verbatim as original_question.
+- Use the provided category if present and sensible; otherwise infer from the list.
+- Use the provided priority to set mandatory_optional (Mandatory / Optional / Unknown).
+- Do NOT invent or hallucinate requirements not in the input rows.
+
+Output ONLY valid JSON — no prose, no code fences:
+{
+  "requirements": [
+    {
+      "requirement_id": "REQ-NNN",
+      "source_document": "<filename>",
+      "original_question": "<verbatim requirement text>",
+      "category": "<category from list>",
+      "mandatory_optional": "<Mandatory|Optional|Unknown>"
+    }
+  ]
+}
+Categories: ${CATEGORIES.join(", ")}.`;
+
+  const rowsSummary = rows.map((r, i) => ({
+    index: startIndex + i + 1,
+    id: r.id,
+    requirement: r.requirement,
+    category: r.category,
+    subcategory: r.subcategory,
+    priority: r.priority,
+  }));
+
+  const user = `Vendor context: ${vendorContext}\nCompany: ${company}\nDocument: ${docName}\n\nRows:\n${JSON.stringify(rowsSummary, null, 2)}`;
+
+  try {
+    const result = await callClaudeJSON<{ requirements: Record<string, unknown>[] }>(
+      system, user, { maxTokens: 4000 }
+    );
+    const reqs = Array.isArray(result?.requirements) ? result.requirements : [];
+    return reqs.map((r, i) => ({
+      ...r,
+      requirement_id: padId(startIndex + i + 1),
+      source_document: docName,
+    }));
+  } catch (err) {
+    log.warn({ err, docName }, "claudeEnrichExcelBatch failed — generating fallback rows");
+    // Fallback: create plain requirement objects from rows without Claude enrichment
+    return rows.map((r, i) => ({
+      requirement_id: padId(startIndex + i + 1),
+      source_document: docName,
+      original_question: r.requirement,
+      category: r.category ?? "Other / unknown",
+      mandatory_optional: r.priority?.toLowerCase().includes("mand") ? "Mandatory" : "Unknown",
+    }));
+  }
+}
+
+/**
+ * Generate the health/meta summary after all requirements are extracted.
+ */
+async function claudeGenerateHealth(
+  requirements: Record<string, unknown>[],
+  company: string,
+  vendorContext: string,
+  log: Logger
+): Promise<Record<string, unknown>> {
+  const system = `You are an expert GRC procurement analyst at Risk Rising. Based on the extracted requirements, produce a health/fit assessment.
+${RR_CONTEXT}
+
+Output ONLY valid JSON — no prose, no code fences:
+{
+  "company": "<name or Unknown>",
+  "rfp_type": "<RFI|RFP|Security questionnaire|Implementation questionnaire|Procurement pack|Mixed>",
+  "response_deadline": null,
+  "total_requirements": <integer>,
+  "logicgate_fit": "<High|Medium|Low|Unknown>",
+  "panorays_fit": "<High|Medium|Low|Unknown>",
+  "rr_delivery_fit": "<High|Medium|Low|Unknown>",
+  "managed_service_potential": "<High|Medium|Low|Unknown>",
+  "commercial_complexity": "<High|Medium|Low|Unknown>",
+  "key_risks": ["<risk>"],
+  "recommended_action": "<Proceed|Proceed with vendor input|Clarify|Do not proceed>",
+  "recommended_action_rationale": "<one sentence>"
+}`;
+
+  const sample = requirements.slice(0, 60).map((r) => ({
+    category: r.category,
+    mandatory_optional: r.mandatory_optional,
+    original_question: typeof r.original_question === "string"
+      ? r.original_question.slice(0, 120) : "",
+  }));
+
+  const user = `Company: ${company}\nVendor context: ${vendorContext}\nTotal requirements extracted: ${requirements.length}\n\nSample requirements:\n${JSON.stringify(sample, null, 2)}`;
+
+  try {
+    return await callClaudeJSON<Record<string, unknown>>(system, user, { maxTokens: 1500 });
+  } catch (err) {
+    log.warn({ err }, "claudeGenerateHealth failed — returning minimal health");
+    return {
+      company,
+      rfp_type: "Unknown",
+      response_deadline: null,
+      total_requirements: requirements.length,
+      logicgate_fit: "Unknown",
+      panorays_fit: "Unknown",
+      rr_delivery_fit: "Unknown",
+      managed_service_potential: "Unknown",
+      commercial_complexity: "Unknown",
+      key_risks: [],
+      recommended_action: "Clarify",
+      recommended_action_rationale: "Health summary could not be generated automatically.",
+    };
+  }
+}
+
+// ── Background job runner ─────────────────────────────────────────────────────
+
+async function runExtractionJob(
+  jobId: string,
+  documentIds: string[],
+  vendorContext: string,
+  company: string,
+  log: Logger
+): Promise<void> {
+  try {
+    updateJob(jobId, { status: "running" });
+
+    const docs = getDocs(documentIds);
+    if (docs.length === 0) {
+      updateJob(jobId, { status: "error", error: "Documents not found or expired. Please re-upload." });
+      return;
+    }
+
+    // Build the step list up-front so we know total
+    type Step =
+      | { type: "text"; text: string; docName: string }
+      | { type: "excel"; rows: ParsedRow[]; docName: string };
+
+    const steps: Step[] = [];
+
+    for (const doc of docs) {
+      if (doc.fileType === "excel" && doc.structuredRows && doc.structuredRows.length > 0) {
+        const batches = batchRows(doc.structuredRows, ROWS_PER_BATCH);
+        batches.forEach((b) => steps.push({ type: "excel", rows: b, docName: doc.name }));
+      } else if (doc.text) {
+        const chunks = chunkText(doc.text, MAX_CHARS_PER_CHUNK);
+        chunks.forEach((c) => steps.push({ type: "text", text: c, docName: doc.name }));
+      }
+    }
+
+    const totalSteps = steps.length + 1; // +1 for health generation
+    let reqCounter = 0;
+
+    log.info({ jobId, stepCount: steps.length, docCount: docs.length }, "extraction job started");
+
+    for (const [i, step] of steps.entries()) {
+      const stageLabel = steps.length === 1
+        ? `Processing ${step.docName}…`
+        : `${step.docName} — batch ${i + 1} of ${steps.length}`;
+
+      updateProgress(jobId, i, totalSteps, stageLabel);
+
+      let reqs: Record<string, unknown>[];
+
+      if (step.type === "excel") {
+        reqs = await claudeEnrichExcelBatch(step.rows, step.docName, vendorContext, company, reqCounter, log);
+      } else {
+        reqs = await claudeExtractFromTextChunk(step.text, step.docName, vendorContext, company, reqCounter, log);
+      }
+
+      reqCounter += reqs.length;
+      appendRequirements(jobId, reqs);
+      log.info({ jobId, step: i + 1, totalSteps, reqsThisStep: reqs.length, totalReqs: reqCounter }, "step complete");
+    }
+
+    // Final step: health
+    updateProgress(jobId, steps.length, totalSteps, "Generating assessment…");
+    const job = getJob(jobId)!;
+    const health = await claudeGenerateHealth(job.requirements, company, vendorContext, log);
+
+    updateJob(jobId, {
+      status: "done",
+      health,
+      progress: { done: totalSteps, total: totalSteps, stage: `Done — ${reqCounter} requirements extracted` },
+    });
+
+    log.info({ jobId, requirementCount: reqCounter }, "extraction job complete");
+  } catch (err) {
+    log.error({ jobId, err }, "extraction job crashed");
+    updateJob(jobId, { status: "error", error: (err as Error).message });
+  }
+}
+
+// ── Routes ────────────────────────────────────────────────────────────────────
+
+router.get("/rfp/health", (_req, res) => {
   res.json({ status: "ok", module: "rfp", storedDocs: storeSize() });
 });
 
 // ── POST /api/rfp/upload-files ───────────────────────────────────────────────
-// Accepts multipart file uploads. Extracts text server-side, stores it with a
-// UUID and returns ONLY metadata (id, name, charCount). Raw text never travels
-// back to the browser — subsequent analysis calls reference docs by ID only.
 router.post("/rfp/upload-files", upload.array("files", 20), async (req, res): Promise<void> => {
   const files = req.files as Express.Multer.File[] | undefined;
   if (!files || files.length === 0) {
     res.status(400).json({ error: "No files uploaded" }); return;
   }
 
-  req.log.info({ count: files.length, totalBytes: files.reduce((s, f) => s + f.size, 0) }, "rfp upload-files: processing");
+  req.log.info(
+    { count: files.length, totalBytes: files.reduce((s, f) => s + f.size, 0) },
+    "rfp upload-files: processing"
+  );
 
-  const results: Array<{ id?: string; name: string; charCount?: number; error?: string }> = [];
+  const results: Array<{
+    id?: string; name: string; fileType?: string;
+    charCount?: number; rowCount?: number; error?: string;
+  }> = [];
 
   for (const file of files) {
     const name = file.originalname;
     const ext = name.split(".").pop()?.toLowerCase() ?? "";
     try {
-      let text = "";
-      if (ext === "docx" || ext === "doc") {
-        const result = await mammoth.extractRawText({ buffer: file.buffer });
-        text = result.value;
-      } else if (ext === "pdf") {
-        const result = await pdfParse(file.buffer);
-        text = result.text;
-      } else if (ext === "xlsx" || ext === "xls") {
-        const wb = XLSX.read(file.buffer, { type: "buffer" });
-        const parts: string[] = [];
-        for (const sheetName of wb.SheetNames) {
-          const ws = wb.Sheets[sheetName];
-          parts.push(`=== Sheet: ${sheetName} ===`);
-          parts.push(XLSX.utils.sheet_to_csv(ws));
+      if (ext === "xlsx" || ext === "xls") {
+        // Smart structural parse — no CSV dump
+        const parsed = parseExcelForRequirements(file.buffer);
+        req.log.info(
+          { name, sheets: parsed.sheets, usefulRows: parsed.usefulRows, totalRawRows: parsed.totalRawRows },
+          "rfp: excel parsed"
+        );
+        if (parsed.rows.length === 0) {
+          results.push({ name, error: "No requirement rows detected. Check column headers include keywords like 'requirement', 'question', or 'description'." });
+          continue;
         }
-        text = parts.join("\n\n");
-      } else if (ext === "csv") {
-        const wb = XLSX.read(file.buffer, { type: "buffer" });
-        text = XLSX.utils.sheet_to_csv(wb.Sheets[wb.SheetNames[0]]);
+        const entry = storeExcelDoc(name, parsed.rows);
+        req.log.info({ id: entry.id, name, rowCount: entry.rowCount }, "rfp: stored excel doc");
+        results.push({ id: entry.id, name, fileType: "excel", rowCount: entry.rowCount });
       } else {
-        text = file.buffer.toString("utf-8");
+        // Text extraction for PDF, Word, plain text
+        let text = "";
+        if (ext === "docx" || ext === "doc") {
+          const result = await mammoth.extractRawText({ buffer: file.buffer });
+          text = result.value;
+        } else if (ext === "pdf") {
+          const result = await pdfParse(file.buffer);
+          text = result.text;
+        } else {
+          text = file.buffer.toString("utf-8");
+        }
+        const trimmed = text.trim();
+        if (!trimmed) {
+          results.push({ name, error: "No text could be extracted from this file." });
+          continue;
+        }
+        const entry = storeTextDoc(name, trimmed);
+        req.log.info({ id: entry.id, name, charCount: entry.charCount }, "rfp: stored text doc");
+        results.push({ id: entry.id, name, fileType: "text", charCount: entry.charCount });
       }
-      const entry = storeDoc(name, text.trim());
-      req.log.info({ id: entry.id, name, charCount: entry.charCount, bytes: file.size }, "rfp: stored doc");
-      results.push({ id: entry.id, name: entry.name, charCount: entry.charCount });
     } catch (err) {
-      req.log.warn({ name, err }, "rfp: failed to extract file");
+      req.log.warn({ name, err }, "rfp: failed to process file");
       results.push({ name, error: (err as Error).message });
     }
   }
@@ -93,16 +376,15 @@ router.post("/rfp/upload-files", upload.array("files", 20), async (req, res): Pr
 });
 
 // ── POST /api/rfp/store-text ─────────────────────────────────────────────────
-// Accepts pasted/typed text. Stores it server-side and returns metadata only.
 router.post("/rfp/store-text", async (req, res): Promise<void> => {
   const { name, text } = req.body as Record<string, unknown>;
   if (typeof text !== "string" || !text.trim()) {
     res.status(400).json({ error: "text is required" }); return;
   }
   const safeName = typeof name === "string" && name.trim() ? name.trim() : "Pasted document";
-  const entry = storeDoc(safeName, text.trim());
+  const entry = storeTextDoc(safeName, text.trim());
   req.log.info({ id: entry.id, name: safeName, charCount: entry.charCount }, "rfp: stored pasted text");
-  res.json({ id: entry.id, name: entry.name, charCount: entry.charCount });
+  res.json({ id: entry.id, name: entry.name, charCount: entry.charCount, fileType: "text" });
 });
 
 // ── DELETE /api/rfp/documents/:id ────────────────────────────────────────────
@@ -111,73 +393,44 @@ router.delete("/rfp/documents/:id", (req, res) => {
   res.json({ ok: true });
 });
 
-// ── POST /api/rfp/extract-requirements ──────────────────────────────────────
-// Accepts documentIds (array of server-side UUIDs). Looks up stored text,
-// never receiving raw document content from the browser.
-router.post("/rfp/extract-requirements", async (req, res): Promise<void> => {
+// ── POST /api/rfp/extract-requirements ───────────────────────────────────────
+// Returns {jobId} immediately. Processing runs in the background.
+// Poll GET /api/rfp/jobs/:id for progress and results.
+router.post("/rfp/extract-requirements", (req: Request, res): void => {
   const { documentIds, vendorContext, company } = req.body as Record<string, unknown>;
   if (!Array.isArray(documentIds) || documentIds.length === 0) {
     res.status(400).json({ error: "documentIds array is required" }); return;
   }
 
-  const docs = getDocs(documentIds as string[]);
-  if (docs.length === 0) {
-    res.status(400).json({ error: "No documents found for the provided IDs. They may have expired (4-hour TTL) — please re-upload." }); return;
+  const job = createJob();
+  req.log.info({ jobId: job.id, documentIds, company }, "rfp: extraction job created");
+
+  // Fire-and-forget — runs after response is sent
+  void runExtractionJob(
+    job.id,
+    documentIds as string[],
+    String(vendorContext ?? "Unknown"),
+    String(company ?? "Unknown"),
+    req.log
+  );
+
+  res.json({ jobId: job.id });
+});
+
+// ── GET /api/rfp/jobs/:id ─────────────────────────────────────────────────────
+router.get("/rfp/jobs/:id", (req, res): void => {
+  const job = getJob(req.params.id);
+  if (!job) {
+    res.status(404).json({ error: "Job not found or expired" }); return;
   }
-
-  const totalChars = docs.reduce((s, d) => s + d.charCount, 0);
-  req.log.info({ docCount: docs.length, totalChars, company }, "rfp extract-requirements: start");
-
-  // Cap at 120k chars (≈ 90k tokens) — Claude can handle large contexts
-  const combinedText = docs
-    .map((d) => `=== Document: ${d.name} ===\n${d.text}`)
-    .join("\n\n")
-    .slice(0, 120000);
-
-  const system = `You are an expert GRC procurement analyst at Risk Rising. Extract every identifiable question, requirement or response item from the uploaded RFP/RFI documents.
-${RR_CONTEXT}
-
-Output ONLY valid JSON. No prose, no code fences.
-{
-  "health": {
-    "company": "<customer name or Unknown>",
-    "rfp_type": "<RFI|RFP|Security questionnaire|Implementation questionnaire|Procurement pack|Mixed>",
-    "response_deadline": "<date string or null>",
-    "total_requirements": <integer>,
-    "logicgate_fit": "<High|Medium|Low|Unknown>",
-    "panorays_fit": "<High|Medium|Low|Unknown>",
-    "rr_delivery_fit": "<High|Medium|Low|Unknown>",
-    "managed_service_potential": "<High|Medium|Low|Unknown>",
-    "commercial_complexity": "<High|Medium|Low|Unknown>",
-    "key_risks": ["<risk>"],
-    "recommended_action": "<Proceed|Proceed with vendor input|Clarify|Do not proceed>",
-    "recommended_action_rationale": "<one sentence>"
-  },
-  "requirements": [
-    {
-      "requirement_id": "REQ-001",
-      "source_document": "<filename>",
-      "original_question": "<verbatim or closely paraphrased requirement>",
-      "category": "<category>",
-      "mandatory_optional": "<Mandatory|Optional|Unknown>"
-    }
-  ]
-}
-Categories: ${CATEGORIES.join(", ")}.
-Extract EVERY distinct question. Do not merge. Aim for completeness over brevity.`;
-
-  const user = `Vendor context: ${String(vendorContext || "Unknown")}\nCompany: ${String(company || "Unknown")}\n\nDocuments:\n${combinedText}`;
-
-  try {
-    const result = await callClaudeJSONStreamed<{ health: Record<string, unknown>; requirements: Record<string, unknown>[] }>(
-      system, user, res, { maxTokens: 8000 }
-    );
-    req.log.info({ company, requirementCount: result.requirements?.length, totalChars }, "rfp extract-requirements completed");
-    res.json(result);
-  } catch (err) {
-    req.log.error({ err }, "rfp extract-requirements failed");
-    res.status(500).json({ error: (err as Error).message });
-  }
+  res.json({
+    jobId: job.id,
+    status: job.status,
+    progress: job.progress,
+    health: job.health,
+    requirements: job.requirements,
+    error: job.error,
+  });
 });
 
 // ── POST /api/rfp/classify ───────────────────────────────────────────────────
@@ -210,14 +463,27 @@ Output ONLY valid JSON. No prose, no code fences.
 }
 Classify EVERY item. Return SAME requirement_id values. If unsure, use Unknown.`;
 
-  const user = `Vendor context: ${String(vendorContext || "Unknown")}\nCompany: ${String(company || "Unknown")}\n\nRequirements:\n${JSON.stringify(requirements, null, 2).slice(0, 80000)}`;
+  // Classify in batches of 50 to stay within token limits
+  const allClassified: Record<string, unknown>[] = [];
+  const reqs = requirements as Record<string, unknown>[];
+  const batches = batchRows(reqs, 50);
 
   try {
-    const result = await callClaudeJSONStreamed<{ requirements: Record<string, unknown>[]; ownership_summary: Record<string, number> }>(
-      system, user, res, { maxTokens: 8000 }
-    );
-    req.log.info({ company, count: result.requirements?.length }, "rfp classify completed");
-    res.json(result);
+    for (const batch of batches) {
+      const user = `Vendor context: ${String(vendorContext ?? "Unknown")}\nCompany: ${String(company ?? "Unknown")}\n\nRequirements:\n${JSON.stringify(batch, null, 2)}`;
+      const result = await callClaudeJSON<{ requirements: Record<string, unknown>[] }>(system, user, { maxTokens: 6000 });
+      if (Array.isArray(result?.requirements)) allClassified.push(...result.requirements);
+    }
+
+    // Compute ownership summary across all batches
+    const ownership_summary = allClassified.reduce<Record<string, number>>((acc, r) => {
+      const key = `${String(r.owner ?? "unknown").toLowerCase()}_count`;
+      acc[key] = (acc[key] ?? 0) + 1;
+      return acc;
+    }, {});
+
+    req.log.info({ company, count: allClassified.length }, "rfp classify completed");
+    res.json({ requirements: allClassified, ownership_summary });
   } catch (err) {
     req.log.error({ err }, "rfp classify failed");
     res.status(500).json({ error: (err as Error).message });
@@ -251,14 +517,18 @@ Output ONLY valid JSON. No prose, no code fences.
   ]
 }`;
 
-  const user = `Company: ${String(company || "Unknown")}\nVendor context: ${String(vendorContext || "Unknown")}\n\nRequirements:\n${JSON.stringify(requirements, null, 2).slice(0, 80000)}`;
+  const allResponses: Record<string, unknown>[] = [];
+  const reqs = requirements as Record<string, unknown>[];
+  const batches = batchRows(reqs, 40);
 
   try {
-    const result = await callClaudeJSONStreamed<{ responses: Record<string, unknown>[] }>(
-      system, user, res, { maxTokens: 8000 }
-    );
-    req.log.info({ company, count: result.responses?.length }, "rfp generate-responses completed");
-    res.json(result);
+    for (const batch of batches) {
+      const user = `Company: ${String(company ?? "Unknown")}\nVendor context: ${String(vendorContext ?? "Unknown")}\n\nRequirements:\n${JSON.stringify(batch, null, 2)}`;
+      const result = await callClaudeJSON<{ responses: Record<string, unknown>[] }>(system, user, { maxTokens: 5000 });
+      if (Array.isArray(result?.responses)) allResponses.push(...result.responses);
+    }
+    req.log.info({ company, count: allResponses.length }, "rfp generate-responses completed");
+    res.json({ responses: allResponses });
   } catch (err) {
     req.log.error({ err }, "rfp generate-responses failed");
     res.status(500).json({ error: (err as Error).message });
@@ -288,11 +558,20 @@ Output ONLY valid JSON. No prose, no code fences.
     (r) => r.owner === "LogicGate" || r.owner === "Panorays" || r.owner === "Joint"
   );
   const toProcess = vendorItems.length > 0 ? vendorItems : (requirements as Array<Record<string, unknown>>);
-  const user = `Company: ${String(company || "Unknown")}\nVendor context: ${String(vendorContext || "Unknown")}\n\nRequirements needing vendor input:\n${JSON.stringify(toProcess, null, 2).slice(0, 80000)}`;
+  // Summarise each requirement to avoid huge payloads
+  const summary = toProcess.slice(0, 100).map((r) => ({
+    requirement_id: r.requirement_id,
+    category: r.category,
+    owner: r.owner,
+    original_question: typeof r.original_question === "string" ? r.original_question.slice(0, 200) : "",
+    vendor_prompt: r.vendor_prompt,
+  }));
+
+  const user = `Company: ${String(company ?? "Unknown")}\nVendor context: ${String(vendorContext ?? "Unknown")}\n\nRequirements needing vendor input:\n${JSON.stringify(summary, null, 2)}`;
 
   try {
-    const result = await callClaudeJSONStreamed<{ logicgate_pack: string | null; panorays_pack: string | null; summary: string }>(
-      system, user, res, { maxTokens: 6000 }
+    const result = await callClaudeJSON<{ logicgate_pack: string | null; panorays_pack: string | null; summary: string }>(
+      system, user, { maxTokens: 6000 }
     );
     req.log.info({ company }, "rfp generate-vendor-pack completed");
     res.json(result);
@@ -325,12 +604,19 @@ Output ONLY valid JSON. No prose, no code fences.
   "summary": "<2-3 sentence overall summary>"
 }`;
 
-  const user = `Company: ${String(company || "Unknown")}\nVendor context: ${String(vendorContext || "Unknown")}\n\nFull requirement set:\n${JSON.stringify(requirements, null, 2).slice(0, 80000)}`;
+  // Summarise to avoid huge payloads
+  const summary = (requirements as Record<string, unknown>[]).slice(0, 120).map((r) => ({
+    requirement_id: r.requirement_id,
+    category: r.category,
+    owner: r.owner,
+    mandatory_optional: r.mandatory_optional,
+    original_question: typeof r.original_question === "string" ? r.original_question.slice(0, 150) : "",
+  }));
+
+  const user = `Company: ${String(company ?? "Unknown")}\nVendor context: ${String(vendorContext ?? "Unknown")}\n\nRequirements:\n${JSON.stringify(summary, null, 2)}`;
 
   try {
-    const result = await callClaudeJSONStreamed<Record<string, unknown>>(
-      system, user, res, { maxTokens: 5000 }
-    );
+    const result = await callClaudeJSON<Record<string, unknown>>(system, user, { maxTokens: 5000 });
     req.log.info({ company }, "rfp generate-gap-analysis completed");
     res.json(result);
   } catch (err) {
