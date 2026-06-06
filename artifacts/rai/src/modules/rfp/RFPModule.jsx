@@ -319,6 +319,8 @@ export default function RFPModule() {
   const [company, setCompany] = useState('')
   const [vendorContext, setVendorContext] = useState('LogicGate')
   const [documents, setDocuments] = useState([]) // [{name, text}]
+  const [pasteText, setPasteText] = useState('')
+  const [pasteName, setPasteName] = useState('RFP Document')
   const fileInputRef = useRef(null)
 
   // Stage data
@@ -330,9 +332,9 @@ export default function RFPModule() {
   const [gapAnalysis, setGapAnalysis] = useState(null)
 
   // UI state
-  const [loading, setLoading] = useState(null) // null | 'extract' | 'classify' | 'respond' | 'vendor' | 'gap'
+  const [loading, setLoading] = useState(null)
   const [error, setError] = useState(null)
-  const [activeTab, setActiveTab] = useState('matrix') // 'matrix' | 'responses' | 'vendor' | 'gap'
+  const [activeTab, setActiveTab] = useState('matrix')
   const [expandedRow, setExpandedRow] = useState(null)
   const [filterOwner, setFilterOwner] = useState('All')
   const [filterPriority, setFilterPriority] = useState('All')
@@ -344,19 +346,42 @@ export default function RFPModule() {
     return { ...base, ...c, ...resp }
   })
 
-  // ── File upload ─────────────────────────────────────────────────────────────
+  // ── Add pasted text as a document ───────────────────────────────────────────
+  function addPastedDoc() {
+    if (!pasteText.trim()) return
+    setDocuments((prev) => [...prev, { name: pasteName || 'RFP Document', text: pasteText.trim() }])
+    setPasteText('')
+    setPasteName('RFP Document')
+  }
+
+  // ── File upload (plain text files only) ─────────────────────────────────────
   async function handleFiles(files) {
     const results = []
+    const skipped = []
     for (const file of files) {
-      const text = await file.text()
-      results.push({ name: file.name, text })
+      const isBinary = /\.(docx|doc|pdf|xlsx|xls|pptx|ppt)$/i.test(file.name)
+      if (isBinary) { skipped.push(file.name); continue }
+      try {
+        const text = await file.text()
+        results.push({ name: file.name, text })
+      } catch { skipped.push(file.name) }
     }
-    setDocuments((prev) => [...prev, ...results])
+    if (results.length) setDocuments((prev) => [...prev, ...results])
+    if (skipped.length) {
+      setError(`Cannot read binary files directly: ${skipped.join(', ')}. Copy the content and paste it into the text box below.`)
+    }
   }
 
   function handleDrop(e) {
     e.preventDefault()
-    handleFiles(Array.from(e.dataTransfer.files))
+    e.stopPropagation()
+    const files = e.dataTransfer?.files
+    if (files && files.length) handleFiles(Array.from(files))
+  }
+
+  function handleDragOver(e) {
+    e.preventDefault()
+    e.stopPropagation()
   }
 
   // ── Step 1: Extract ─────────────────────────────────────────────────────────
@@ -493,19 +518,61 @@ export default function RFPModule() {
             </div>
           </div>
 
-          {/* Upload zone */}
+          {/* Paste zone — primary input */}
+          <div style={{ marginBottom: 16 }}>
+            <div style={{ display: 'flex', gap: 10, alignItems: 'flex-end', marginBottom: 8 }}>
+              <div style={{ flex: 1 }}>
+                <label style={{ fontSize: 12, fontWeight: 600, color: NAVY, display: 'block', marginBottom: 6 }}>
+                  Document name
+                </label>
+                <input
+                  value={pasteName}
+                  onChange={(e) => setPasteName(e.target.value)}
+                  placeholder="e.g. Acme RFP Section 3"
+                  style={{ width: '100%', padding: '7px 12px', border: `1px solid ${BORDER}`, borderRadius: 6, fontSize: 13, boxSizing: 'border-box' }}
+                />
+              </div>
+              <button
+                onClick={addPastedDoc}
+                disabled={!pasteText.trim()}
+                style={{
+                  background: pasteText.trim() ? NAVY : '#CBD5E1', color: WHITE,
+                  border: 'none', borderRadius: 6, padding: '8px 18px', fontSize: 13,
+                  fontWeight: 600, cursor: pasteText.trim() ? 'pointer' : 'not-allowed', whiteSpace: 'nowrap',
+                }}
+              >
+                + Add document
+              </button>
+            </div>
+            <textarea
+              value={pasteText}
+              onChange={(e) => setPasteText(e.target.value)}
+              placeholder="Paste RFP or RFI content here — copy from Word, PDF, email, or any source and paste it in…"
+              rows={6}
+              style={{
+                width: '100%', padding: '10px 12px', border: `1px solid ${BORDER}`, borderRadius: 6,
+                fontSize: 13, fontFamily: 'inherit', resize: 'vertical', boxSizing: 'border-box',
+                lineHeight: 1.5,
+              }}
+            />
+          </div>
+
+          {/* File upload — plain text fallback */}
           <div
             onDrop={handleDrop}
-            onDragOver={(e) => e.preventDefault()}
-            onClick={() => fileInputRef.current?.click()}
+            onDragOver={handleDragOver}
             style={{
-              border: `2px dashed ${BORDER}`, borderRadius: 8, padding: '24px 20px', textAlign: 'center',
-              cursor: 'pointer', marginBottom: documents.length ? 12 : 0, background: '#FAFBFC',
+              border: `1px dashed ${BORDER}`, borderRadius: 6, padding: '10px 16px',
+              marginBottom: documents.length ? 12 : 0, background: '#FAFBFC',
+              display: 'flex', alignItems: 'center', gap: 12,
             }}
           >
-            <div style={{ fontSize: 28, marginBottom: 8 }}>📄</div>
-            <div style={{ fontSize: 13, color: MUTED }}>Drop RFP/RFI files here, or click to browse</div>
-            <div style={{ fontSize: 11, color: BORDER, marginTop: 4 }}>Supports .txt, .csv, .md and any plain text format</div>
+            <span style={{ fontSize: 16 }}>📎</span>
+            <span style={{ fontSize: 12, color: MUTED }}>Or drop a plain text file (.txt, .csv, .md)</span>
+            <button onClick={() => fileInputRef.current?.click()}
+              style={{ marginLeft: 'auto', fontSize: 12, color: NAVY, background: 'none', border: `1px solid ${BORDER}`, borderRadius: 4, padding: '4px 10px', cursor: 'pointer' }}>
+              Browse
+            </button>
             <input ref={fileInputRef} type="file" multiple accept=".txt,.csv,.md,.json,.xml,.html,.rtf" style={{ display: 'none' }}
               onChange={(e) => handleFiles(Array.from(e.target.files))} />
           </div>
