@@ -87,3 +87,32 @@ export async function callClaudeJSONStreamed<T>(
 
   return parseClaudeJSON<T>(fullText);
 }
+
+/**
+ * Stream a Claude generation and return the raw text.
+ * Use when the response is plain prose/markdown, not JSON.
+ * Keeps the HTTP connection alive for long generations.
+ */
+export async function callClaudeTextStreamed(
+  system: string,
+  user: string,
+  _res: import("express").Response,
+  opts: ClaudeOptions = {}
+): Promise<string> {
+  let fullText = "";
+
+  const stream = anthropic.messages.stream({
+    model: MODEL,
+    max_tokens: opts.maxTokens ?? 4096,
+    system,
+    messages: [{ role: "user", content: user }],
+  });
+
+  stream.on("text", (chunk) => {
+    fullText += chunk;
+  });
+
+  await stream.finalMessage();
+
+  return fullText.trim();
+}

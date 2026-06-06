@@ -1,6 +1,6 @@
 import { Router, type IRouter } from "express";
 import multer from "multer";
-import { callClaude, callClaudeJSON, callClaudeJSONStreamed } from "../lib/anthropic";
+import { callClaude, callClaudeJSON, callClaudeJSONStreamed, callClaudeTextStreamed } from "../lib/anthropic";
 import { logger } from "../lib/logger";
 
 const router: IRouter = Router();
@@ -714,28 +714,28 @@ const PROPOSAL_SECTION_DEFS: Record<string, { instruction: string; maxTokens: nu
     instruction: `Write the "Executive Summary" section for this company's LogicGate Risk Cloud proposal.
 3-4 concise paragraphs: who they are, their core challenge, why LogicGate + Risk Rising fits, expected outcome.
 Be specific — no generic filler. Tone: consultative, confident, outcome-focused.
-Return ONLY valid JSON (no code fences): {"content": "<markdown>"}`,
+Return only the section text — no JSON wrapper, no code fences, no headings.`,
   },
   current_challenges: {
     maxTokens: 500,
     instruction: `Write the "Current Challenges" section.
 4-6 bullet points describing the prospect's specific risk, compliance, or operational pain points surfaced in discovery/demo.
 Ground each in the provided evidence. Do not invent challenges not mentioned.
-Return ONLY valid JSON (no code fences): {"content": "<markdown>"}`,
+Return only the section text — no JSON wrapper, no code fences, no headings.`,
   },
   recommended_approach: {
     maxTokens: 600,
     instruction: `Write the "Recommended Approach" section.
 Explain why LogicGate Risk Cloud + Risk Rising is the right fit. Cover: relevant platform strengths, Risk Rising's delivery methodology, how it directly addresses their challenges.
 3-4 concise paragraphs. Tone: expert, evidence-based, not salesy.
-Return ONLY valid JSON (no code fences): {"content": "<markdown>"}`,
+Return only the section text — no JSON wrapper, no code fences, no headings.`,
   },
   delivery_scope: {
     maxTokens: 700,
     instruction: `Write the "Delivery Scope" section.
 Structure: Phase 1 apps (months 1-6), Phase 2 apps (months 7-18), brief timeline summary.
 Use the proposed scope from the solution breakdown. List each app with a one-line rationale.
-Return ONLY valid JSON (no code fences): {"content": "<markdown>"}`,
+Return only the section text — no JSON wrapper, no code fences, no headings.`,
   },
   value_benefits: {
     maxTokens: 600,
@@ -743,21 +743,21 @@ Return ONLY valid JSON (no code fences): {"content": "<markdown>"}`,
 Cover: expected business outcomes (risk reduction, audit efficiency, compliance posture), operational improvements.
 Only cite figures that appear in the provided context — do not invent ROI numbers.
 3-4 paragraphs or a structured bullet list. Tone: outcome-focused, grounded.
-Return ONLY valid JSON (no code fences): {"content": "<markdown>"}`,
+Return only the section text — no JSON wrapper, no code fences, no headings.`,
   },
   assumptions_dependencies: {
     maxTokens: 500,
     instruction: `Write the "Assumptions & Dependencies" section.
 List 5-8 specific assumptions: data availability, stakeholder access, licence model, integration requirements.
 Also note client-side dependencies. Be specific and realistic for this deal.
-Return ONLY valid JSON (no code fences): {"content": "<markdown>"}`,
+Return only the section text — no JSON wrapper, no code fences, no headings.`,
   },
   next_steps: {
     maxTokens: 300,
     instruction: `Write the "Next Steps" section.
 3 clear action items. For each: owner (Risk Rising or client), action, suggested timeframe.
 Tone: direct, professional, momentum-building.
-Return ONLY valid JSON (no code fences): {"content": "<markdown>"}`,
+Return only the section text — no JSON wrapper, no code fences, no headings.`,
   },
 };
 
@@ -783,11 +783,11 @@ router.post("/generate-proposal-section", async (req, res): Promise<void> => {
   ].filter(Boolean);
 
   try {
-    const data = await callClaudeJSONStreamed<{ content: string }>(
+    const content = await callClaudeTextStreamed(
       system, contextParts.join("\n\n"), res, { maxTokens: def.maxTokens }
     );
     req.log.info({ company, sectionId }, "generate-proposal-section completed");
-    res.json(data);
+    res.json({ content });
   } catch (err) {
     req.log.error({ err, sectionId }, "generate-proposal-section failed");
     res.status(500).json({ error: (err as Error).message });
