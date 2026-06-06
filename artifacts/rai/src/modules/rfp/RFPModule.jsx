@@ -354,21 +354,30 @@ export default function RFPModule() {
     setPasteName('RFP Document')
   }
 
-  // ── File upload (plain text files only) ─────────────────────────────────────
+  // ── File upload — server-side parsing for Word/PDF/Excel ────────────────────
+  const [uploading, setUploading] = useState(false)
+
   async function handleFiles(files) {
-    const results = []
-    const skipped = []
-    for (const file of files) {
-      const isBinary = /\.(docx|doc|pdf|xlsx|xls|pptx|ppt)$/i.test(file.name)
-      if (isBinary) { skipped.push(file.name); continue }
-      try {
-        const text = await file.text()
-        results.push({ name: file.name, text })
-      } catch { skipped.push(file.name) }
-    }
-    if (results.length) setDocuments((prev) => [...prev, ...results])
-    if (skipped.length) {
-      setError(`Cannot read binary files directly: ${skipped.join(', ')}. Copy the content and paste it into the text box below.`)
+    if (!files.length) return
+    setUploading(true)
+    setError(null)
+    try {
+      const formData = new FormData()
+      for (const file of files) formData.append('files', file)
+      const res = await fetch('/api/rfp/upload-files', { method: 'POST', body: formData })
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}))
+        throw new Error(j.error || `Upload failed: ${res.status}`)
+      }
+      const { files: parsed } = await res.json()
+      const good = parsed.filter((f) => f.text && !f.error)
+      const bad = parsed.filter((f) => f.error || !f.text)
+      if (good.length) setDocuments((prev) => [...prev, ...good.map((f) => ({ name: f.name, text: f.text }))])
+      if (bad.length) setError(`Could not extract text from: ${bad.map((f) => f.name).join(', ')}`)
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      setUploading(false)
     }
   }
 
@@ -557,7 +566,7 @@ export default function RFPModule() {
             />
           </div>
 
-          {/* File upload — plain text fallback */}
+          {/* File upload — drag/drop or browse */}
           <div
             onDrop={handleDrop}
             onDragOver={handleDragOver}
@@ -567,14 +576,18 @@ export default function RFPModule() {
               display: 'flex', alignItems: 'center', gap: 12,
             }}
           >
-            <span style={{ fontSize: 16 }}>📎</span>
-            <span style={{ fontSize: 12, color: MUTED }}>Or drop a plain text file (.txt, .csv, .md)</span>
-            <button onClick={() => fileInputRef.current?.click()}
-              style={{ marginLeft: 'auto', fontSize: 12, color: NAVY, background: 'none', border: `1px solid ${BORDER}`, borderRadius: 4, padding: '4px 10px', cursor: 'pointer' }}>
+            <span style={{ fontSize: 16 }}>{uploading ? '⏳' : '📎'}</span>
+            <span style={{ fontSize: 12, color: MUTED }}>
+              {uploading ? 'Uploading and extracting text…' : 'Drop files here — Word (.docx), PDF, Excel (.xlsx), or any text file'}
+            </span>
+            <button onClick={() => fileInputRef.current?.click()} disabled={uploading}
+              style={{ marginLeft: 'auto', fontSize: 12, color: NAVY, background: 'none', border: `1px solid ${BORDER}`, borderRadius: 4, padding: '4px 10px', cursor: uploading ? 'not-allowed' : 'pointer' }}>
               Browse
             </button>
-            <input ref={fileInputRef} type="file" multiple accept=".txt,.csv,.md,.json,.xml,.html,.rtf" style={{ display: 'none' }}
-              onChange={(e) => handleFiles(Array.from(e.target.files))} />
+            <input ref={fileInputRef} type="file" multiple
+              accept=".docx,.doc,.pdf,.xlsx,.xls,.csv,.txt,.md,.json,.xml,.html,.rtf"
+              style={{ display: 'none' }}
+              onChange={(e) => { handleFiles(Array.from(e.target.files)); e.target.value = '' }} />
           </div>
 
           {documents.length > 0 && (

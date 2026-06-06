@@ -1,5 +1,11 @@
 import { Router } from "express";
+import multer from "multer";
+import mammoth from "mammoth";
+import pdfParse from "pdf-parse";
+import * as XLSX from "xlsx";
 import { callClaudeJSONStreamed } from "../lib/anthropic";
+
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024 } });
 
 const router = Router();
 
@@ -23,6 +29,51 @@ const CATEGORIES = [
   "Hypercare","Support","Managed service","Commercials","Legal / contractual",
   "Case studies / references","Company information","Other / unknown",
 ];
+
+// ── POST /api/rfp/upload-files ───────────────────────────────────────────────
+router.post("/rfp/upload-files", upload.array("files", 20), async (req, res): Promise<void> => {
+  const files = req.files as Express.Multer.File[] | undefined;
+  if (!files || files.length === 0) {
+    res.status(400).json({ error: "No files uploaded" }); return;
+  }
+
+  const results: Array<{ name: string; text: string; error?: string }> = [];
+
+  for (const file of files) {
+    const name = file.originalname;
+    const ext = name.split(".").pop()?.toLowerCase() ?? "";
+    try {
+      let text = "";
+      if (ext === "docx" || ext === "doc") {
+        const result = await mammoth.extractRawText({ buffer: file.buffer });
+        text = result.value;
+      } else if (ext === "pdf") {
+        const result = await pdfParse(file.buffer);
+        text = result.text;
+      } else if (ext === "xlsx" || ext === "xls") {
+        const wb = XLSX.read(file.buffer, { type: "buffer" });
+        const parts: string[] = [];
+        for (const sheetName of wb.SheetNames) {
+          const ws = wb.Sheets[sheetName];
+          parts.push(`=== Sheet: ${sheetName} ===`);
+          parts.push(XLSX.utils.sheet_to_csv(ws));
+        }
+        text = parts.join("\n\n");
+      } else if (ext === "csv") {
+        const wb = XLSX.read(file.buffer, { type: "buffer" });
+        text = XLSX.utils.sheet_to_csv(wb.Sheets[wb.SheetNames[0]]);
+      } else {
+        text = file.buffer.toString("utf-8");
+      }
+      results.push({ name, text: text.trim() });
+    } catch (err) {
+      results.push({ name, text: "", error: (err as Error).message });
+    }
+  }
+
+  req.log.info({ count: results.length }, "rfp upload-files completed");
+  res.json({ files: results });
+});
 
 router.post("/rfp/extract-requirements", async (req, res): Promise<void> => {
   const { documents, vendorContext, company } = req.body as Record<string, unknown>;
