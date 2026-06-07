@@ -195,7 +195,7 @@ router.post("/rfp/packs/:id/detect-sections", async (req, res): Promise<void> =>
   try {
     const user   = `Buyer: ${pack.buyer}\n\nDocument content:\n${pack.parsedContent.slice(0, 80_000)}`;
     const result = await callClaudeJSON<{ sections: Array<{ code: string; title: string; scoringWeight: string | null; summary: string }> }>(
-      DETECT_SYSTEM, user, { maxTokens: 2000 },
+      DETECT_SYSTEM, user, { maxTokens: 4096 },
     );
     const sections = setSections(pack.id, Array.isArray(result?.sections) ? result.sections : []);
     appendAuditEvent(pack.id, null, "section_detected", `Detected ${sections.length} scored section${sections.length !== 1 ? "s" : ""}`, "RRAI");
