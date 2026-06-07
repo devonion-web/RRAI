@@ -1,81 +1,94 @@
 import { randomUUID } from "crypto";
 
-// ── Types ─────────────────────────────────────────────────────────────────────
+// ── Extraction types ───────────────────────────────────────────────────────────
+
+export interface BriefRequirement {
+  id: string | null;
+  text: string;
+  priority: string | null;
+}
+export interface BriefKeyDate   { date: string; event: string }
+export interface BriefNamedOwner { name: string; area: string }
+
+// ── Draft types ───────────────────────────────────────────────────────────────
+
+export interface DeliveryMilestone { phase: string; timing: string; activities: string; exit: string }
+export interface DeliveryTeamMember { role: string; responsibility: string; phases: string }
+export interface AcceptanceGate { gate: string; entry: string; exit: string }
+export interface RiskItem { risk: string; likelihoodImpact: string; mitigation: string; owner: string }
+
+export interface DraftComponents {
+  understanding: string;
+  approachAndRecommendedOption: string;
+  deliveryPlan: { narrative: string; milestones: DeliveryMilestone[] };
+  domainComponent: { title: string; content: string };
+  resourcing: { deliveryTeam: DeliveryTeamMember[]; buyerCommitment: string };
+  acceptanceGates: AcceptanceGate[];
+  preWork: string[];
+  assumptions: string[];
+  configCustomisationThirdParty: string;
+  costs: string;
+  risks: RiskItem[];
+}
+
+export interface SectionDraft {
+  id: string;
+  sectionId: string;
+  lens: string;
+  complianceVerdict: string;
+  components: DraftComponents;
+  placeholders: string[];
+  openDependencies: string[];
+  status: "draft" | "in_review" | "approved";
+  createdAt: number;
+  updatedAt: number;
+}
+
+// ── Pack / Section types ──────────────────────────────────────────────────────
 
 export interface BidPack {
   id: string;
   name: string;
   buyer: string;
   createdAt: number;
-  parsedContent: string;          // Combined text from all files for Claude
+  parsedContent: string;
   sections: BidSection[];
 }
 
 export interface BidSection {
   id: string;
   packId: string;
-  code: string;                   // e.g. "2.1"
+  // From detect-sections
+  code: string;
   title: string;
-  scoringWeight: string | null;   // e.g. "25%" or "Pass/Fail"
-  summary: string;                // one-line from detection
-
-  // Populated after extract-brief
-  requirements: string[];
-  mandatedStructure: string[];
+  scoringWeight: string | null;
+  summary: string;
+  // From extract-brief
+  mandatedResponseStructure: string[];
+  requirements: BriefRequirement[];
+  minimumResponseItems: string[];
+  buyerActivities: string[];
+  buyerChallenges: string[];
+  considerations: string[];
+  keyDates: BriefKeyDate[];
   constraints: string[];
-  keyDates: string[];
-  namedOwners: string[];
-  evaluationNotes: string | null;
+  commercialTerms: string[];
+  namedOwners: BriefNamedOwner[];
+  regulatoryAnchors: string[];
+  crossReferences: string[];
+  discrepancies: string[];
+  gaps: string[];
   briefStatus: "pending" | "extracted" | "error";
   briefError: string | null;
-
-  // Populated after draft
+  // Draft
   draft: SectionDraft | null;
 }
-
-export interface SectionDraft {
-  id: string;
-  sectionId: string;
-  components: DraftComponent[];
-  placeholders: Placeholder[];
-  status: "draft" | "in_review" | "approved";
-  createdAt: number;
-  updatedAt: number;
-}
-
-export interface DraftComponent {
-  id: number;
-  label: string;
-  content: string;
-}
-
-export interface Placeholder {
-  id: string;
-  placeholder: string;   // the full {{PLACEHOLDER: ...}} token
-  context: string;       // component label where it appears
-  guidance: string;      // human-readable description
-}
-
-export const COMPONENT_LABELS = [
-  "Compliance Verdict",
-  "Understanding of the Challenge",
-  "Approach / Recommended Option",
-  "Delivery Plan",
-  "Domain Component",
-  "Resourcing",
-  "Acceptance & Quality Gates",
-  "Pre-Work Required by Buyer",
-  "Assumptions, Limitations & Dependencies",
-  "Configuration / Customisation / Third-Party Confirmation",
-  "Costs & Fit-Gaps",
-  "Risks & Mitigations",
-] as const;
 
 // ── Store ─────────────────────────────────────────────────────────────────────
 
 const PACKS = new Map<string, BidPack>();
-const SECTION_TO_PACK = new Map<string, string>(); // sectionId → packId
-const TTL_MS = 6 * 60 * 60 * 1000; // 6 hours
+const SECTION_TO_PACK = new Map<string, string>();
+const TTL_MS = 6 * 60 * 60 * 1000;
 
 setInterval(() => {
   const now = Date.now();
@@ -90,37 +103,30 @@ setInterval(() => {
 // ── CRUD ──────────────────────────────────────────────────────────────────────
 
 export function createPack(name: string, buyer: string, parsedContent: string): BidPack {
-  const pack: BidPack = {
-    id: randomUUID(), name, buyer, createdAt: Date.now(),
-    parsedContent, sections: [],
-  };
+  const pack: BidPack = { id: randomUUID(), name, buyer, createdAt: Date.now(), parsedContent, sections: [] };
   PACKS.set(pack.id, pack);
   return pack;
 }
 
-export function getPack(id: string): BidPack | null {
-  return PACKS.get(id) ?? null;
-}
+export function getPack(id: string): BidPack | null { return PACKS.get(id) ?? null; }
 
-export function setSections(packId: string, rawSections: Array<{ code: string; title: string; scoringWeight: string | null; summary: string }>): BidSection[] {
+export function setSections(
+  packId: string,
+  raw: Array<{ code: string; title: string; scoringWeight: string | null; summary: string }>,
+): BidSection[] {
   const pack = PACKS.get(packId);
   if (!pack) return [];
-
-  // Remove old section index entries
   for (const s of pack.sections) SECTION_TO_PACK.delete(s.id);
-
-  pack.sections = rawSections.map((s) => {
+  pack.sections = raw.map((s) => {
     const id = randomUUID();
     SECTION_TO_PACK.set(id, packId);
     return {
       id, packId,
-      code: s.code, title: s.title,
-      scoringWeight: s.scoringWeight ?? null,
-      summary: s.summary,
-      requirements: [], mandatedStructure: [], constraints: [],
-      keyDates: [], namedOwners: [], evaluationNotes: null,
-      briefStatus: "pending", briefError: null,
-      draft: null,
+      code: s.code, title: s.title, scoringWeight: s.scoringWeight ?? null, summary: s.summary,
+      mandatedResponseStructure: [], requirements: [], minimumResponseItems: [], buyerActivities: [],
+      buyerChallenges: [], considerations: [], keyDates: [], constraints: [], commercialTerms: [],
+      namedOwners: [], regulatoryAnchors: [], crossReferences: [], discrepancies: [], gaps: [],
+      briefStatus: "pending", briefError: null, draft: null,
     };
   });
   return pack.sections;
@@ -129,36 +135,40 @@ export function setSections(packId: string, rawSections: Array<{ code: string; t
 export function getSection(sectionId: string): BidSection | null {
   const packId = SECTION_TO_PACK.get(sectionId);
   if (!packId) return null;
-  const pack = PACKS.get(packId);
-  return pack?.sections.find((s) => s.id === sectionId) ?? null;
+  return PACKS.get(packId)?.sections.find((s) => s.id === sectionId) ?? null;
 }
 
 export function updateSection(sectionId: string, updates: Partial<BidSection>): BidSection | null {
-  const section = getSection(sectionId);
-  if (!section) return null;
-  Object.assign(section, updates);
-  return section;
+  const s = getSection(sectionId);
+  if (!s) return null;
+  Object.assign(s, updates);
+  return s;
 }
 
 export function saveDraft(
   sectionId: string,
-  components: DraftComponent[],
-  placeholders: Placeholder[],
+  data: { lens?: string; complianceVerdict: string; components: DraftComponents; placeholders: string[]; openDependencies: string[] },
 ): SectionDraft | null {
   const section = getSection(sectionId);
   if (!section) return null;
   const draft: SectionDraft = {
     id: randomUUID(), sectionId,
-    components, placeholders,
+    lens: data.lens ?? "Commercial",
+    complianceVerdict: data.complianceVerdict,
+    components: data.components,
+    placeholders: data.placeholders,
+    openDependencies: data.openDependencies,
     status: "draft",
-    createdAt: Date.now(),
-    updatedAt: Date.now(),
+    createdAt: Date.now(), updatedAt: Date.now(),
   };
   section.draft = draft;
   return draft;
 }
 
-export function updateDraft(sectionId: string, updates: Partial<Pick<SectionDraft, "components" | "placeholders" | "status">>): SectionDraft | null {
+export function updateDraft(
+  sectionId: string,
+  updates: Partial<Omit<SectionDraft, "id" | "sectionId" | "createdAt">>,
+): SectionDraft | null {
   const section = getSection(sectionId);
   if (!section?.draft) return null;
   Object.assign(section.draft, updates);
@@ -166,18 +176,12 @@ export function updateDraft(sectionId: string, updates: Partial<Pick<SectionDraf
   return section.draft;
 }
 
-const STATUS_FLOW: Record<string, SectionDraft["status"]> = {
-  draft: "in_review",
-  in_review: "approved",
-};
+const STATUS_FLOW: Record<string, SectionDraft["status"]> = { draft: "in_review", in_review: "approved" };
 
 export function advanceDraftStatus(sectionId: string): SectionDraft | null {
   const section = getSection(sectionId);
   if (!section?.draft) return null;
   const next = STATUS_FLOW[section.draft.status];
-  if (next) {
-    section.draft.status = next;
-    section.draft.updatedAt = Date.now();
-  }
+  if (next) { section.draft.status = next; section.draft.updatedAt = Date.now(); }
   return section.draft;
 }

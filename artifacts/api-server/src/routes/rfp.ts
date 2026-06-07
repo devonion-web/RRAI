@@ -1,4 +1,4 @@
-import { Router, type Request } from "express";
+import { Router } from "express";
 import multer from "multer";
 import mammoth from "mammoth";
 import pdfParse from "pdf-parse";
@@ -7,38 +7,75 @@ import { join } from "path";
 import { callClaudeJSON } from "../lib/anthropic";
 import { storeTextDoc, storeExcelDoc, getDocs, removeDoc, storeSize } from "../lib/docStore";
 import {
-  createPack, getPack, setSections, getSection,
-  updateSection, saveDraft, updateDraft, advanceDraftStatus,
-  COMPONENT_LABELS,
-  type DraftComponent, type Placeholder,
+  createPack, getPack, setSections, getSection, updateSection,
+  saveDraft, updateDraft, advanceDraftStatus,
+  type DraftComponents,
 } from "../lib/bidPackStore";
 import { parseExcelForRequirements } from "../lib/xlsxParser";
-import type { Logger } from "pino";
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024, files: 20 } });
 const router = Router();
 const PROMPTS_DIR = join(process.cwd(), "prompts");
 
-// ── Context ───────────────────────────────────────────────────────────────────
+// ── Constants ─────────────────────────────────────────────────────────────────
 
-const RR_CONTEXT = `Risk Rising is a specialist GRC implementation and advisory consultancy partnering with LogicGate (Risk Cloud) and Panorays (third-party cyber risk). Risk Rising owns: all implementation, configuration, project delivery, training, UAT, hypercare, support, managed service and commercial aspects. Software vendors own: functional platform capability, technical architecture, security, hosting, product roadmap and platform SLAs.
+const BIDDER_CONTEXT = "LogicGate (platform, prime); Risk Rising (implementation / services partner)";
+const HOUSE_VOICE = "outcome-first, concise, UK English, no superlatives, evidence-led";
 
-Risk Rising delivery capabilities: GRC programme design; LogicGate Risk Cloud and Panorays implementation; agile and waterfall delivery; requirements workshops; app configuration and workflow design; system integration support; user training and train-the-trainer; UAT and go-live hypercare; post-go-live managed service; commercial negotiation.`;
+const RR_KNOWLEDGE = `## Risk Rising — Delivery Capability
 
-// ── Prompt helpers ────────────────────────────────────────────────────────────
+Risk Rising is a specialist GRC implementation and advisory consultancy. Core capabilities:
+- LogicGate Risk Cloud implementation and configuration (primary partner)
+- Panorays third-party cyber risk implementation
+- GRC programme design and advisory
+- Agile and waterfall project delivery
+- Stakeholder workshops and requirements gathering
+- Workflow and app configuration design
+- System integration and data migration support
+- User training, train-the-trainer, and change management
+- UAT support and go-live hypercare
+- Post-go-live managed service and ongoing optimisation
+- Commercial negotiation support
+
+## Ownership boundaries
+
+Risk Rising OWNS: implementation, project delivery, configuration, training, UAT, hypercare, support model, managed service, commercials, advisory, delivery governance, account management.
+
+LogicGate OWNS: functional platform features, workflow engine, dashboards, reporting, integrations catalogue, technical architecture, security posture, hosting, product roadmap, platform SLAs.
+
+Panorays OWNS: third-party cyber monitoring, vendor assessment, external attack surface, questionnaire automation.
+
+## Delivery approach
+
+Typical phases: Discovery & Design → Build & Configure → Integrate → Test (SIT → UAT) → Go-live → Hypercare → Managed Service.
+Typical governance: weekly project steering, bi-weekly sponsor review, risk register maintained by RR PM.
+Typical team: Delivery Lead, Lead Consultant(s), Technical Consultant (integration), Change Manager, Project Manager.`;
+
+// ── Prompt parser ─────────────────────────────────────────────────────────────
+
+function parsePromptFile(content: string): { system: string; userTemplate: string } {
+  const userMatch = content.match(/\n## USER\s*\n/);
+  if (!userMatch || userMatch.index === undefined) return { system: content.trim(), userTemplate: "" };
+  const sysMatch = content.match(/\n## SYSTEM\s*\n/);
+  const sysStart = sysMatch?.index !== undefined ? sysMatch.index + sysMatch[0].length : 0;
+  return {
+    system: content.slice(sysStart, userMatch.index).trim(),
+    userTemplate: content.slice(userMatch.index + userMatch[0].length).trim(),
+  };
+}
 
 function readPrompt(name: string): string {
   try { return readFileSync(join(PROMPTS_DIR, name), "utf-8"); }
-  catch (err) { return ""; }
+  catch { return ""; }
 }
+
+// ── Content builder ───────────────────────────────────────────────────────────
 
 function buildContent(docs: ReturnType<typeof getDocs>, charLimitPerDoc: number): string {
   let content = "";
   for (const doc of docs) {
     if (doc.text) {
-      const slice = doc.text.length > charLimitPerDoc
-        ? doc.text.slice(0, charLimitPerDoc) + "\n[...truncated]"
-        : doc.text;
+      const slice = doc.text.length > charLimitPerDoc ? doc.text.slice(0, charLimitPerDoc) + "\n[...truncated]" : doc.text;
       content += `\n\n=== ${doc.name} ===\n${slice}`;
     } else if (doc.structuredRows?.length) {
       const reqs = doc.structuredRows.slice(0, 200).map((r) => r.requirement).filter(Boolean).join("\n");
@@ -48,22 +85,34 @@ function buildContent(docs: ReturnType<typeof getDocs>, charLimitPerDoc: number)
   return content;
 }
 
-// ── Section detection ─────────────────────────────────────────────────────────
+// ── Section detection prompt ──────────────────────────────────────────────────
 
 const DETECT_SECTIONS_SYSTEM = `You are an expert bid analyst. Read the provided procurement documents and identify all scored response sections.
 
-A scored response section requires a detailed written response (100+ words) that will be evaluated by the buyer. These are typically numbered (e.g. "Section 2.1", "Q4", "Lot 2 — Technical") and include specific questions or requirements the bidder must address in prose.
+A scored response section requires a detailed written response (100+ words) that will be evaluated by the buyer. These are typically numbered (e.g. "Section 2.1", "Q4") and include specific questions or requirements the bidder must address.
 
-NOT scored sections: pricing matrices, administrative forms, declarations, company information templates, tick-box compliance matrices, yes/no questions, or standard terms and conditions.
-
-For each scored section, provide:
-- code: section reference exactly as in the document (e.g. "2.1", "Section 4")
-- title: concise title
-- scoringWeight: stated weighting or null
-- summary: one sentence describing what must be addressed
+NOT scored sections: pricing matrices, administrative forms, declarations, company info templates, tick-boxes, standard T&Cs.
 
 Output ONLY valid JSON — no prose, no code fences:
-{ "sections": [{ "code": "string", "title": "string", "scoringWeight": "string|null", "summary": "string" }] }`;
+{ "sections": [{ "code": "string", "title": "string", "scoringWeight": "string|null", "summary": "one sentence" }] }`;
+
+// ── Default components (fallback if Claude omits a field) ─────────────────────
+
+function defaultComponents(): DraftComponents {
+  return {
+    understanding: "{{PLACEHOLDER: understanding of buyer challenge and context}}",
+    approachAndRecommendedOption: "{{PLACEHOLDER: approach and recommended option}}",
+    deliveryPlan: { narrative: "{{PLACEHOLDER: delivery plan narrative}}", milestones: [] },
+    domainComponent: { title: "{{PLACEHOLDER: domain component title}}", content: "{{PLACEHOLDER: domain component content}}" },
+    resourcing: { deliveryTeam: [], buyerCommitment: "{{PLACEHOLDER: buyer-side commitment required}}" },
+    acceptanceGates: [],
+    preWork: [],
+    assumptions: [],
+    configCustomisationThirdParty: "{{PLACEHOLDER: configuration and customisation details}}",
+    costs: "{{PLACEHOLDER: cost reference — see pricing submission}}",
+    risks: [],
+  };
+}
 
 // ── Health ────────────────────────────────────────────────────────────────────
 
@@ -76,10 +125,8 @@ router.get("/rfp/health", (_req, res) => {
 router.post("/rfp/upload-files", upload.array("files", 20), async (req, res): Promise<void> => {
   const files = req.files as Express.Multer.File[] | undefined;
   if (!files?.length) { res.status(400).json({ error: "No files uploaded" }); return; }
-
   req.log.info({ count: files.length }, "rfp: upload-files");
-  const results: Array<{ id?: string; name: string; fileType?: string; charCount?: number; rowCount?: number; error?: string }> = [];
-
+  const results: Array<Record<string, unknown>> = [];
   for (const file of files) {
     const name = file.originalname;
     const ext  = name.split(".").pop()?.toLowerCase() ?? "";
@@ -108,35 +155,29 @@ router.post("/rfp/upload-files", upload.array("files", 20), async (req, res): Pr
 router.post("/rfp/store-text", (req, res): void => {
   const { name, text } = req.body as Record<string, unknown>;
   if (typeof text !== "string" || !text.trim()) { res.status(400).json({ error: "text is required" }); return; }
-  const safeName = typeof name === "string" && name.trim() ? name.trim() : "Pasted document";
-  const entry = storeTextDoc(safeName, text.trim());
+  const entry = storeTextDoc(typeof name === "string" && name.trim() ? name.trim() : "Pasted document", text.trim());
   res.json({ id: entry.id, name: entry.name, charCount: entry.charCount, fileType: "text" });
 });
 
 router.delete("/rfp/documents/:id", (req, res) => { removeDoc(req.params.id); res.json({ ok: true }); });
 
-// ── Pack: create ──────────────────────────────────────────────────────────────
+// ── Pack ──────────────────────────────────────────────────────────────────────
 
 router.post("/rfp/packs", (req, res): void => {
   const { name, buyer, documentIds } = req.body as Record<string, unknown>;
   if (!Array.isArray(documentIds) || !documentIds.length) { res.status(400).json({ error: "documentIds required" }); return; }
-
   const docs = getDocs(documentIds as string[]);
   if (!docs.length) { res.status(400).json({ error: "No documents found — they may have expired. Please re-upload." }); return; }
-
   const limit = Math.floor(120_000 / Math.max(docs.length, 1));
   const parsedContent = buildContent(docs, limit);
-
   const pack = createPack(
     typeof name === "string" && name.trim() ? name.trim() : "Bid Pack",
     typeof buyer === "string" && buyer.trim() ? buyer.trim() : "Unknown Buyer",
     parsedContent,
   );
-  req.log.info({ packId: pack.id, buyer: pack.buyer, chars: parsedContent.length }, "rfp: pack created");
+  req.log.info({ packId: pack.id, chars: parsedContent.length }, "rfp: pack created");
   res.json(pack);
 });
-
-// ── Pack: get ─────────────────────────────────────────────────────────────────
 
 router.get("/rfp/packs/:id", (req, res): void => {
   const pack = getPack(req.params.id);
@@ -144,20 +185,18 @@ router.get("/rfp/packs/:id", (req, res): void => {
   res.json(pack);
 });
 
-// ── Pack: detect sections ─────────────────────────────────────────────────────
+// ── Detect sections ───────────────────────────────────────────────────────────
 
 router.post("/rfp/packs/:id/detect-sections", async (req, res): Promise<void> => {
   const pack = getPack(req.params.id);
   if (!pack) { res.status(404).json({ error: "Pack not found" }); return; }
-
   req.log.info({ packId: pack.id }, "rfp: detecting sections");
   try {
     const user = `Buyer: ${pack.buyer}\n\nDocument content:\n${pack.parsedContent.slice(0, 80_000)}`;
     const result = await callClaudeJSON<{ sections: Array<{ code: string; title: string; scoringWeight: string | null; summary: string }> }>(
       DETECT_SECTIONS_SYSTEM, user, { maxTokens: 2000 },
     );
-    const raw = Array.isArray(result?.sections) ? result.sections : [];
-    const sections = setSections(pack.id, raw);
+    const sections = setSections(pack.id, Array.isArray(result?.sections) ? result.sections : []);
     req.log.info({ packId: pack.id, count: sections.length }, "rfp: sections detected");
     res.json({ sections });
   } catch (err) {
@@ -166,45 +205,44 @@ router.post("/rfp/packs/:id/detect-sections", async (req, res): Promise<void> =>
   }
 });
 
-// ── Section: extract brief ────────────────────────────────────────────────────
+// ── Extract brief ─────────────────────────────────────────────────────────────
 
 router.post("/rfp/sections/:id/extract-brief", async (req, res): Promise<void> => {
   const section = getSection(req.params.id);
   if (!section) { res.status(404).json({ error: "Section not found" }); return; }
-
   const pack = getPack(section.packId);
   if (!pack) { res.status(404).json({ error: "Pack not found" }); return; }
 
   req.log.info({ sectionId: section.id, code: section.code }, "rfp: extracting brief");
 
-  const promptTemplate = readPrompt("extraction.md");
-  const system = promptTemplate
+  const { system, userTemplate } = parsePromptFile(readPrompt("extraction.md"));
+  const userContent = userTemplate
     .replace("{{SECTION_CODE}}", section.code)
-    .replace("{{SECTION_TITLE}}", section.title);
-
-  const user = `Buyer: ${pack.buyer}\n\nDocument content:\n${pack.parsedContent.slice(0, 60_000)}`;
+    .replace("{{SECTION_TITLE_HINT}}", section.title)
+    .replace("{{PARSED_PACK}}", pack.parsedContent.slice(0, 60_000));
 
   try {
-    const brief = await callClaudeJSON<{
-      requirements?: string[];
-      mandated_structure?: string[];
-      constraints?: string[];
-      key_dates?: string[];
-      named_owners?: string[];
-      evaluation_notes?: string | null;
-      scoring_weight?: string | null;
-    }>(system, user, { maxTokens: 2000 });
+    const brief = await callClaudeJSON<Record<string, unknown>>(system, userContent, { maxTokens: 3000 });
+    const arr = <T>(v: unknown): T[] => Array.isArray(v) ? v as T[] : [];
 
     const updated = updateSection(section.id, {
-      requirements:      Array.isArray(brief?.requirements)      ? brief.requirements      : [],
-      mandatedStructure: Array.isArray(brief?.mandated_structure) ? brief.mandated_structure : [],
-      constraints:       Array.isArray(brief?.constraints)        ? brief.constraints        : [],
-      keyDates:          Array.isArray(brief?.key_dates)          ? brief.key_dates          : [],
-      namedOwners:       Array.isArray(brief?.named_owners)       ? brief.named_owners       : [],
-      evaluationNotes:   brief?.evaluation_notes ?? null,
-      scoringWeight:     brief?.scoring_weight   ?? section.scoringWeight,
-      briefStatus:       "extracted",
-      briefError:        null,
+      mandatedResponseStructure: arr(brief?.mandatedResponseStructure),
+      requirements:              arr(brief?.requirements),
+      minimumResponseItems:      arr(brief?.minimumResponseItems),
+      buyerActivities:           arr(brief?.buyerActivities),
+      buyerChallenges:           arr(brief?.buyerChallenges),
+      considerations:            arr(brief?.considerations),
+      keyDates:                  arr(brief?.keyDates),
+      constraints:               arr(brief?.constraints),
+      commercialTerms:           arr(brief?.commercialTerms),
+      namedOwners:               arr(brief?.namedOwners),
+      regulatoryAnchors:         arr(brief?.regulatoryAnchors),
+      crossReferences:           arr(brief?.crossReferences),
+      discrepancies:             arr(brief?.discrepancies),
+      gaps:                      arr(brief?.gaps),
+      scoringWeight:             (brief?.scoringWeight as string | null) ?? section.scoringWeight,
+      briefStatus:               "extracted",
+      briefError:                null,
     });
 
     req.log.info({ sectionId: section.id }, "rfp: brief extracted");
@@ -216,52 +254,76 @@ router.post("/rfp/sections/:id/extract-brief", async (req, res): Promise<void> =
   }
 });
 
-// ── Section: generate draft ───────────────────────────────────────────────────
+// ── Generate draft ────────────────────────────────────────────────────────────
 
 router.post("/rfp/sections/:id/draft", async (req, res): Promise<void> => {
   const section = getSection(req.params.id);
   if (!section) { res.status(404).json({ error: "Section not found" }); return; }
-
   const pack = getPack(section.packId);
   if (!pack) { res.status(404).json({ error: "Pack not found" }); return; }
 
   req.log.info({ sectionId: section.id, code: section.code }, "rfp: generating draft");
 
-  const briefObj = {
-    code: section.code, title: section.title, scoringWeight: section.scoringWeight,
-    requirements: section.requirements, mandatedStructure: section.mandatedStructure,
-    constraints: section.constraints, keyDates: section.keyDates,
-    namedOwners: section.namedOwners, evaluationNotes: section.evaluationNotes,
-  };
+  const briefJson = JSON.stringify({
+    section: { code: section.code, title: section.title },
+    scoringWeight:             section.scoringWeight,
+    mandatedResponseStructure: section.mandatedResponseStructure,
+    requirements:              section.requirements,
+    minimumResponseItems:      section.minimumResponseItems,
+    buyerActivities:           section.buyerActivities,
+    buyerChallenges:           section.buyerChallenges,
+    considerations:            section.considerations,
+    keyDates:                  section.keyDates,
+    constraints:               section.constraints,
+    commercialTerms:           section.commercialTerms,
+    namedOwners:               section.namedOwners,
+    regulatoryAnchors:         section.regulatoryAnchors,
+    discrepancies:             section.discrepancies,
+    gaps:                      section.gaps,
+  }, null, 2);
 
-  const promptTemplate = readPrompt("drafting.md");
-  const system = promptTemplate
-    .replace("{{SECTION_CODE}}", section.code)
-    .replace("{{SECTION_TITLE}}", section.title)
-    .replace("{{KNOWLEDGE_CONTEXT}}", RR_CONTEXT)
-    .replace("{{SECTION_BRIEF}}", JSON.stringify(briefObj, null, 2))
-    .replace("{{RFP_CONTENT}}", pack.parsedContent.slice(0, 40_000));
+  const { system: rawSystem, userTemplate } = parsePromptFile(readPrompt("drafting.md"));
+  const system = rawSystem.replace("{{HOUSE_VOICE}}", HOUSE_VOICE);
+  const userContent = userTemplate
+    .replace("{{BUYER_NAME}}", pack.buyer)
+    .replace("{{BIDDER_CONTEXT}}", BIDDER_CONTEXT)
+    .replace("{{BRIEF_JSON}}", briefJson)
+    .replace("{{KNOWLEDGE}}", RR_KNOWLEDGE)
+    .replace("{{HOUSE_VOICE}}", HOUSE_VOICE);
 
   try {
     const result = await callClaudeJSON<{
-      components?: Array<{ id: number; label: string; content: string }>;
-      placeholders?: Array<{ id: string; placeholder: string; context: string; guidance: string }>;
-    }>(system, "Write the 12-part section response as specified.", { maxTokens: 7000 });
+      lens?: string;
+      complianceVerdict?: string;
+      components?: Partial<DraftComponents>;
+      placeholders?: string[];
+      openDependencies?: string[];
+    }>(system, userContent, { maxTokens: 8000 });
 
-    // Normalise components — ensure all 12 are present
-    const raw: DraftComponent[] = Array.isArray(result?.components) ? result.components as DraftComponent[] : [];
-    const components: DraftComponent[] = COMPONENT_LABELS.map((label, i) => {
-      const id = i + 1;
-      const found = raw.find((c) => c.id === id);
-      return { id, label, content: found?.content ?? `{{PLACEHOLDER: ${label} — not drafted}}` };
+    const def = defaultComponents();
+    const comp = (result?.components ?? {}) as Partial<DraftComponents>;
+    const components: DraftComponents = {
+      understanding:                   comp.understanding                   ?? def.understanding,
+      approachAndRecommendedOption:    comp.approachAndRecommendedOption    ?? def.approachAndRecommendedOption,
+      deliveryPlan:                    comp.deliveryPlan                    ?? def.deliveryPlan,
+      domainComponent:                 comp.domainComponent                 ?? def.domainComponent,
+      resourcing:                      comp.resourcing                      ?? def.resourcing,
+      acceptanceGates:                 comp.acceptanceGates                 ?? def.acceptanceGates,
+      preWork:                         comp.preWork                         ?? def.preWork,
+      assumptions:                     comp.assumptions                     ?? def.assumptions,
+      configCustomisationThirdParty:   comp.configCustomisationThirdParty   ?? def.configCustomisationThirdParty,
+      costs:                           comp.costs                           ?? def.costs,
+      risks:                           comp.risks                           ?? def.risks,
+    };
+
+    const draft = saveDraft(section.id, {
+      lens:                result?.lens ?? "Commercial",
+      complianceVerdict:   result?.complianceVerdict ?? "Partially Complies",
+      components,
+      placeholders:        Array.isArray(result?.placeholders) ? result.placeholders : [],
+      openDependencies:    Array.isArray(result?.openDependencies) ? result.openDependencies : [],
     });
-
-    const placeholders: Placeholder[] = Array.isArray(result?.placeholders)
-      ? (result.placeholders as Placeholder[])
-      : [];
-
-    const draft = saveDraft(section.id, components, placeholders);
-    req.log.info({ sectionId: section.id, placeholderCount: placeholders.length }, "rfp: draft generated");
+    req.log.info({ sectionId: section.id }, "rfp: draft generated");
     res.json({ draft });
   } catch (err) {
     req.log.error({ err }, "rfp: draft generation failed");
@@ -269,19 +331,16 @@ router.post("/rfp/sections/:id/draft", async (req, res): Promise<void> => {
   }
 });
 
-// ── Draft: update ─────────────────────────────────────────────────────────────
+// ── Update draft ──────────────────────────────────────────────────────────────
 
 router.patch("/rfp/sections/:id/draft", (req, res): void => {
-  const { components, placeholders } = req.body as Record<string, unknown>;
-  const draft = updateDraft(req.params.id, {
-    ...(Array.isArray(components)   ? { components: components as DraftComponent[] }   : {}),
-    ...(Array.isArray(placeholders) ? { placeholders: placeholders as Placeholder[] } : {}),
-  });
+  const updates = req.body as Partial<{ components: DraftComponents; placeholders: string[]; openDependencies: string[]; complianceVerdict: string }>;
+  const draft = updateDraft(req.params.id, updates);
   if (!draft) { res.status(404).json({ error: "Draft not found" }); return; }
   res.json({ draft });
 });
 
-// ── Draft: advance status ─────────────────────────────────────────────────────
+// ── Advance status ────────────────────────────────────────────────────────────
 
 router.post("/rfp/sections/:id/draft/advance", (req, res): void => {
   const draft = advanceDraftStatus(req.params.id);
