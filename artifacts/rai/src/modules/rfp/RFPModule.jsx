@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react'
+import React, { useState, useRef, useEffect, useCallback } from 'react'
 import {
   Document, Packer, Paragraph, TextRun, AlignmentType,
   Table, TableRow, TableCell, WidthType, BorderStyle, ShadingType, Footer, PageNumber,
@@ -7,47 +7,53 @@ import { saveAs } from 'file-saver'
 import {
   rfpUploadFiles, rfpStoreText, rfpRemoveDocument,
   rfpCreatePack, rfpDetectSections,
-  rfpExtractBrief, rfpGenerateDraft, rfpUpdateDraft, rfpAdvanceDraftStatus,
+  rfpExtractBrief, rfpGenerateDraft, rfpUpdateDraft,
+  rfpAdvanceDraftStatus, rfpReopenDraft,
+  rfpGetSectionAudit,
 } from './api.js'
 
 // ── Brand ─────────────────────────────────────────────────────────────────────
 const NAVY = '#0B1F3A', BLUE = '#1D4ED8', GREEN = '#16A34A'
-const AMBER = '#D97706', RED = '#DC2626', PURPLE = '#7C3AED', MUTED = '#64748B'
-const BORDER = '#E2E8F0', WHITE = '#FFFFFF', BG = '#F8FAFC'
-const DOC_NAVY = '06095A', DOC_PURPLE = '3205B3', DOC_CYAN = '13D4DB'
-const DOC_LCYAN = 'E7FAFB', DOC_GRAY = '64748B'
+const AMBER = '#D97706', RED = '#DC2626', PURPLE = '#7C3AED', ORANGE = '#EA580C'
+const MUTED = '#64748B', BORDER = '#E2E8F0', WHITE = '#FFFFFF', BG = '#F8FAFC'
+const DOC_NAVY = '06095A', DOC_CYAN = '13D4DB', DOC_LCYAN = 'E7FAFB', DOC_GRAY = '64748B', DOC_PURPLE = '3205B3'
 
-// ── Atoms ─────────────────────────────────────────────────────────────────────
-function Spinner() {
-  return <span style={{ display: 'inline-block', width: 14, height: 14, border: '2px solid rgba(255,255,255,0.3)', borderTopColor: WHITE, borderRadius: '50%', animation: 'spin 0.7s linear infinite' }} />
+const STATUS_META = {
+  not_started: { label: 'Not started', bg: '#F1F5F9', text: MUTED },
+  extracted:   { label: 'Brief ready', bg: '#DBEAFE', text: BLUE },
+  drafted:     { label: 'Drafted',     bg: '#FEF9C3', text: AMBER },
+  in_review:   { label: 'In review',   bg: '#EDE9FE', text: PURPLE },
+  approved:    { label: 'Approved',    bg: '#D1FAE5', text: GREEN },
+  reopened:    { label: 'Reopened',    bg: '#FFEDD5', text: ORANGE },
 }
-function Badge({ label, color }) {
-  return <span style={{ display: 'inline-block', padding: '2px 8px', borderRadius: 12, fontSize: 10, fontWeight: 700, background: color.bg, color: color.text }}>{label}</span>
-}
-function StatusBadge({ status }) {
-  const m = { draft: { label: 'DRAFT', bg: '#FEF9C3', text: AMBER }, in_review: { label: 'IN REVIEW', bg: '#DBEAFE', text: BLUE }, approved: { label: 'APPROVED', bg: '#D1FAE5', text: GREEN } }
-  const c = m[status] || m.draft
-  return <Badge label={c.label} color={c} />
-}
-function VerdictBadge({ verdict }) {
-  const m = { 'Complies': { bg: '#D1FAE5', text: GREEN }, 'Partially Complies': { bg: '#FEF9C3', text: AMBER }, 'Does Not Comply': { bg: '#FEE2E2', text: RED } }
-  return <Badge label={verdict || 'Not set'} color={m[verdict] || { bg: '#F1F5F9', text: MUTED }} />
-}
-function SectionNum({ n }) {
-  return <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 22, height: 22, borderRadius: '50%', background: NAVY, color: WHITE, fontSize: 10, fontWeight: 700, flexShrink: 0 }}>{n}</span>
+const EVENT_META = {
+  pack_uploaded:    { icon: '📦', label: 'Pack uploaded' },
+  section_detected: { icon: '🔍', label: 'Sections detected' },
+  brief_extracted:  { icon: '📋', label: 'Brief extracted' },
+  draft_generated:  { icon: '✦',  label: 'Draft generated' },
+  draft_edited:     { icon: '✏', label: 'Draft saved' },
+  placeholder_filled: { icon: '✓', label: 'Placeholder filled' },
+  status_changed:   { icon: '→', label: 'Status changed' },
+  approved:         { icon: '✅', label: 'Approved' },
+  exported:         { icon: '⬇', label: 'Exported' },
+  reopened:         { icon: '↩', label: 'Reopened' },
 }
 
-// ── Placeholder utilities ─────────────────────────────────────────────────────
-function scanForPlaceholders(value, ctx = '') {
+// ── Utils ─────────────────────────────────────────────────────────────────────
+function countPH(v) {
+  if (typeof v === 'string') return [...v.matchAll(/\{\{PLACEHOLDER:/g)].length
+  if (Array.isArray(v)) return v.reduce((n, x) => n + countPH(x), 0)
+  if (v && typeof v === 'object') return Object.values(v).reduce((n, x) => n + countPH(x), 0)
+  return 0
+}
+function scanForPlaceholders(v, ctx = '') {
   const out = []
-  if (typeof value === 'string') {
-    for (const m of [...value.matchAll(/\{\{PLACEHOLDER:\s*([^}]+?)\}\}/g)]) {
-      out.push({ key: m[1].trim(), placeholder: m[0], context: ctx })
-    }
-  } else if (Array.isArray(value)) {
-    value.forEach((v, i) => out.push(...scanForPlaceholders(v, ctx || `item ${i + 1}`)))
-  } else if (value && typeof value === 'object') {
-    for (const [k, v] of Object.entries(value)) out.push(...scanForPlaceholders(v, k))
+  if (typeof v === 'string') {
+    for (const m of [...v.matchAll(/\{\{PLACEHOLDER:\s*([^}]+?)\}\}/g)]) out.push({ key: m[1].trim(), placeholder: m[0], context: ctx })
+  } else if (Array.isArray(v)) {
+    v.forEach((x, i) => out.push(...scanForPlaceholders(x, ctx || `item ${i + 1}`)))
+  } else if (v && typeof v === 'object') {
+    for (const [k, x] of Object.entries(v)) out.push(...scanForPlaceholders(x, k))
   }
   return out
 }
@@ -55,25 +61,42 @@ function detectPlaceholders(components) {
   const seen = new Set()
   return scanForPlaceholders(components).filter(p => { if (seen.has(p.key)) return false; seen.add(p.key); return true })
 }
-function applyToAll(value, ph, rep) {
-  if (typeof value === 'string') return value.split(ph).join(rep)
-  if (Array.isArray(value)) return value.map(v => applyToAll(v, ph, rep))
-  if (value && typeof value === 'object') { const r = {}; for (const [k, v] of Object.entries(value)) r[k] = applyToAll(v, ph, rep); return r }
-  return value
+function applyToAll(v, ph, rep) {
+  if (typeof v === 'string') return v.split(ph).join(rep)
+  if (Array.isArray(v)) return v.map(x => applyToAll(x, ph, rep))
+  if (v && typeof v === 'object') { const r = {}; for (const [k, x] of Object.entries(v)) r[k] = applyToAll(x, ph, rep); return r }
+  return v
+}
+function timeAgo(ts) {
+  const d = Date.now() - ts
+  if (d < 60000) return 'just now'
+  if (d < 3600000) return `${Math.floor(d / 60000)}m ago`
+  if (d < 86400000) return `${Math.floor(d / 3600000)}h ago`
+  return new Date(ts).toLocaleDateString('en-GB', { day: '2-digit', month: 'short' })
 }
 
-// ── Draft generic editors ─────────────────────────────────────────────────────
-function BlockHeader({ n, label, extra }) {
-  return (
-    <div style={{ background: NAVY, color: WHITE, padding: '7px 14px', borderRadius: '6px 6px 0 0', fontSize: 12, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 8 }}>
-      {n && <SectionNum n={n} />}{label}{extra}
-    </div>
-  )
+// ── Atoms ─────────────────────────────────────────────────────────────────────
+function Spinner() {
+  return <span style={{ display: 'inline-block', width: 13, height: 13, border: '2px solid rgba(255,255,255,0.3)', borderTopColor: WHITE, borderRadius: '50%', animation: 'spin .7s linear infinite' }} />
+}
+function Dot() { return <span style={{ display: 'inline-block', width: 7, height: 7, borderRadius: '50%' }} /> }
+function StatusBadge({ status }) {
+  const m = STATUS_META[status] || STATUS_META.not_started
+  return <span style={{ padding: '2px 8px', borderRadius: 12, fontSize: 10, fontWeight: 700, background: m.bg, color: m.text }}>{m.label}</span>
+}
+function VerdictBadge({ verdict }) {
+  const c = { 'Complies': { bg: '#D1FAE5', text: GREEN }, 'Partially Complies': { bg: '#FEF9C3', text: AMBER }, 'Does Not Comply': { bg: '#FEE2E2', text: RED } }[verdict] || { bg: '#F1F5F9', text: MUTED }
+  return <span style={{ padding: '2px 8px', borderRadius: 12, fontSize: 10, fontWeight: 700, background: c.bg, color: c.text }}>{verdict || 'Not set'}</span>
+}
+function SectionNum({ n }) {
+  return <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 22, height: 22, borderRadius: '50%', background: NAVY, color: WHITE, fontSize: 10, fontWeight: 700, flexShrink: 0 }}>{n}</span>
 }
 function Block({ n, label, extra, children }) {
   return (
     <div style={{ marginBottom: 20 }}>
-      <BlockHeader n={n} label={label} extra={extra} />
+      <div style={{ background: NAVY, color: WHITE, padding: '7px 14px', borderRadius: '6px 6px 0 0', fontSize: 12, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 8 }}>
+        {n && <SectionNum n={n} />}{label}{extra}
+      </div>
       <div style={{ border: `1px solid ${BORDER}`, borderTop: 'none', borderRadius: '0 0 6px 6px', background: WHITE, padding: '12px 14px' }}>
         {children}
       </div>
@@ -81,10 +104,10 @@ function Block({ n, label, extra, children }) {
   )
 }
 function TA({ value, onChange, rows = 4, yellow = false }) {
-  const hasPlaceholder = typeof value === 'string' && value.includes('{{PLACEHOLDER:')
+  const ph = typeof value === 'string' && value.includes('{{PLACEHOLDER:')
   return (
     <textarea value={value || ''} onChange={e => onChange(e.target.value)} rows={rows}
-      style={{ width: '100%', padding: '8px 10px', border: `1px solid ${BORDER}`, borderRadius: 6, fontSize: 13, fontFamily: 'Georgia, serif', lineHeight: 1.7, resize: 'vertical', boxSizing: 'border-box', color: '#1E293B', background: (yellow || hasPlaceholder) ? '#FFFBEB' : '#FAFBFC' }}
+      style={{ width: '100%', padding: '8px 10px', border: `1px solid ${BORDER}`, borderRadius: 6, fontSize: 13, fontFamily: 'Georgia, serif', lineHeight: 1.7, resize: 'vertical', boxSizing: 'border-box', color: '#1E293B', background: (yellow || ph) ? '#FFFBEB' : '#FAFBFC' }}
     />
   )
 }
@@ -105,16 +128,13 @@ function StringList({ items, onChange }) {
   )
 }
 function InlineTable({ columns, rows, onChange }) {
-  function updateCell(ri, key, val) { const n = rows.map((r, i) => i === ri ? { ...r, [key]: val } : r); onChange(n) }
+  function updateCell(ri, key, val) { onChange(rows.map((r, i) => i === ri ? { ...r, [key]: val } : r)) }
   function addRow() { const e = {}; columns.forEach(c => e[c.key] = ''); onChange([...(rows || []), e]) }
-  function removeRow(i) { onChange(rows.filter((_, j) => j !== i)) }
   return (
     <div>
       <div style={{ overflowX: 'auto' }}>
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11 }}>
-          <thead>
-            <tr>{columns.map(c => <th key={c.key} style={{ background: NAVY, color: WHITE, padding: '5px 8px', fontSize: 10, fontWeight: 700, textAlign: 'left', whiteSpace: 'nowrap', width: c.w }}>{c.label}</th>)}<th style={{ background: NAVY, width: 30 }} /></tr>
-          </thead>
+          <thead><tr>{columns.map(c => <th key={c.key} style={{ background: NAVY, color: WHITE, padding: '5px 8px', fontSize: 10, fontWeight: 700, textAlign: 'left', whiteSpace: 'nowrap', width: c.w }}>{c.label}</th>)}<th style={{ background: NAVY, width: 30 }} /></tr></thead>
           <tbody>
             {(rows || []).map((row, i) => (
               <tr key={i} style={{ background: i % 2 === 0 ? WHITE : '#F8FAFC' }}>
@@ -125,7 +145,7 @@ function InlineTable({ columns, rows, onChange }) {
                   </td>
                 ))}
                 <td style={{ textAlign: 'center', verticalAlign: 'top', padding: '6px 4px' }}>
-                  <button onClick={() => removeRow(i)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: MUTED, fontSize: 14 }}>×</button>
+                  <button onClick={() => onChange((rows || []).filter((_, j) => j !== i))} style={{ background: 'none', border: 'none', cursor: 'pointer', color: MUTED, fontSize: 14 }}>×</button>
                 </td>
               </tr>
             ))}
@@ -142,19 +162,10 @@ function dPara(text, opts = {}) {
   const { bold = false, color = '1F2937', size = 22, after = 80 } = opts
   return new Paragraph({ spacing: { after, line: 276 }, children: [new TextRun({ text: String(text || '').trim(), font: 'Arial', size, bold, color })] })
 }
-function dBullet(text) {
-  return new Paragraph({ bullet: { level: 0 }, spacing: { after: 60 }, children: [new TextRun({ text: String(text || '').trim(), font: 'Arial', size: 22, color: '1F2937' })] })
-}
-function dH(label) {
-  return new Paragraph({ spacing: { before: 240, after: 100 }, shading: { type: ShadingType.CLEAR, fill: DOC_NAVY }, children: [new TextRun({ text: `  ${label}`, font: 'Arial', size: 24, bold: true, color: 'FFFFFF' })] })
-}
+function dBullet(text) { return new Paragraph({ bullet: { level: 0 }, spacing: { after: 60 }, children: [new TextRun({ text: String(text || '').trim(), font: 'Arial', size: 22, color: '1F2937' })] }) }
+function dH(label) { return new Paragraph({ spacing: { before: 240, after: 100 }, shading: { type: ShadingType.CLEAR, fill: DOC_NAVY }, children: [new TextRun({ text: `  ${label}`, font: 'Arial', size: 24, bold: true, color: 'FFFFFF' })] }) }
 function dCallout(text) {
-  return new Table({ width: { size: 100, type: WidthType.PERCENTAGE }, rows: [new TableRow({ children: [new TableCell({
-    shading: { type: ShadingType.CLEAR, fill: DOC_LCYAN },
-    margins: { top: 120, bottom: 120, left: 180, right: 180 },
-    borders: { left: { style: BorderStyle.THICK, size: 12, color: DOC_CYAN }, top: { style: BorderStyle.NIL }, bottom: { style: BorderStyle.NIL }, right: { style: BorderStyle.NIL } },
-    children: [new Paragraph({ children: [new TextRun({ text: String(text || '').trim(), font: 'Arial', size: 20, color: DOC_NAVY, italics: true })] })]
-  })] })] })
+  return new Table({ width: { size: 100, type: WidthType.PERCENTAGE }, rows: [new TableRow({ children: [new TableCell({ shading: { type: ShadingType.CLEAR, fill: DOC_LCYAN }, margins: { top: 120, bottom: 120, left: 180, right: 180 }, borders: { left: { style: BorderStyle.THICK, size: 12, color: DOC_CYAN }, top: { style: BorderStyle.NIL }, bottom: { style: BorderStyle.NIL }, right: { style: BorderStyle.NIL } }, children: [new Paragraph({ children: [new TextRun({ text: String(text || '').trim(), font: 'Arial', size: 20, color: DOC_NAVY, italics: true })] })] })] })] })
 }
 function dTable(headers, bodyRows) {
   const hRow = new TableRow({ tableHeader: true, children: headers.map(h => new TableCell({ shading: { type: ShadingType.CLEAR, fill: DOC_NAVY }, margins: { top: 80, bottom: 80, left: 100, right: 100 }, children: [new Paragraph({ children: [new TextRun({ text: h, font: 'Arial', size: 20, bold: true, color: 'FFFFFF' })] })] })) })
@@ -166,104 +177,40 @@ function dSpace() { return new Paragraph({ children: [new TextRun('')], spacing:
 async function exportSectionDocx({ buyer, sectionCode, sectionTitle, draft }) {
   const { components: c, complianceVerdict, openDependencies } = draft
   const today = new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'long', year: 'numeric' })
-  const children = []
-
-  // Cover
-  children.push(new Paragraph({ spacing: { after: 120 }, children: [new TextRun({ text: 'RFP Response — Commercial Lens', font: 'Arial', size: 44, bold: true, color: DOC_NAVY })] }))
-  children.push(dPara(buyer, { size: 32, bold: true, color: DOC_NAVY, after: 80 }))
-  children.push(dPara(`Section ${sectionCode}: ${sectionTitle}`, { size: 26, color: DOC_PURPLE, after: 60 }))
-  children.push(dPara(`Prepared by Risk Rising · ${today}`, { size: 20, color: DOC_GRAY, after: 120 }))
-  children.push(dCallout('DRAFT — FOR INTERNAL REVIEW ONLY. Not approved for release. Commercial lens: do not present as independent analyst content.'))
-  children.push(dSpace())
-
-  // Compliance verdict
-  children.push(dH('Compliance Verdict'))
-  children.push(dPara(complianceVerdict || 'Not assessed', { bold: true, color: DOC_NAVY }))
-  children.push(dSpace())
-
-  // Understanding
-  children.push(dH('1. Understanding of the Challenge'))
-  ;(c.understanding || '').split(/\n+/).filter(Boolean).forEach(p => children.push(dPara(p)))
-  children.push(dSpace())
-
-  // Approach
-  children.push(dH('2. Approach & Recommended Option'))
-  ;(c.approachAndRecommendedOption || '').split(/\n+/).filter(Boolean).forEach(p => children.push(dPara(p)))
-  children.push(dSpace())
-
-  // Delivery plan
-  children.push(dH('3. Delivery Plan'))
-  ;(c.deliveryPlan?.narrative || '').split(/\n+/).filter(Boolean).forEach(p => children.push(dPara(p)))
-  if (c.deliveryPlan?.milestones?.length) {
-    children.push(dSpace())
-    children.push(dTable(['Phase', 'Timing', 'Activities', 'Exit Criteria'], c.deliveryPlan.milestones.map(m => [m.phase, m.timing, m.activities, m.exit])))
-  }
-  children.push(dSpace())
-
-  // Domain component
-  children.push(dH(`4. Domain Component — ${c.domainComponent?.title || ''}`))
-  ;(c.domainComponent?.content || '').split(/\n+/).filter(Boolean).forEach(p => children.push(dPara(p)))
-  children.push(dSpace())
-
-  // Resourcing
-  children.push(dH('5. Resourcing'))
-  if (c.resourcing?.deliveryTeam?.length) {
-    children.push(dTable(['Role', 'Responsibility', 'Phases'], c.resourcing.deliveryTeam.map(m => [m.role, m.responsibility, m.phases])))
-    children.push(dSpace())
-  }
-  if (c.resourcing?.buyerCommitment) {
-    children.push(dPara('Buyer-side commitment required:', { bold: true, color: DOC_NAVY }))
-    children.push(dCallout(c.resourcing.buyerCommitment))
-  }
-  children.push(dSpace())
-
-  // Acceptance gates
-  children.push(dH('6. Acceptance & Quality Gates'))
-  if (c.acceptanceGates?.length) {
-    children.push(dTable(['Gate', 'Entry Criteria', 'Exit Criteria'], c.acceptanceGates.map(g => [g.gate, g.entry, g.exit])))
-  } else { children.push(dPara('No acceptance gates defined.', { color: DOC_GRAY })) }
-  children.push(dSpace())
-
-  // Pre-work
-  children.push(dH('7. Pre-Work Required by Buyer'))
-  if (c.preWork?.length) { c.preWork.forEach(p => children.push(dBullet(p))) }
-  else { children.push(dPara('None identified.', { color: DOC_GRAY })) }
-  children.push(dSpace())
-
-  // Assumptions
-  children.push(dH('8. Assumptions, Limitations & Dependencies'))
-  if (c.assumptions?.length) {
-    const asText = c.assumptions.map((a, i) => `${i + 1}. ${a}`).join('\n')
-    children.push(dCallout(asText))
-  }
-  children.push(dSpace())
-
-  // Config
-  children.push(dH('9. Configuration / Customisation / Third-Party'))
-  ;(c.configCustomisationThirdParty || '').split(/\n+/).filter(Boolean).forEach(p => children.push(dPara(p)))
-  children.push(dSpace())
-
-  // Costs
-  children.push(dH('10. Costs & Fit-Gaps'))
-  ;(c.costs || '').split(/\n+/).filter(Boolean).forEach(p => children.push(dPara(p)))
-  children.push(dSpace())
-
-  // Risks
-  children.push(dH('11. Risks & Mitigations'))
-  if (c.risks?.length) {
-    children.push(dTable(['Risk', 'L×I', 'Mitigation', 'Owner'], c.risks.map(r => [r.risk, r.likelihoodImpact, r.mitigation, r.owner])))
-  } else { children.push(dPara('No risks identified.', { color: DOC_GRAY })) }
-
-  // Open dependencies
-  if (openDependencies?.length) {
-    children.push(dSpace())
-    children.push(dH('Open Dependencies / Clarification Questions'))
-    openDependencies.forEach(d => children.push(dBullet(d)))
-  }
-
+  const ch = []
+  ch.push(new Paragraph({ spacing: { after: 120 }, children: [new TextRun({ text: 'RFP Response — Commercial Lens', font: 'Arial', size: 44, bold: true, color: DOC_NAVY })] }))
+  ch.push(dPara(buyer, { size: 32, bold: true, color: DOC_NAVY }))
+  ch.push(dPara(`Section ${sectionCode}: ${sectionTitle}`, { size: 26, color: DOC_PURPLE }))
+  ch.push(dPara(`Prepared by Risk Rising · ${today}`, { size: 20, color: DOC_GRAY, after: 120 }))
+  ch.push(dCallout('DRAFT — FOR INTERNAL REVIEW ONLY. Not approved for release. Commercial lens: do not present as independent analyst content.'))
+  ch.push(dSpace())
+  ch.push(dH('Compliance Verdict')); ch.push(dPara(complianceVerdict || 'Not assessed', { bold: true, color: DOC_NAVY })); ch.push(dSpace())
+  ch.push(dH('1. Understanding of the Challenge')); (c.understanding || '').split(/\n+/).filter(Boolean).forEach(p => ch.push(dPara(p))); ch.push(dSpace())
+  ch.push(dH('2. Approach & Recommended Option')); (c.approachAndRecommendedOption || '').split(/\n+/).filter(Boolean).forEach(p => ch.push(dPara(p))); ch.push(dSpace())
+  ch.push(dH('3. Delivery Plan')); (c.deliveryPlan?.narrative || '').split(/\n+/).filter(Boolean).forEach(p => ch.push(dPara(p)))
+  if (c.deliveryPlan?.milestones?.length) { ch.push(dSpace()); ch.push(dTable(['Phase', 'Timing', 'Activities', 'Exit Criteria'], c.deliveryPlan.milestones.map(m => [m.phase, m.timing, m.activities, m.exit]))) }
+  ch.push(dSpace())
+  ch.push(dH(`4. Domain Component — ${c.domainComponent?.title || ''}`)); (c.domainComponent?.content || '').split(/\n+/).filter(Boolean).forEach(p => ch.push(dPara(p))); ch.push(dSpace())
+  ch.push(dH('5. Resourcing'))
+  if (c.resourcing?.deliveryTeam?.length) { ch.push(dTable(['Role', 'Responsibility', 'Phases'], c.resourcing.deliveryTeam.map(m => [m.role, m.responsibility, m.phases]))); ch.push(dSpace()) }
+  if (c.resourcing?.buyerCommitment) { ch.push(dPara('Buyer-side commitment required:', { bold: true, color: DOC_NAVY })); ch.push(dCallout(c.resourcing.buyerCommitment)) }
+  ch.push(dSpace())
+  ch.push(dH('6. Acceptance & Quality Gates'))
+  if (c.acceptanceGates?.length) ch.push(dTable(['Gate', 'Entry Criteria', 'Exit Criteria'], c.acceptanceGates.map(g => [g.gate, g.entry, g.exit]))); else ch.push(dPara('None defined.', { color: DOC_GRAY }))
+  ch.push(dSpace())
+  ch.push(dH('7. Pre-Work Required by Buyer'))
+  if (c.preWork?.length) c.preWork.forEach(p => ch.push(dBullet(p))); else ch.push(dPara('None identified.', { color: DOC_GRAY }))
+  ch.push(dSpace())
+  ch.push(dH('8. Assumptions, Limitations & Dependencies'))
+  if (c.assumptions?.length) ch.push(dCallout(c.assumptions.map((a, i) => `${i + 1}. ${a}`).join('\n')))
+  ch.push(dSpace())
+  ch.push(dH('9. Configuration / Customisation / Third-Party')); (c.configCustomisationThirdParty || '').split(/\n+/).filter(Boolean).forEach(p => ch.push(dPara(p))); ch.push(dSpace())
+  ch.push(dH('10. Costs & Fit-Gaps')); (c.costs || '').split(/\n+/).filter(Boolean).forEach(p => ch.push(dPara(p))); ch.push(dSpace())
+  ch.push(dH('11. Risks & Mitigations'))
+  if (c.risks?.length) ch.push(dTable(['Risk', 'L×I', 'Mitigation', 'Owner'], c.risks.map(r => [r.risk, r.likelihoodImpact, r.mitigation, r.owner]))); else ch.push(dPara('None identified.', { color: DOC_GRAY }))
+  if (openDependencies?.length) { ch.push(dSpace()); ch.push(dH('Open Dependencies / Clarification Questions')); openDependencies.forEach(d => ch.push(dBullet(d))) }
   const footer = new Footer({ children: [new Paragraph({ alignment: AlignmentType.RIGHT, children: [new TextRun({ text: 'Commercial lens — Risk Rising internal draft   ', font: 'Arial', size: 18, color: DOC_GRAY }), new TextRun({ children: [PageNumber.CURRENT], font: 'Arial', size: 18, color: DOC_GRAY })] })] })
-  const doc = new Document({ sections: [{ properties: { page: { size: { width: 11906, height: 16838 }, margin: { top: 1440, bottom: 1440, left: 1440, right: 1440 } } }, footers: { default: footer }, children }] })
-
+  const doc = new Document({ sections: [{ properties: { page: { size: { width: 11906, height: 16838 }, margin: { top: 1440, bottom: 1440, left: 1440, right: 1440 } } }, footers: { default: footer }, children: ch }] })
   const blob = await Packer.toBlob(doc)
   const slug = `${buyer || 'RR'}-S${sectionCode}`.replace(/[\s.]+/g, '-')
   saveAs(blob, `RR-${slug}-${new Date().toISOString().slice(0, 10)}.docx`)
@@ -293,7 +240,6 @@ function SetupScreen({ onPack }) {
     } catch (e) { setError(e.message) }
     finally { setUploading(false) }
   }
-
   async function addPaste() {
     if (!pasteText.trim()) return
     setUploading(true); setError(null)
@@ -303,7 +249,6 @@ function SetupScreen({ onPack }) {
     } catch (e) { setError(e.message) }
     finally { setUploading(false) }
   }
-
   async function create() {
     if (!documents.length || creating) return
     setCreating(true); setError(null)
@@ -312,62 +257,42 @@ function SetupScreen({ onPack }) {
       onPack(pack)
     } catch (e) { setError(e.message); setCreating(false) }
   }
-
-  const inputStyle = { width: '100%', padding: '9px 12px', border: `1px solid ${BORDER}`, borderRadius: 6, fontSize: 13, boxSizing: 'border-box', fontFamily: 'inherit' }
-
+  const inp = { width: '100%', padding: '9px 12px', border: `1px solid ${BORDER}`, borderRadius: 6, fontSize: 13, boxSizing: 'border-box', fontFamily: 'inherit' }
   return (
     <div style={{ maxWidth: 740, margin: '0 auto', padding: '28px 24px' }}>
-      <div style={{ marginBottom: 24 }}>
-        <div style={{ fontSize: 20, fontWeight: 700, color: NAVY }}>New Bid Pack</div>
-        <div style={{ fontSize: 12, color: MUTED, marginTop: 4 }}>Upload the buyer's procurement files. RRAI will detect scored sections and guide you through each draft.</div>
-      </div>
-
+      <div style={{ marginBottom: 24 }}><div style={{ fontSize: 20, fontWeight: 700, color: NAVY }}>New Bid Pack</div><div style={{ fontSize: 12, color: MUTED, marginTop: 4 }}>Upload the buyer's procurement files. RRAI will detect scored sections and guide you through each draft.</div></div>
       <div style={{ background: WHITE, border: `1px solid ${BORDER}`, borderRadius: 8, padding: '18px 22px', marginBottom: 14 }}>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, marginBottom: 16 }}>
           {[['Buyer / Organisation', buyer, setBuyer, 'e.g. Marks & Spencer'], ['Pack Name', packName, setPackName, 'e.g. M&S GRC RFP 2026']].map(([label, val, set, ph]) => (
-            <div key={label}>
-              <label style={{ fontSize: 10, fontWeight: 700, color: NAVY, display: 'block', marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.05em' }}>{label}</label>
-              <input value={val} onChange={e => set(e.target.value)} placeholder={ph} style={inputStyle} />
-            </div>
+            <div key={label}><label style={{ fontSize: 10, fontWeight: 700, color: NAVY, display: 'block', marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.05em' }}>{label}</label><input value={val} onChange={e => set(e.target.value)} placeholder={ph} style={inp} /></div>
           ))}
         </div>
-
         <div style={{ marginBottom: 14 }}>
           <label style={{ fontSize: 10, fontWeight: 700, color: NAVY, display: 'block', marginBottom: 5, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Paste document text</label>
           <div style={{ display: 'flex', gap: 8, marginBottom: 5 }}>
-            <input value={pasteName} onChange={e => setPasteName(e.target.value)} placeholder="Document name" style={{ ...inputStyle, width: 'auto', flex: 1 }} />
-            <button onClick={addPaste} disabled={!pasteText.trim() || uploading}
-              style={{ background: pasteText.trim() && !uploading ? NAVY : '#CBD5E1', color: WHITE, border: 'none', borderRadius: 6, padding: '8px 14px', fontSize: 12, fontWeight: 600, cursor: pasteText.trim() && !uploading ? 'pointer' : 'not-allowed', whiteSpace: 'nowrap' }}>
-              + Add
-            </button>
+            <input value={pasteName} onChange={e => setPasteName(e.target.value)} placeholder="Document name" style={{ ...inp, width: 'auto', flex: 1 }} />
+            <button onClick={addPaste} disabled={!pasteText.trim() || uploading} style={{ background: pasteText.trim() && !uploading ? NAVY : '#CBD5E1', color: WHITE, border: 'none', borderRadius: 6, padding: '8px 14px', fontSize: 12, fontWeight: 600, cursor: pasteText.trim() && !uploading ? 'pointer' : 'not-allowed', whiteSpace: 'nowrap' }}>+ Add</button>
           </div>
-          <textarea value={pasteText} onChange={e => setPaste(e.target.value)} rows={3} placeholder="Paste RFP content, evaluation framework, scope, or procurement instructions…"
-            style={{ ...inputStyle, resize: 'vertical', lineHeight: 1.5 }} />
+          <textarea value={pasteText} onChange={e => setPaste(e.target.value)} rows={3} placeholder="Paste RFP content, evaluation framework, scope, or procurement instructions…" style={{ ...inp, resize: 'vertical', lineHeight: 1.5 }} />
         </div>
-
         <div onDrop={e => { e.preventDefault(); handleFiles(Array.from(e.dataTransfer.files)) }} onDragOver={e => e.preventDefault()}
           style={{ border: `1px dashed ${BORDER}`, borderRadius: 6, padding: '10px 16px', background: '#FAFBFC', display: 'flex', alignItems: 'center', gap: 10, marginBottom: documents.length ? 10 : 0 }}>
           <span>{uploading ? '⏳' : '📎'}</span>
           <span style={{ fontSize: 12, color: MUTED }}>{uploading ? 'Uploading…' : 'Drop files — PDF, Word, Excel, text'}</span>
-          <button onClick={() => fileRef.current?.click()} disabled={uploading}
-            style={{ marginLeft: 'auto', fontSize: 11, color: NAVY, background: 'none', border: `1px solid ${BORDER}`, borderRadius: 4, padding: '3px 10px', cursor: 'pointer' }}>Browse</button>
+          <button onClick={() => fileRef.current?.click()} disabled={uploading} style={{ marginLeft: 'auto', fontSize: 11, color: NAVY, background: 'none', border: `1px solid ${BORDER}`, borderRadius: 4, padding: '3px 10px', cursor: 'pointer' }}>Browse</button>
           <input ref={fileRef} type="file" multiple accept=".docx,.doc,.pdf,.xlsx,.xls,.csv,.txt,.md" style={{ display: 'none' }} onChange={e => { handleFiles(Array.from(e.target.files)); e.target.value = '' }} />
         </div>
-
         {documents.length > 0 && (
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
             {documents.map(d => (
               <div key={d.id} style={{ display: 'flex', alignItems: 'center', gap: 5, background: '#EAF1F8', borderRadius: 20, padding: '3px 10px', fontSize: 12 }}>
-                <span>{d.fileType === 'excel' ? '📊' : '📄'}</span>
-                <span>{d.name}</span>
-                <button onClick={() => { rfpRemoveDocument(d.id); setDocs(p => p.filter(x => x.id !== d.id)) }}
-                  style={{ background: 'none', border: 'none', cursor: 'pointer', color: MUTED, fontSize: 13, padding: 0 }}>×</button>
+                <span>{d.fileType === 'excel' ? '📊' : '📄'}</span><span>{d.name}</span>
+                <button onClick={() => { rfpRemoveDocument(d.id); setDocs(p => p.filter(x => x.id !== d.id)) }} style={{ background: 'none', border: 'none', cursor: 'pointer', color: MUTED, fontSize: 13, padding: 0 }}>×</button>
               </div>
             ))}
           </div>
         )}
       </div>
-
       <button onClick={create} disabled={!documents.length || creating}
         style={{ width: '100%', background: documents.length && !creating ? NAVY : '#CBD5E1', color: WHITE, border: 'none', borderRadius: 8, padding: '12px 0', fontSize: 14, fontWeight: 700, cursor: documents.length && !creating ? 'pointer' : 'not-allowed', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10 }}>
         {creating ? <><Spinner /> Analysing pack…</> : '→ Analyse Bid Pack'}
@@ -377,20 +302,18 @@ function SetupScreen({ onPack }) {
   )
 }
 
-// ── Sections screen ───────────────────────────────────────────────────────────
-function SectionsScreen({ pack, onDraft, onReset }) {
-  const [sections, setSections]   = useState(pack.sections || [])
+// ── Dashboard screen ──────────────────────────────────────────────────────────
+function DashboardScreen({ pack, sections, onSectionsChange, onOpenSection, onReset }) {
   const [detecting, setDetecting] = useState(false)
   const [briefLoading, setBriefLoading] = useState(null)
   const [draftLoading, setDraftLoading] = useState(null)
-  const [expanded, setExpanded]   = useState(null)
-  const [error, setError]         = useState(null)
+  const [error, setError] = useState(null)
 
   useEffect(() => { if (!sections.length) detect() }, [])
 
   async function detect() {
     setDetecting(true); setError(null)
-    try { const { sections: s } = await rfpDetectSections(pack.id); setSections(s || []) }
+    try { const { sections: s } = await rfpDetectSections(pack.id); onSectionsChange(s || []) }
     catch (e) { setError(e.message) }
     finally { setDetecting(false) }
   }
@@ -399,136 +322,114 @@ function SectionsScreen({ pack, onDraft, onReset }) {
     setBriefLoading(section.id); setError(null)
     try {
       const { section: updated } = await rfpExtractBrief(section.id)
-      setSections(p => p.map(s => s.id === section.id ? updated : s))
-      setExpanded(section.id)
+      onSectionsChange(sections.map(s => s.id === section.id ? updated : s))
     } catch (e) { setError(e.message) }
     finally { setBriefLoading(null) }
   }
 
-  async function startDraft(section) {
+  async function generateDraft(section) {
     setDraftLoading(section.id); setError(null)
-    try { const { draft } = await rfpGenerateDraft(section.id); onDraft({ ...section, draft }) }
-    catch (e) { setError(e.message); setDraftLoading(null) }
+    try {
+      const { draft, sectionStatus } = await rfpGenerateDraft(section.id)
+      const updated = { ...section, draft, status: sectionStatus || 'drafted' }
+      onSectionsChange(sections.map(s => s.id === section.id ? updated : s))
+      onOpenSection(updated)
+    } catch (e) { setError(e.message); setDraftLoading(null) }
   }
 
-  function BriefPanel({ s }) {
-    const P = ({ label, children, color = MUTED }) => (
-      <div style={{ marginBottom: 12 }}>
-        <div style={{ fontSize: 10, fontWeight: 700, color, textTransform: 'uppercase', marginBottom: 4 }}>{label}</div>
-        {children}
-      </div>
-    )
-    return (
-      <div style={{ borderTop: `1px solid ${BORDER}`, padding: '14px 16px', background: '#FAFBFC' }}>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-          {s.requirements?.length > 0 && (
-            <P label={`Requirements (${s.requirements.length})`} color={NAVY}>
-              {s.requirements.map((r, i) => (
-                <div key={i} style={{ display: 'flex', gap: 6, marginBottom: 4, fontSize: 12, color: '#1E293B', lineHeight: 1.5 }}>
-                  <span style={{ color: BLUE, flexShrink: 0 }}>{r.id || i + 1}.</span>
-                  <span>{r.text}</span>
-                  {r.priority && <Badge label={r.priority} color={{ bg: '#FEF9C3', text: AMBER }} />}
-                </div>
-              ))}
-            </P>
-          )}
-          {s.minimumResponseItems?.length > 0 && (
-            <P label="Minimum response items" color={NAVY}>
-              {s.minimumResponseItems.map((m, i) => <div key={i} style={{ fontSize: 12, color: '#1E293B', marginBottom: 3 }}>✓ {m}</div>)}
-            </P>
-          )}
-          {s.buyerChallenges?.length > 0 && (
-            <P label="Buyer challenges" color={RED}>
-              {s.buyerChallenges.map((c, i) => <div key={i} style={{ fontSize: 12, color: '#1E293B', marginBottom: 3 }}>⚡ {c}</div>)}
-            </P>
-          )}
-          {s.keyDates?.length > 0 && (
-            <P label="Key dates" color={AMBER}>
-              <table style={{ fontSize: 11, borderCollapse: 'collapse', width: '100%' }}>
-                {s.keyDates.map((d, i) => (
-                  <tr key={i} style={{ background: i % 2 === 0 ? WHITE : '#F8FAFC' }}>
-                    <td style={{ padding: '3px 8px', fontWeight: 700, color: NAVY, whiteSpace: 'nowrap' }}>{d.date}</td>
-                    <td style={{ padding: '3px 8px', color: '#1E293B' }}>{d.event}</td>
-                  </tr>
-                ))}
-              </table>
-            </P>
-          )}
-          {s.constraints?.length > 0 && (
-            <P label="Constraints" color={RED}>
-              {s.constraints.map((c, i) => <div key={i} style={{ fontSize: 12, color: '#1E293B', marginBottom: 3 }}>⚠ {c}</div>)}
-            </P>
-          )}
-          {s.gaps?.length > 0 && (
-            <P label="Clarification questions (gaps)" color={PURPLE}>
-              {s.gaps.map((g, i) => <div key={i} style={{ fontSize: 12, color: PURPLE, marginBottom: 3 }}>? {g}</div>)}
-            </P>
-          )}
-          {s.discrepancies?.length > 0 && (
-            <div style={{ gridColumn: '1 / -1' }}>
-              <P label="⚠ Discrepancies across documents" color={RED}>
-                {s.discrepancies.map((d, i) => <div key={i} style={{ fontSize: 12, color: RED, marginBottom: 3 }}>• {d}</div>)}
-              </P>
-            </div>
-          )}
-        </div>
-        <button onClick={() => startDraft(s)} disabled={!!draftLoading}
-          style={{ marginTop: 6, background: draftLoading === s.id ? '#CBD5E1' : GREEN, color: WHITE, border: 'none', borderRadius: 6, padding: '8px 18px', fontSize: 12, fontWeight: 600, cursor: draftLoading ? 'not-allowed' : 'pointer', display: 'flex', gap: 8, alignItems: 'center' }}>
-          {draftLoading === s.id ? <><Spinner /> Drafting…</> : '✦ Generate Draft →'}
-        </button>
-      </div>
-    )
-  }
+  const approved    = sections.filter(s => s.status === 'approved').length
+  const total       = sections.length
+  const allApproved = total > 0 && approved === total
+  const pct         = total > 0 ? Math.round((approved / total) * 100) : 0
 
   return (
-    <div style={{ maxWidth: 900, margin: '0 auto', padding: '24px' }}>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 18 }}>
+    <div style={{ maxWidth: 1100, margin: '0 auto', padding: '24px' }}>
+      {/* Pack header */}
+      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 20, flexWrap: 'wrap', gap: 12 }}>
         <div>
-          <div style={{ fontSize: 18, fontWeight: 700, color: NAVY }}>{pack.buyer}</div>
-          <div style={{ fontSize: 12, color: MUTED }}>{pack.name}</div>
+          <div style={{ fontSize: 22, fontWeight: 700, color: NAVY }}>{pack.buyer}</div>
+          <div style={{ fontSize: 13, color: MUTED }}>{pack.name}</div>
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
           <button onClick={detect} disabled={detecting} style={{ background: 'none', border: `1px solid ${BORDER}`, borderRadius: 6, padding: '6px 14px', fontSize: 12, color: MUTED, cursor: 'pointer' }}>↺ Re-detect</button>
           <button onClick={onReset} style={{ background: 'none', border: `1px solid ${BORDER}`, borderRadius: 6, padding: '6px 14px', fontSize: 12, color: MUTED, cursor: 'pointer' }}>+ New pack</button>
         </div>
       </div>
+
+      {/* Progress bar */}
+      {total > 0 && (
+        <div style={{ background: WHITE, border: `1px solid ${BORDER}`, borderRadius: 8, padding: '14px 18px', marginBottom: 20 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+            <span style={{ fontSize: 13, fontWeight: 700, color: NAVY }}>Pack progress</span>
+            <span style={{ fontSize: 13, fontWeight: 700, color: allApproved ? GREEN : NAVY }}>{approved} / {total} sections approved {allApproved ? '✓' : ''}</span>
+          </div>
+          <div style={{ height: 8, background: '#E2E8F0', borderRadius: 4, overflow: 'hidden' }}>
+            <div style={{ height: '100%', width: `${pct}%`, background: allApproved ? GREEN : BLUE, borderRadius: 4, transition: 'width 0.5s ease' }} />
+          </div>
+          {allApproved && <div style={{ marginTop: 8, fontSize: 12, color: GREEN, fontWeight: 600 }}>✓ All sections approved — export each via the section editor.</div>}
+        </div>
+      )}
+
       {error && <div style={{ marginBottom: 12, color: RED, fontSize: 12, background: '#FEE2E2', padding: '8px 12px', borderRadius: 6 }}>{error}</div>}
       {detecting && <div style={{ background: WHITE, border: `1px solid ${BORDER}`, borderRadius: 8, padding: 24, textAlign: 'center', color: MUTED, fontSize: 13 }}>🔍 Detecting scored response sections…</div>}
+
       {!detecting && sections.length === 0 && (
         <div style={{ background: WHITE, border: `1px solid ${BORDER}`, borderRadius: 8, padding: 24, textAlign: 'center', color: MUTED }}>
           <div style={{ fontSize: 15, marginBottom: 8 }}>No scored sections detected.</div>
-          <div style={{ fontSize: 12, marginBottom: 16 }}>Try pasting the RFP's scored question section directly, then re-detect.</div>
+          <div style={{ fontSize: 12, marginBottom: 16 }}>Try pasting the scored question section directly, then re-detect.</div>
           <button onClick={detect} style={{ background: NAVY, color: WHITE, border: 'none', borderRadius: 6, padding: '8px 18px', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>↺ Try again</button>
         </div>
       )}
+
+      {/* Section grid */}
       {sections.length > 0 && (
-        <div>
-          <div style={{ fontSize: 12, color: MUTED, marginBottom: 10 }}>{sections.length} section{sections.length !== 1 ? 's' : ''} detected — extract a brief for each, then generate the draft.</div>
-          {sections.map(s => {
-            const isExp = expanded === s.id
-            const hasB = s.briefStatus === 'extracted'
-            const isBL = briefLoading === s.id
-            const isDL = draftLoading === s.id
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: 14 }}>
+          {sections.map((s, idx) => {
+            const meta   = STATUS_META[s.status] || STATUS_META.not_started
+            const phCount = s.draft ? countPH(s.draft.components) : 0
+            const isBL   = briefLoading === s.id
+            const isDL   = draftLoading === s.id
             return (
-              <div key={s.id} style={{ background: WHITE, border: `1px solid ${BORDER}`, borderRadius: 8, marginBottom: 10, overflow: 'hidden' }}>
-                <div style={{ padding: '12px 16px', display: 'flex', alignItems: 'center', gap: 10 }}>
-                  <span style={{ background: NAVY, color: WHITE, fontSize: 10, fontWeight: 700, padding: '2px 8px', borderRadius: 4, flexShrink: 0 }}>{s.code}</span>
-                  <span style={{ fontSize: 13, fontWeight: 600, color: NAVY, flex: 1 }}>{s.title}</span>
-                  {s.scoringWeight && <Badge label={s.scoringWeight} color={{ bg: '#FEF9C3', text: AMBER }} />}
-                  {s.draft && <Badge label="Drafted" color={{ bg: '#D1FAE5', text: GREEN }} />}
-                  {hasB && !s.draft && <Badge label="Brief ready" color={{ bg: '#DBEAFE', text: BLUE }} />}
-                  <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
-                    {!hasB && !isBL && <button onClick={() => extractBrief(s)} style={{ background: NAVY, color: WHITE, border: 'none', borderRadius: 6, padding: '6px 12px', fontSize: 11, fontWeight: 600, cursor: 'pointer', whiteSpace: 'nowrap' }}>Extract brief</button>}
-                    {isBL && <button disabled style={{ background: '#CBD5E1', color: WHITE, border: 'none', borderRadius: 6, padding: '6px 12px', fontSize: 11, display: 'flex', gap: 6, alignItems: 'center' }}><Spinner /> Extracting…</button>}
-                    {hasB && !isDL && <>
-                      <button onClick={() => setExpanded(isExp ? null : s.id)} style={{ background: 'none', border: `1px solid ${BORDER}`, borderRadius: 6, padding: '5px 10px', fontSize: 11, color: MUTED, cursor: 'pointer' }}>{isExp ? 'Hide' : 'View brief'}</button>
-                      <button onClick={() => startDraft(s)} style={{ background: GREEN, color: WHITE, border: 'none', borderRadius: 6, padding: '6px 12px', fontSize: 11, fontWeight: 600, cursor: 'pointer', whiteSpace: 'nowrap' }}>{s.draft ? 'Open draft →' : 'Draft →'}</button>
-                    </>}
-                    {isDL && <button disabled style={{ background: '#CBD5E1', color: WHITE, border: 'none', borderRadius: 6, padding: '6px 12px', fontSize: 11, display: 'flex', gap: 6, alignItems: 'center' }}><Spinner /> Drafting…</button>}
-                  </div>
+              <div key={s.id} style={{ background: WHITE, border: `1px solid ${BORDER}`, borderRadius: 10, padding: '16px', display: 'flex', flexDirection: 'column', gap: 8, boxShadow: '0 1px 3px rgba(0,0,0,0.04)' }}>
+                {/* Top row */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                  <span style={{ background: NAVY, color: WHITE, fontSize: 10, fontWeight: 700, padding: '2px 8px', borderRadius: 4 }}>{s.code}</span>
+                  {s.scoringWeight && <span style={{ background: '#FEF9C3', color: AMBER, fontSize: 10, fontWeight: 700, padding: '2px 6px', borderRadius: 4 }}>{s.scoringWeight}</span>}
+                  <span style={{ marginLeft: 'auto' }}><StatusBadge status={s.status} /></span>
+                  <span style={{ fontSize: 11, color: MUTED, background: '#F1F5F9', borderRadius: 4, padding: '1px 6px', minWidth: 20, textAlign: 'center' }}>{idx + 1}</span>
                 </div>
-                {!isExp && s.summary && <div style={{ padding: '0 16px 10px', fontSize: 12, color: MUTED }}>{s.summary}</div>}
-                {isExp && hasB && <BriefPanel s={s} />}
+                {/* Title */}
+                <div style={{ fontSize: 14, fontWeight: 700, color: NAVY, lineHeight: 1.3 }}>{s.title}</div>
+                {/* Summary */}
+                {s.summary && <div style={{ fontSize: 12, color: MUTED, lineHeight: 1.4 }}>{s.summary}</div>}
+                {/* Placeholder status */}
+                {s.draft && (
+                  <div style={{ fontSize: 11, fontWeight: 600, color: phCount > 0 ? AMBER : GREEN }}>
+                    {phCount > 0 ? `⚠ ${phCount} placeholder${phCount !== 1 ? 's' : ''} unfilled` : '✓ All placeholders filled'}
+                  </div>
+                )}
+                {/* Last updated */}
+                {s.draft && <div style={{ fontSize: 11, color: MUTED }}>Updated {timeAgo(s.draft.updatedAt)}</div>}
+                {/* Action */}
+                <div style={{ marginTop: 4 }}>
+                  {s.status === 'not_started' && !isBL && (
+                    <button onClick={() => extractBrief(s)} style={{ width: '100%', background: NAVY, color: WHITE, border: 'none', borderRadius: 6, padding: '8px 0', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>Extract brief</button>
+                  )}
+                  {s.status === 'not_started' && isBL && (
+                    <button disabled style={{ width: '100%', background: '#CBD5E1', color: WHITE, border: 'none', borderRadius: 6, padding: '8px 0', fontSize: 12, display: 'flex', justifyContent: 'center', gap: 8, alignItems: 'center' }}><Spinner /> Extracting…</button>
+                  )}
+                  {s.status === 'extracted' && !isDL && (
+                    <button onClick={() => generateDraft(s)} style={{ width: '100%', background: GREEN, color: WHITE, border: 'none', borderRadius: 6, padding: '8px 0', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>✦ Generate draft</button>
+                  )}
+                  {s.status === 'extracted' && isDL && (
+                    <button disabled style={{ width: '100%', background: '#CBD5E1', color: WHITE, border: 'none', borderRadius: 6, padding: '8px 0', fontSize: 12, display: 'flex', justifyContent: 'center', gap: 8, alignItems: 'center' }}><Spinner /> Drafting…</button>
+                  )}
+                  {['drafted', 'in_review', 'approved', 'reopened'].includes(s.status) && (
+                    <button onClick={() => onOpenSection(s)} style={{ width: '100%', background: s.status === 'approved' ? '#D1FAE5' : BLUE, color: s.status === 'approved' ? GREEN : WHITE, border: s.status === 'approved' ? `1px solid ${GREEN}` : 'none', borderRadius: 6, padding: '8px 0', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>
+                      {s.status === 'approved' ? '✓ View approved →' : 'Open draft →'}
+                    </button>
+                  )}
+                </div>
               </div>
             )
           })}
@@ -539,27 +440,39 @@ function SectionsScreen({ pack, onDraft, onReset }) {
 }
 
 // ── Draft screen ──────────────────────────────────────────────────────────────
-function DraftScreen({ section, buyer, onBack }) {
+function DraftScreen({ section, sections, currentIdx, buyer, onBack, onNavigate, onSectionChanged }) {
   const d = section.draft
   const [comp, setComp]         = useState(d?.components || {})
   const [verdict, setVerdict]   = useState(d?.complianceVerdict || 'Partially Complies')
   const [openDeps, setOpenDeps] = useState(d?.openDependencies || [])
   const [status, setStatus]     = useState(d?.status || 'draft')
+  const [sectionStatus, setSectionStatus] = useState(section.status || 'drafted')
   const [phValues, setPhValues] = useState({})
   const [dirty, setDirty]       = useState(false)
   const [saving, setSaving]     = useState(false)
   const [advancing, setAdv]     = useState(false)
+  const [reopening, setReop]    = useState(false)
   const [exporting, setExp]     = useState(false)
   const [exportErr, setExpErr]  = useState(null)
+  const [history, setHistory]   = useState([])
+  const [advErr, setAdvErr]     = useState(null)
 
-  const placeholders = detectPlaceholders(comp)
+  const placeholders  = detectPlaceholders(comp)
   const unfilledCount = placeholders.filter(p => !phValues[p.key]?.trim()).length
 
-  function set(field, value) { setComp(p => ({ ...p, [field]: value })); setDirty(true) }
-  function setDP(field, value) { setComp(p => ({ ...p, deliveryPlan: { ...p.deliveryPlan, [field]: value } })); setDirty(true) }
-  function setDC(field, value) { setComp(p => ({ ...p, domainComponent: { ...p.domainComponent, [field]: value } })); setDirty(true) }
-  function setRes(field, value) { setComp(p => ({ ...p, resourcing: { ...p.resourcing, [field]: value } })); setDirty(true) }
-  function setDirtyField(field) { return v => set(field, v) }
+  useEffect(() => {
+    rfpGetSectionAudit(section.id).then(({ events }) => setHistory([...(events || [])].reverse())).catch(() => {})
+  }, [section.id])
+
+  async function refreshHistory() {
+    try { const { events } = await rfpGetSectionAudit(section.id); setHistory([...(events || [])].reverse()) } catch {}
+  }
+
+  function set(field, val) { setComp(p => ({ ...p, [field]: val })); setDirty(true) }
+  function setDP(field, val) { setComp(p => ({ ...p, deliveryPlan: { ...p.deliveryPlan, [field]: val } })); setDirty(true) }
+  function setDC(field, val) { setComp(p => ({ ...p, domainComponent: { ...p.domainComponent, [field]: val } })); setDirty(true) }
+  function setRes(field, val) { setComp(p => ({ ...p, resourcing: { ...p.resourcing, [field]: val } })); setDirty(true) }
+  function setF(field) { return v => set(field, v) }
 
   function applyPh(key, placeholder, value) {
     if (!value?.trim()) return
@@ -569,17 +482,38 @@ function DraftScreen({ section, buyer, onBack }) {
 
   async function save() {
     setSaving(true)
-    try { await rfpUpdateDraft(section.id, { components: comp, complianceVerdict: verdict, openDependencies: openDeps }); setDirty(false) }
-    catch {}
+    try {
+      const { draft } = await rfpUpdateDraft(section.id, { components: comp, complianceVerdict: verdict, openDependencies: openDeps })
+      onSectionChanged({ sectionId: section.id, draft })
+      setDirty(false)
+      await refreshHistory()
+    } catch {}
     setSaving(false)
   }
 
   async function advance() {
     if (dirty) await save()
-    setAdv(true)
-    try { const { draft } = await rfpAdvanceDraftStatus(section.id); setStatus(draft.status) }
-    catch {}
+    setAdv(true); setAdvErr(null)
+    try {
+      const resp = await rfpAdvanceDraftStatus(section.id)
+      setStatus(resp.draft.status)
+      setSectionStatus(resp.sectionStatus || sectionStatus)
+      onSectionChanged({ sectionId: section.id, draft: resp.draft, sectionStatus: resp.sectionStatus })
+      await refreshHistory()
+    } catch (e) { setAdvErr(e.message) }
     setAdv(false)
+  }
+
+  async function reopen() {
+    setReop(true)
+    try {
+      const resp = await rfpReopenDraft(section.id)
+      setStatus(resp.draft.status)
+      setSectionStatus(resp.sectionStatus)
+      onSectionChanged({ sectionId: section.id, draft: resp.draft, sectionStatus: resp.sectionStatus })
+      await refreshHistory()
+    } catch {}
+    setReop(false)
   }
 
   async function doExport() {
@@ -587,30 +521,45 @@ function DraftScreen({ section, buyer, onBack }) {
     setExp(true); setExpErr(null)
     try { await exportSectionDocx({ buyer, sectionCode: section.code, sectionTitle: section.title, draft: { components: comp, complianceVerdict: verdict, openDependencies: openDeps } }) }
     catch (e) { setExpErr(e.message) }
-    finally { setExp(false) }
+    setExp(false)
   }
 
+  async function navigateTo(targetSection) {
+    if (dirty) await save()
+    onNavigate(targetSection)
+  }
+
+  const prevSection = currentIdx > 0 ? sections[currentIdx - 1] : null
+  const nextSection = currentIdx < sections.length - 1 ? sections[currentIdx + 1] : null
+
   const MILESTONES_COLS = [{ key: 'phase', label: 'Phase', w: '15%', rows: 2 }, { key: 'timing', label: 'Timing', w: '15%', rows: 2 }, { key: 'activities', label: 'Activities', w: '45%', rows: 3 }, { key: 'exit', label: 'Exit criteria', w: '25%', rows: 3 }]
-  const TEAM_COLS   = [{ key: 'role', label: 'Role', w: '20%', rows: 2 }, { key: 'responsibility', label: 'Responsibility', w: '55%', rows: 3 }, { key: 'phases', label: 'Phases', w: '25%', rows: 2 }]
-  const GATES_COLS  = [{ key: 'gate', label: 'Gate', w: '20%', rows: 2 }, { key: 'entry', label: 'Entry criteria', w: '40%', rows: 3 }, { key: 'exit', label: 'Exit criteria', w: '40%', rows: 3 }]
-  const RISKS_COLS  = [{ key: 'risk', label: 'Risk', w: '30%', rows: 3 }, { key: 'likelihoodImpact', label: 'L×I', w: '10%', rows: 2 }, { key: 'mitigation', label: 'Mitigation', w: '40%', rows: 3 }, { key: 'owner', label: 'Owner', w: '20%', rows: 2 }]
-  const VERDICTS = ['Complies', 'Partially Complies', 'Does Not Comply']
-  const VERDICT_COLORS = { 'Complies': GREEN, 'Partially Complies': AMBER, 'Does Not Comply': RED }
+  const TEAM_COLS       = [{ key: 'role', label: 'Role', w: '20%', rows: 2 }, { key: 'responsibility', label: 'Responsibility', w: '55%', rows: 3 }, { key: 'phases', label: 'Phases', w: '25%', rows: 2 }]
+  const GATES_COLS      = [{ key: 'gate', label: 'Gate', w: '20%', rows: 2 }, { key: 'entry', label: 'Entry criteria', w: '40%', rows: 3 }, { key: 'exit', label: 'Exit criteria', w: '40%', rows: 3 }]
+  const RISKS_COLS      = [{ key: 'risk', label: 'Risk', w: '30%', rows: 3 }, { key: 'likelihoodImpact', label: 'L×I', w: '10%', rows: 2 }, { key: 'mitigation', label: 'Mitigation', w: '40%', rows: 3 }, { key: 'owner', label: 'Owner', w: '20%', rows: 2 }]
+  const VERDICTS        = ['Complies', 'Partially Complies', 'Does Not Comply']
+  const VCOLS           = { 'Complies': GREEN, 'Partially Complies': AMBER, 'Does Not Comply': RED }
 
   return (
     <div style={{ fontFamily: 'Inter, Arial, sans-serif', background: BG, minHeight: '100vh' }}>
       {/* Header */}
-      <div style={{ background: NAVY, padding: '10px 24px', display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-        <button onClick={onBack} style={{ background: 'rgba(255,255,255,0.1)', border: '1px solid rgba(255,255,255,0.2)', borderRadius: 6, color: WHITE, padding: '5px 12px', fontSize: 11, fontWeight: 600, cursor: 'pointer' }}>← Sections</button>
+      <div style={{ background: NAVY, padding: '8px 20px', display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+        <button onClick={onBack} style={{ background: 'rgba(255,255,255,0.1)', border: '1px solid rgba(255,255,255,0.2)', borderRadius: 6, color: WHITE, padding: '4px 10px', fontSize: 11, fontWeight: 600, cursor: 'pointer' }}>← Dashboard</button>
+        {/* Prev/next navigation */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+          <button onClick={() => prevSection && navigateTo(prevSection)} disabled={!prevSection}
+            style={{ background: prevSection ? 'rgba(255,255,255,0.12)' : 'transparent', border: '1px solid rgba(255,255,255,0.15)', borderRadius: 4, color: prevSection ? WHITE : 'rgba(255,255,255,0.3)', padding: '3px 8px', fontSize: 13, cursor: prevSection ? 'pointer' : 'not-allowed' }} title={prevSection ? `← ${prevSection.code}` : ''}>‹</button>
+          <span style={{ color: 'rgba(255,255,255,0.5)', fontSize: 11 }}>{currentIdx + 1} / {sections.length}</span>
+          <button onClick={() => nextSection && navigateTo(nextSection)} disabled={!nextSection}
+            style={{ background: nextSection ? 'rgba(255,255,255,0.12)' : 'transparent', border: '1px solid rgba(255,255,255,0.15)', borderRadius: 4, color: nextSection ? WHITE : 'rgba(255,255,255,0.3)', padding: '3px 8px', fontSize: 13, cursor: nextSection ? 'pointer' : 'not-allowed' }} title={nextSection ? `${nextSection.code} →` : ''}>›</button>
+        </div>
         <VerdictBadge verdict={verdict} />
         <span style={{ color: WHITE, fontWeight: 700, fontSize: 14 }}>{section.code} — {section.title}</span>
-        {section.scoringWeight && <span style={{ color: 'rgba(255,255,255,0.5)', fontSize: 11 }}>{section.scoringWeight}</span>}
+        {section.scoringWeight && <span style={{ color: 'rgba(255,255,255,0.45)', fontSize: 11 }}>{section.scoringWeight}</span>}
         <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center' }}>
-          <StatusBadge status={status} />
-          {dirty && <button onClick={save} disabled={saving} style={{ background: 'rgba(255,255,255,0.12)', border: '1px solid rgba(255,255,255,0.2)', borderRadius: 6, color: WHITE, padding: '5px 12px', fontSize: 11, cursor: 'pointer' }}>{saving ? 'Saving…' : 'Save'}</button>}
+          <StatusBadge status={sectionStatus} />
+          {dirty && <button onClick={save} disabled={saving} style={{ background: 'rgba(255,255,255,0.12)', border: '1px solid rgba(255,255,255,0.2)', borderRadius: 6, color: WHITE, padding: '4px 10px', fontSize: 11, cursor: 'pointer' }}>{saving ? 'Saving…' : 'Save'}</button>}
         </div>
       </div>
-
       {/* Disclaimer */}
       <div style={{ background: '#FEF9C3', borderBottom: `1px solid ${AMBER}`, padding: '5px 24px', fontSize: 11, color: '#92400E', fontWeight: 600 }}>
         ⚠ Commercial lens — internal draft only. Human approval required before export.
@@ -624,21 +573,14 @@ function DraftScreen({ section, buyer, onBack }) {
             <div style={{ display: 'flex', gap: 8 }}>
               {VERDICTS.map(v => (
                 <button key={v} onClick={() => { setVerdict(v); setDirty(true) }}
-                  style={{ flex: 1, padding: '8px 0', border: `2px solid ${verdict === v ? VERDICT_COLORS[v] : BORDER}`, borderRadius: 6, background: verdict === v ? VERDICT_COLORS[v] + '18' : 'none', color: verdict === v ? VERDICT_COLORS[v] : MUTED, fontSize: 12, fontWeight: verdict === v ? 700 : 400, cursor: 'pointer' }}>
+                  style={{ flex: 1, padding: '8px 0', border: `2px solid ${verdict === v ? VCOLS[v] : BORDER}`, borderRadius: 6, background: verdict === v ? VCOLS[v] + '18' : 'none', color: verdict === v ? VCOLS[v] : MUTED, fontSize: 12, fontWeight: verdict === v ? 700 : 400, cursor: 'pointer' }}>
                   {v}
                 </button>
               ))}
             </div>
           </Block>
-
-          <Block n={1} label="Understanding of the Challenge">
-            <TA value={comp.understanding} onChange={v => set('understanding', v)} rows={5} />
-          </Block>
-
-          <Block n={2} label="Approach & Recommended Option">
-            <TA value={comp.approachAndRecommendedOption} onChange={v => set('approachAndRecommendedOption', v)} rows={6} />
-          </Block>
-
+          <Block n={1} label="Understanding of the Challenge"><TA value={comp.understanding} onChange={v => set('understanding', v)} rows={5} /></Block>
+          <Block n={2} label="Approach & Recommended Option"><TA value={comp.approachAndRecommendedOption} onChange={v => set('approachAndRecommendedOption', v)} rows={6} /></Block>
           <Block n={3} label="Delivery Plan">
             <div style={{ marginBottom: 10 }}>
               <div style={{ fontSize: 10, fontWeight: 700, color: MUTED, marginBottom: 4, textTransform: 'uppercase' }}>Narrative</div>
@@ -647,16 +589,13 @@ function DraftScreen({ section, buyer, onBack }) {
             <div style={{ fontSize: 10, fontWeight: 700, color: MUTED, marginBottom: 6, textTransform: 'uppercase' }}>Milestones</div>
             <InlineTable columns={MILESTONES_COLS} rows={comp.deliveryPlan?.milestones || []} onChange={v => setDP('milestones', v)} />
           </Block>
-
           <Block n={4} label="Domain Component">
             <div style={{ marginBottom: 8 }}>
               <div style={{ fontSize: 10, fontWeight: 700, color: MUTED, marginBottom: 4, textTransform: 'uppercase' }}>Title</div>
-              <input value={comp.domainComponent?.title || ''} onChange={e => setDC('title', e.target.value)}
-                style={{ width: '100%', padding: '7px 10px', border: `1px solid ${BORDER}`, borderRadius: 6, fontSize: 13, boxSizing: 'border-box', fontFamily: 'inherit' }} />
+              <input value={comp.domainComponent?.title || ''} onChange={e => setDC('title', e.target.value)} style={{ width: '100%', padding: '7px 10px', border: `1px solid ${BORDER}`, borderRadius: 6, fontSize: 13, boxSizing: 'border-box', fontFamily: 'inherit' }} />
             </div>
             <TA value={comp.domainComponent?.content} onChange={v => setDC('content', v)} rows={5} />
           </Block>
-
           <Block n={5} label="Resourcing">
             <div style={{ marginBottom: 10 }}>
               <div style={{ fontSize: 10, fontWeight: 700, color: MUTED, marginBottom: 6, textTransform: 'uppercase' }}>Delivery team</div>
@@ -665,106 +604,105 @@ function DraftScreen({ section, buyer, onBack }) {
             <div style={{ fontSize: 10, fontWeight: 700, color: MUTED, marginBottom: 4, textTransform: 'uppercase' }}>Buyer-side commitment required</div>
             <TA value={comp.resourcing?.buyerCommitment} onChange={v => setRes('buyerCommitment', v)} rows={3} />
           </Block>
-
-          <Block n={6} label="Acceptance & Quality Gates">
-            <InlineTable columns={GATES_COLS} rows={comp.acceptanceGates || []} onChange={setDirtyField('acceptanceGates')} />
-          </Block>
-
-          <Block n={7} label="Pre-Work Required by Buyer">
-            <StringList items={comp.preWork || []} onChange={setDirtyField('preWork')} />
-          </Block>
-
-          <Block n={8} label="Assumptions, Limitations & Dependencies">
-            <StringList items={comp.assumptions || []} onChange={setDirtyField('assumptions')} />
-          </Block>
-
-          <Block n={9} label="Configuration / Customisation / Third-Party">
-            <TA value={comp.configCustomisationThirdParty} onChange={v => set('configCustomisationThirdParty', v)} rows={5} />
-          </Block>
-
-          <Block n={10} label="Costs & Fit-Gaps">
-            <TA value={comp.costs} onChange={v => set('costs', v)} rows={4} yellow />
-          </Block>
-
-          <Block n={11} label="Risks & Mitigations">
-            <InlineTable columns={RISKS_COLS} rows={comp.risks || []} onChange={setDirtyField('risks')} />
-          </Block>
-
-          {openDeps.length > 0 && (
-            <Block label="Open Dependencies / Clarification Questions">
-              <StringList items={openDeps} onChange={setOpenDeps} />
-            </Block>
-          )}
+          <Block n={6} label="Acceptance & Quality Gates"><InlineTable columns={GATES_COLS} rows={comp.acceptanceGates || []} onChange={setF('acceptanceGates')} /></Block>
+          <Block n={7} label="Pre-Work Required by Buyer"><StringList items={comp.preWork || []} onChange={setF('preWork')} /></Block>
+          <Block n={8} label="Assumptions, Limitations & Dependencies"><StringList items={comp.assumptions || []} onChange={setF('assumptions')} /></Block>
+          <Block n={9} label="Configuration / Customisation / Third-Party"><TA value={comp.configCustomisationThirdParty} onChange={v => set('configCustomisationThirdParty', v)} rows={5} /></Block>
+          <Block n={10} label="Costs & Fit-Gaps"><TA value={comp.costs} onChange={v => set('costs', v)} rows={4} yellow /></Block>
+          <Block n={11} label="Risks & Mitigations"><InlineTable columns={RISKS_COLS} rows={comp.risks || []} onChange={setF('risks')} /></Block>
+          {openDeps.length > 0 && <Block label="Open Dependencies / Clarification Questions"><StringList items={openDeps} onChange={setOpenDeps} /></Block>}
         </div>
 
         {/* Sidebar */}
-        <div style={{ width: 296, flexShrink: 0, padding: '20px 20px 20px 0' }}>
-          <div style={{ position: 'sticky', top: 20, display: 'flex', flexDirection: 'column', gap: 12 }}>
+        <div style={{ width: 286, flexShrink: 0, padding: '20px 16px 20px 0' }}>
+          <div style={{ position: 'sticky', top: 20, display: 'flex', flexDirection: 'column', gap: 10, maxHeight: 'calc(100vh - 100px)', overflowY: 'auto' }}>
             {/* Placeholders */}
-            <div style={{ background: WHITE, border: `1px solid ${BORDER}`, borderRadius: 8, overflow: 'hidden' }}>
-              <div style={{ padding: '9px 14px', borderBottom: `1px solid ${BORDER}`, background: '#FAFBFC' }}>
-                <div style={{ fontSize: 11, fontWeight: 700, color: NAVY, textTransform: 'uppercase', letterSpacing: '0.04em' }}>Placeholders</div>
-                <div style={{ fontSize: 11, color: unfilledCount > 0 ? AMBER : GREEN, marginTop: 2, fontWeight: 600 }}>
-                  {unfilledCount > 0 ? `${unfilledCount} need input` : '✓ All filled'}
-                </div>
+            <div style={{ background: WHITE, border: `1px solid ${BORDER}`, borderRadius: 8, overflow: 'hidden', flexShrink: 0 }}>
+              <div style={{ padding: '8px 12px', borderBottom: `1px solid ${BORDER}`, background: '#FAFBFC' }}>
+                <div style={{ fontSize: 10, fontWeight: 700, color: NAVY, textTransform: 'uppercase', letterSpacing: '0.04em' }}>Placeholders</div>
+                <div style={{ fontSize: 11, color: unfilledCount > 0 ? AMBER : GREEN, marginTop: 2, fontWeight: 600 }}>{unfilledCount > 0 ? `${unfilledCount} need input` : '✓ All filled'}</div>
               </div>
-              <div style={{ padding: '10px 14px', maxHeight: 380, overflowY: 'auto' }}>
-                {placeholders.length === 0 ? <div style={{ fontSize: 12, color: GREEN, fontStyle: 'italic' }}>None found</div> : placeholders.map(ph => {
-                  const filled = !!phValues[ph.key]?.trim()
-                  return (
-                    <div key={ph.key} style={{ marginBottom: 12 }}>
-                      <div style={{ fontSize: 10, fontWeight: 700, color: filled ? GREEN : AMBER, textTransform: 'uppercase', marginBottom: 2 }}>{filled ? '✓' : '○'} {ph.key}</div>
-                      <div style={{ fontSize: 10, color: MUTED, marginBottom: 4 }}>in {ph.context}</div>
-                      <div style={{ display: 'flex', gap: 4 }}>
-                        <input value={phValues[ph.key] || ''} onChange={e => setPhValues(p => ({ ...p, [ph.key]: e.target.value }))} placeholder="Enter value…"
-                          style={{ flex: 1, padding: '5px 8px', border: `1px solid ${BORDER}`, borderRadius: 4, fontSize: 11, minWidth: 0 }} />
-                        <button onClick={() => applyPh(ph.key, ph.placeholder, phValues[ph.key])} disabled={!phValues[ph.key]?.trim()}
-                          style={{ background: phValues[ph.key]?.trim() ? BLUE : '#CBD5E1', color: WHITE, border: 'none', borderRadius: 4, padding: '5px 8px', fontSize: 10, fontWeight: 700, cursor: phValues[ph.key]?.trim() ? 'pointer' : 'not-allowed' }}>
-                          Apply
-                        </button>
+              <div style={{ padding: '10px 12px', maxHeight: 300, overflowY: 'auto' }}>
+                {placeholders.length === 0 ? <div style={{ fontSize: 12, color: GREEN, fontStyle: 'italic' }}>None found</div>
+                  : placeholders.map(ph => {
+                    const filled = !!phValues[ph.key]?.trim()
+                    return (
+                      <div key={ph.key} style={{ marginBottom: 10 }}>
+                        <div style={{ fontSize: 10, fontWeight: 700, color: filled ? GREEN : AMBER, textTransform: 'uppercase', marginBottom: 1 }}>{filled ? '✓' : '○'} {ph.key}</div>
+                        <div style={{ fontSize: 9, color: MUTED, marginBottom: 3 }}>in {ph.context}</div>
+                        <div style={{ display: 'flex', gap: 4 }}>
+                          <input value={phValues[ph.key] || ''} onChange={e => setPhValues(p => ({ ...p, [ph.key]: e.target.value }))} placeholder="Enter value…" style={{ flex: 1, padding: '4px 7px', border: `1px solid ${BORDER}`, borderRadius: 4, fontSize: 11, minWidth: 0 }} />
+                          <button onClick={() => applyPh(ph.key, ph.placeholder, phValues[ph.key])} disabled={!phValues[ph.key]?.trim()}
+                            style={{ background: phValues[ph.key]?.trim() ? BLUE : '#CBD5E1', color: WHITE, border: 'none', borderRadius: 4, padding: '4px 7px', fontSize: 10, fontWeight: 700, cursor: phValues[ph.key]?.trim() ? 'pointer' : 'not-allowed' }}>Apply</button>
+                        </div>
                       </div>
-                    </div>
-                  )
-                })}
+                    )
+                  })}
               </div>
             </div>
 
             {/* Status flow */}
-            <div style={{ background: WHITE, border: `1px solid ${BORDER}`, borderRadius: 8, padding: '13px 14px' }}>
+            <div style={{ background: WHITE, border: `1px solid ${BORDER}`, borderRadius: 8, padding: '12px', flexShrink: 0 }}>
               <div style={{ marginBottom: 8 }}>
                 <div style={{ fontSize: 10, fontWeight: 700, color: MUTED, textTransform: 'uppercase', marginBottom: 4 }}>Status</div>
-                <StatusBadge status={status} />
+                <StatusBadge status={sectionStatus} />
               </div>
               <div style={{ fontSize: 11, color: MUTED, lineHeight: 1.5, marginBottom: 10 }}>
-                {status === 'draft' && 'Fill placeholders and edit components. Mark ready when done.'}
-                {status === 'in_review' && 'Under review. Approve once a human has checked all content.'}
-                {status === 'approved' && 'Approved. Safe to export.'}
+                {sectionStatus === 'drafted'   && 'Fill placeholders and review all components. Mark ready when done.'}
+                {sectionStatus === 'in_review' && 'Under review. Approve once a human has checked all content and placeholders.'}
+                {sectionStatus === 'approved'  && 'Approved and export-ready.'}
+                {sectionStatus === 'reopened'  && 'Reopened for further editing.'}
               </div>
-              {status !== 'approved' && (
+              {advErr && <div style={{ marginBottom: 8, fontSize: 11, color: RED, background: '#FEE2E2', padding: '5px 8px', borderRadius: 6 }}>{advErr}</div>}
+              {unfilledCount > 0 && sectionStatus === 'in_review' && (
+                <div style={{ marginBottom: 8, fontSize: 11, color: AMBER, background: '#FEF9C3', padding: '5px 8px', borderRadius: 6 }}>
+                  ⚠ Fill {unfilledCount} placeholder{unfilledCount !== 1 ? 's' : ''} before approving.
+                </div>
+              )}
+              {sectionStatus !== 'approved' && (
                 <button onClick={advance} disabled={advancing}
-                  style={{ width: '100%', background: advancing ? '#CBD5E1' : (status === 'in_review' ? GREEN : BLUE), color: WHITE, border: 'none', borderRadius: 6, padding: '9px 0', fontSize: 12, fontWeight: 700, cursor: advancing ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, marginBottom: 6 }}>
-                  {advancing ? <><Spinner /> Updating…</> : status === 'in_review' ? 'Approve Response' : 'Mark Ready for Review'}
+                  style={{ width: '100%', background: advancing ? '#CBD5E1' : (sectionStatus === 'in_review' ? GREEN : BLUE), color: WHITE, border: 'none', borderRadius: 6, padding: '9px 0', fontSize: 12, fontWeight: 700, cursor: advancing ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, marginBottom: 6 }}>
+                  {advancing ? <><Spinner /> Updating…</> : sectionStatus === 'in_review' ? '✓ Approve Response' : 'Mark for Review'}
                 </button>
               )}
-              {status === 'approved' && (
+              {sectionStatus === 'approved' && (
                 <>
                   <button onClick={doExport} disabled={exporting}
-                    style={{ width: '100%', background: exporting ? '#CBD5E1' : NAVY, color: WHITE, border: 'none', borderRadius: 6, padding: '9px 0', fontSize: 12, fontWeight: 700, cursor: exporting ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
+                    style={{ width: '100%', background: exporting ? '#CBD5E1' : NAVY, color: WHITE, border: 'none', borderRadius: 6, padding: '9px 0', fontSize: 12, fontWeight: 700, cursor: exporting ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, marginBottom: 6 }}>
                     {exporting ? <><Spinner /> Generating…</> : '⬇ Export to .docx'}
+                  </button>
+                  <button onClick={reopen} disabled={reopening}
+                    style={{ width: '100%', background: 'none', border: `1px solid ${AMBER}`, color: AMBER, borderRadius: 6, padding: '7px 0', fontSize: 11, fontWeight: 600, cursor: reopening ? 'not-allowed' : 'pointer' }}>
+                    {reopening ? 'Reopening…' : '↩ Reopen for editing'}
                   </button>
                   {exportErr && <div style={{ marginTop: 6, color: RED, fontSize: 11 }}>{exportErr}</div>}
                 </>
               )}
-              {status !== 'approved' && unfilledCount > 0 && (
-                <div style={{ marginTop: 6, fontSize: 11, color: AMBER, background: '#FEF9C3', padding: '5px 8px', borderRadius: 6 }}>
-                  {unfilledCount} placeholder{unfilledCount !== 1 ? 's' : ''} still unfilled.
-                </div>
-              )}
             </div>
+
+            {/* History */}
+            {history.length > 0 && (
+              <div style={{ background: WHITE, border: `1px solid ${BORDER}`, borderRadius: 8, overflow: 'hidden', flexShrink: 0 }}>
+                <div style={{ padding: '8px 12px', borderBottom: `1px solid ${BORDER}`, background: '#FAFBFC', fontSize: 10, fontWeight: 700, color: NAVY, textTransform: 'uppercase', letterSpacing: '0.04em' }}>History</div>
+                <div style={{ padding: '8px 12px', maxHeight: 260, overflowY: 'auto' }}>
+                  {history.slice(0, 25).map((ev, i) => {
+                    const m = EVENT_META[ev.type] || { icon: '·', label: ev.type }
+                    return (
+                      <div key={ev.id || i} style={{ display: 'flex', gap: 7, marginBottom: 10, alignItems: 'flex-start' }}>
+                        <span style={{ fontSize: 14, flexShrink: 0, lineHeight: 1.3 }}>{m.icon}</span>
+                        <div>
+                          <div style={{ fontSize: 11, fontWeight: 600, color: NAVY }}>{ev.summary}</div>
+                          <div style={{ fontSize: 10, color: MUTED }}>{timeAgo(ev.createdAt)} · {ev.actor}</div>
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+            )}
           </div>
         </div>
       </div>
-
       <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
     </div>
   )
@@ -772,9 +710,46 @@ function DraftScreen({ section, buyer, onBack }) {
 
 // ── Shell ─────────────────────────────────────────────────────────────────────
 export default function RFPModule({ onBack }) {
-  const [screen, setScreen] = useState('setup')
-  const [pack, setPack]     = useState(null)
-  const [section, setSection] = useState(null)
+  const [screen, setScreen]           = useState('setup')
+  const [pack, setPack]               = useState(null)
+  const [sections, setSections]       = useState([])
+  const [currentSection, setCurrent]  = useState(null)
+  const [currentIdx, setCurrentIdx]   = useState(0)
+
+  function updateSection(changed) {
+    // changed: { sectionId, draft?, sectionStatus? }
+    setSections(prev => prev.map(s => s.id === changed.sectionId ? {
+      ...s,
+      ...(changed.draft ? { draft: changed.draft } : {}),
+      ...(changed.sectionStatus ? { status: changed.sectionStatus } : {}),
+    } : s))
+    setCurrent(prev => prev && prev.id === changed.sectionId ? {
+      ...prev,
+      ...(changed.draft ? { draft: changed.draft } : {}),
+      ...(changed.sectionStatus ? { status: changed.sectionStatus } : {}),
+    } : prev)
+  }
+
+  function openSection(section) {
+    const latestSections = sections.length ? sections : [section]
+    const latest  = latestSections.find(s => s.id === section.id) || section
+    const idx     = latestSections.findIndex(s => s.id === latest.id)
+    setCurrent(latest)
+    setCurrentIdx(idx >= 0 ? idx : 0)
+    setScreen('draft')
+  }
+
+  function handleNavigate(targetSection) {
+    const latest = sections.find(s => s.id === targetSection.id) || targetSection
+    const idx    = sections.findIndex(s => s.id === latest.id)
+    if (latest.draft) {
+      setCurrent(latest)
+      setCurrentIdx(idx >= 0 ? idx : 0)
+      // screen stays 'draft' — key on currentSection.id forces remount
+    } else {
+      setScreen('dashboard')
+    }
+  }
 
   return (
     <div style={{ fontFamily: 'Inter, Arial, sans-serif', background: BG, minHeight: '100vh' }}>
@@ -783,12 +758,33 @@ export default function RFPModule({ onBack }) {
           <button onClick={onBack} style={{ background: 'rgba(255,255,255,0.1)', border: '1px solid rgba(255,255,255,0.18)', borderRadius: 6, color: WHITE, padding: '4px 12px', fontSize: 11, fontWeight: 600, cursor: 'pointer' }}>← RAI Home</button>
           <span style={{ fontSize: 15, fontWeight: 700, color: WHITE }}>RFP Response Drafter</span>
           <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.4)' }}>Commercial lens</span>
-          {pack && screen === 'sections' && <span style={{ fontSize: 12, color: 'rgba(255,255,255,0.5)' }}>/ {pack.buyer}</span>}
+          {pack && screen === 'dashboard' && <span style={{ fontSize: 12, color: 'rgba(255,255,255,0.5)' }}>/ {pack.buyer}</span>}
         </div>
       )}
-      {screen === 'setup' && <SetupScreen onPack={p => { setPack(p); setScreen('sections') }} />}
-      {screen === 'sections' && pack && <SectionsScreen pack={pack} onDraft={s => { setSection(s); setScreen('draft') }} onReset={() => { setPack(null); setScreen('setup') }} />}
-      {screen === 'draft' && section && <DraftScreen section={section} buyer={pack?.buyer} onBack={() => { setSection(null); setScreen('sections') }} />}
+      {screen === 'setup' && (
+        <SetupScreen onPack={p => { setPack(p); setSections(p.sections || []); setScreen('dashboard') }} />
+      )}
+      {screen === 'dashboard' && pack && (
+        <DashboardScreen
+          pack={pack}
+          sections={sections}
+          onSectionsChange={setSections}
+          onOpenSection={openSection}
+          onReset={() => { setPack(null); setSections([]); setScreen('setup') }}
+        />
+      )}
+      {screen === 'draft' && currentSection && (
+        <DraftScreen
+          key={currentSection.id}
+          section={currentSection}
+          sections={sections}
+          currentIdx={currentIdx}
+          buyer={pack?.buyer}
+          onBack={() => setScreen('dashboard')}
+          onNavigate={handleNavigate}
+          onSectionChanged={updateSection}
+        />
+      )}
     </div>
   )
 }

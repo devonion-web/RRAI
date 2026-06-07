@@ -1,0 +1,66 @@
+Add the following to the existing RRAI RFP Response Drafter (Next.js + TypeScript +
+Tailwind + Prisma + SQLite + Anthropic SDK). The two additions are independent.
+
+=== ADDITION 1: Make extraction & drafting return reliable JSON ===
+
+Problem: the extraction call sometimes returns JSON wrapped in a ```json fence and/or
+truncated, which breaks JSON.parse.
+
+Fix:
+1. Use Anthropic Structured Outputs (JSON outputs mode) on BOTH the extraction and the
+   drafting calls. Pass the schema via output_config.format with type "json_schema"; in
+   TypeScript use the SDK helpers (zodOutputFormat for a Zod schema, or
+   jsonSchemaOutputFormat for raw JSON Schema). Include the beta header
+   "anthropic-beta: structured-outputs-2025-11-13" — confirm current syntax and whether
+   the header is still needed at:
+   https://platform.claude.com/docs/en/build-with-claude/structured-outputs
+   This guarantees schema-valid JSON with no fences or preamble.
+2. Raise max_tokens to 8192 on both calls. After each call, check stop_reason; if it is
+   "max_tokens", surface a clear "response truncated — increase max_tokens" error instead
+   of parsing a partial response.
+3. Do NOT prefill the assistant turn with "{" — it is unsupported on the current
+   Opus/Sonnet models.
+4. Keep a defensive parse helper as a fallback for any non-structured call: strip
+```json / ``` fences and trim before JSON.parse.
+5. Keep the JSON schema in the prompt text for the model's understanding, but rely on
+   structured outputs for enforcement.
+
+=== ADDITION 2: Section navigation + audit trail ===
+
+Problem: the current flow is a one-pass wizard — no way to move between sections, track
+progress, or see history.
+
+Data model:
+- Add a status to each section: not_started | extracted | drafted | in_review |
+  approved | reopened. Derive a needs_attention flag when a section has unfilled
+  placeholders. "Complete" = approved AND zero unfilled placeholders.
+- Add an append-only AuditEvent model: id, bidPackId, sectionId (nullable), type,
+  summary, actor, payload (JSON), createdAt. Event types: pack_uploaded,
+  section_detected, brief_extracted, draft_generated, draft_edited, placeholder_filled,
+  status_changed (store from/to in payload), approved, exported, reopened.
+- Add a SectionRevision model (id, sectionId, components JSON, createdAt) so each
+  regenerate or major edit is versioned and nothing is lost when moving back and forth.
+
+Behaviour:
+- Write an AuditEvent on every meaningful action above. Never delete events.
+
+UI (hub and spoke; all state persisted in the DB so users can leave and return):
+- Bid-pack DASHBOARD (the hub): list every section with status, scoring weight, owner,
+  % placeholders filled and last-updated. Open any section in any order; return here at
+  any time. Show overall progress (X of Y sections approved).
+- Section EDITOR (the spoke): edit the 12 components, fill placeholders, regenerate and
+  change status, with previous/next navigation and "back to dashboard". Include a HISTORY
+  panel showing that section's AuditEvents.
+
+Completion gating:
+- A section can only become "approved" when it has zero unfilled placeholders.
+- The pack can only be exported/submitted when every in-scope section is approved.
+- Keep the existing per-section export gate (no exporting an unapproved draft).
+
+Build order: data model + AuditEvent logging first; then the dashboard; then the section
+editor with prev/next and the history panel; then completion gating.
+```
+
+Both blocks are self-contained, so the Replit Agent can do them in either order — though I'd run ADDITION 1 first since it's what's currently erroring.
+
+If you also want the **eval/test harness** as a third block (the deterministic checks + model-as-judge we discussed), say so and I'll add it in the same format. Otherwise, the live M&S sections — 2.3, 2.5, 2.8 — are still there whenever you want to switch back from build mode to the bid itself.

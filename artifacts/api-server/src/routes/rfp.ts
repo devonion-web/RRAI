@@ -8,7 +8,8 @@ import { callClaudeJSON } from "../lib/anthropic";
 import { storeTextDoc, storeExcelDoc, getDocs, removeDoc, storeSize } from "../lib/docStore";
 import {
   createPack, getPack, setSections, getSection, updateSection,
-  saveDraft, updateDraft, advanceDraftStatus,
+  saveDraft, updateDraft, advanceDraftStatus, reopenDraft,
+  appendAuditEvent, getAuditEvents, getRevisions, saveRevision,
   type DraftComponents,
 } from "../lib/bidPackStore";
 import { parseExcelForRequirements } from "../lib/xlsxParser";
@@ -20,7 +21,7 @@ const PROMPTS_DIR = join(process.cwd(), "prompts");
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 const BIDDER_CONTEXT = "LogicGate (platform, prime); Risk Rising (implementation / services partner)";
-const HOUSE_VOICE = "outcome-first, concise, UK English, no superlatives, evidence-led";
+const HOUSE_VOICE    = "outcome-first, concise, UK English, no superlatives, evidence-led";
 
 const RR_KNOWLEDGE = `## Risk Rising — Delivery Capability
 
@@ -43,8 +44,6 @@ Risk Rising OWNS: implementation, project delivery, configuration, training, UAT
 
 LogicGate OWNS: functional platform features, workflow engine, dashboards, reporting, integrations catalogue, technical architecture, security posture, hosting, product roadmap, platform SLAs.
 
-Panorays OWNS: third-party cyber monitoring, vendor assessment, external attack surface, questionnaire automation.
-
 ## Delivery approach
 
 Typical phases: Discovery & Design → Build & Configure → Integrate → Test (SIT → UAT) → Go-live → Hypercare → Managed Service.
@@ -59,35 +58,34 @@ function parsePromptFile(content: string): { system: string; userTemplate: strin
   const sysMatch = content.match(/\n## SYSTEM\s*\n/);
   const sysStart = sysMatch?.index !== undefined ? sysMatch.index + sysMatch[0].length : 0;
   return {
-    system: content.slice(sysStart, userMatch.index).trim(),
+    system:       content.slice(sysStart, userMatch.index).trim(),
     userTemplate: content.slice(userMatch.index + userMatch[0].length).trim(),
   };
 }
 
 function readPrompt(name: string): string {
-  try { return readFileSync(join(PROMPTS_DIR, name), "utf-8"); }
-  catch { return ""; }
+  try { return readFileSync(join(PROMPTS_DIR, name), "utf-8"); } catch { return ""; }
 }
 
 // ── Content builder ───────────────────────────────────────────────────────────
 
 function buildContent(docs: ReturnType<typeof getDocs>, charLimitPerDoc: number): string {
-  let content = "";
+  let out = "";
   for (const doc of docs) {
     if (doc.text) {
       const slice = doc.text.length > charLimitPerDoc ? doc.text.slice(0, charLimitPerDoc) + "\n[...truncated]" : doc.text;
-      content += `\n\n=== ${doc.name} ===\n${slice}`;
+      out += `\n\n=== ${doc.name} ===\n${slice}`;
     } else if (doc.structuredRows?.length) {
       const reqs = doc.structuredRows.slice(0, 200).map((r) => r.requirement).filter(Boolean).join("\n");
-      content += `\n\n=== ${doc.name} (spreadsheet) ===\n${reqs.slice(0, charLimitPerDoc)}`;
+      out += `\n\n=== ${doc.name} (spreadsheet) ===\n${reqs.slice(0, charLimitPerDoc)}`;
     }
   }
-  return content;
+  return out;
 }
 
-// ── Section detection prompt ──────────────────────────────────────────────────
+// ── Section detection system prompt ──────────────────────────────────────────
 
-const DETECT_SECTIONS_SYSTEM = `You are an expert bid analyst. Read the provided procurement documents and identify all scored response sections.
+const DETECT_SYSTEM = `You are an expert bid analyst. Read the provided procurement documents and identify all scored response sections.
 
 A scored response section requires a detailed written response (100+ words) that will be evaluated by the buyer. These are typically numbered (e.g. "Section 2.1", "Q4") and include specific questions or requirements the bidder must address.
 
@@ -96,21 +94,21 @@ NOT scored sections: pricing matrices, administrative forms, declarations, compa
 Output ONLY valid JSON — no prose, no code fences:
 { "sections": [{ "code": "string", "title": "string", "scoringWeight": "string|null", "summary": "one sentence" }] }`;
 
-// ── Default components (fallback if Claude omits a field) ─────────────────────
+// ── Default components (fallback) ─────────────────────────────────────────────
 
 function defaultComponents(): DraftComponents {
   return {
-    understanding: "{{PLACEHOLDER: understanding of buyer challenge and context}}",
+    understanding:                "{{PLACEHOLDER: understanding of buyer challenge and context}}",
     approachAndRecommendedOption: "{{PLACEHOLDER: approach and recommended option}}",
-    deliveryPlan: { narrative: "{{PLACEHOLDER: delivery plan narrative}}", milestones: [] },
-    domainComponent: { title: "{{PLACEHOLDER: domain component title}}", content: "{{PLACEHOLDER: domain component content}}" },
-    resourcing: { deliveryTeam: [], buyerCommitment: "{{PLACEHOLDER: buyer-side commitment required}}" },
-    acceptanceGates: [],
-    preWork: [],
-    assumptions: [],
+    deliveryPlan:       { narrative: "{{PLACEHOLDER: delivery plan narrative}}", milestones: [] },
+    domainComponent:    { title: "{{PLACEHOLDER: domain component title}}", content: "{{PLACEHOLDER: domain component content}}" },
+    resourcing:         { deliveryTeam: [], buyerCommitment: "{{PLACEHOLDER: buyer-side commitment required}}" },
+    acceptanceGates:    [],
+    preWork:            [],
+    assumptions:        [],
     configCustomisationThirdParty: "{{PLACEHOLDER: configuration and customisation details}}",
-    costs: "{{PLACEHOLDER: cost reference — see pricing submission}}",
-    risks: [],
+    costs:  "{{PLACEHOLDER: cost reference — see pricing submission}}",
+    risks:  [],
   };
 }
 
@@ -125,7 +123,6 @@ router.get("/rfp/health", (_req, res) => {
 router.post("/rfp/upload-files", upload.array("files", 20), async (req, res): Promise<void> => {
   const files = req.files as Express.Multer.File[] | undefined;
   if (!files?.length) { res.status(400).json({ error: "No files uploaded" }); return; }
-  req.log.info({ count: files.length }, "rfp: upload-files");
   const results: Array<Record<string, unknown>> = [];
   for (const file of files) {
     const name = file.originalname;
@@ -139,15 +136,13 @@ router.post("/rfp/upload-files", upload.array("files", 20), async (req, res): Pr
       } else {
         let text = "";
         if (ext === "docx" || ext === "doc") { const r = await mammoth.extractRawText({ buffer: file.buffer }); text = r.value; }
-        else if (ext === "pdf")               { const r = await pdfParse(file.buffer); text = r.text; }
-        else                                  { text = file.buffer.toString("utf-8"); }
+        else if (ext === "pdf")              { const r = await pdfParse(file.buffer); text = r.text; }
+        else                                 { text = file.buffer.toString("utf-8"); }
         if (!text.trim()) { results.push({ name, error: "No text extracted." }); continue; }
         const entry = storeTextDoc(name, text.trim());
         results.push({ id: entry.id, name, fileType: "text", charCount: entry.charCount });
       }
-    } catch (err) {
-      results.push({ name, error: (err as Error).message });
-    }
+    } catch (err) { results.push({ name, error: (err as Error).message }); }
   }
   res.json({ files: results });
 });
@@ -171,10 +166,11 @@ router.post("/rfp/packs", (req, res): void => {
   const limit = Math.floor(120_000 / Math.max(docs.length, 1));
   const parsedContent = buildContent(docs, limit);
   const pack = createPack(
-    typeof name === "string" && name.trim() ? name.trim() : "Bid Pack",
+    typeof name  === "string" && name.trim()  ? name.trim()  : "Bid Pack",
     typeof buyer === "string" && buyer.trim() ? buyer.trim() : "Unknown Buyer",
     parsedContent,
   );
+  appendAuditEvent(pack.id, null, "pack_uploaded", `Pack "${pack.name}" created for ${pack.buyer}`, "user");
   req.log.info({ packId: pack.id, chars: parsedContent.length }, "rfp: pack created");
   res.json(pack);
 });
@@ -185,6 +181,11 @@ router.get("/rfp/packs/:id", (req, res): void => {
   res.json(pack);
 });
 
+router.get("/rfp/packs/:id/audit", (req, res): void => {
+  const events = getAuditEvents(req.params.id);
+  res.json({ events });
+});
+
 // ── Detect sections ───────────────────────────────────────────────────────────
 
 router.post("/rfp/packs/:id/detect-sections", async (req, res): Promise<void> => {
@@ -192,11 +193,12 @@ router.post("/rfp/packs/:id/detect-sections", async (req, res): Promise<void> =>
   if (!pack) { res.status(404).json({ error: "Pack not found" }); return; }
   req.log.info({ packId: pack.id }, "rfp: detecting sections");
   try {
-    const user = `Buyer: ${pack.buyer}\n\nDocument content:\n${pack.parsedContent.slice(0, 80_000)}`;
+    const user   = `Buyer: ${pack.buyer}\n\nDocument content:\n${pack.parsedContent.slice(0, 80_000)}`;
     const result = await callClaudeJSON<{ sections: Array<{ code: string; title: string; scoringWeight: string | null; summary: string }> }>(
-      DETECT_SECTIONS_SYSTEM, user, { maxTokens: 2000 },
+      DETECT_SYSTEM, user, { maxTokens: 2000 },
     );
     const sections = setSections(pack.id, Array.isArray(result?.sections) ? result.sections : []);
+    appendAuditEvent(pack.id, null, "section_detected", `Detected ${sections.length} scored section${sections.length !== 1 ? "s" : ""}`, "RRAI");
     req.log.info({ packId: pack.id, count: sections.length }, "rfp: sections detected");
     res.json({ sections });
   } catch (err) {
@@ -211,19 +213,19 @@ router.post("/rfp/sections/:id/extract-brief", async (req, res): Promise<void> =
   const section = getSection(req.params.id);
   if (!section) { res.status(404).json({ error: "Section not found" }); return; }
   const pack = getPack(section.packId);
-  if (!pack) { res.status(404).json({ error: "Pack not found" }); return; }
+  if (!pack)    { res.status(404).json({ error: "Pack not found" }); return; }
 
   req.log.info({ sectionId: section.id, code: section.code }, "rfp: extracting brief");
 
   const { system, userTemplate } = parsePromptFile(readPrompt("extraction.md"));
   const userContent = userTemplate
-    .replace("{{SECTION_CODE}}", section.code)
+    .replace("{{SECTION_CODE}}",       section.code)
     .replace("{{SECTION_TITLE_HINT}}", section.title)
-    .replace("{{PARSED_PACK}}", pack.parsedContent.slice(0, 60_000));
+    .replace("{{PARSED_PACK}}",        pack.parsedContent.slice(0, 60_000));
 
   try {
-    const brief = await callClaudeJSON<Record<string, unknown>>(system, userContent, { maxTokens: 3000 });
-    const arr = <T>(v: unknown): T[] => Array.isArray(v) ? v as T[] : [];
+    const brief = await callClaudeJSON<Record<string, unknown>>(system, userContent, { maxTokens: 4000 });
+    const arr   = <T>(v: unknown): T[] => Array.isArray(v) ? v as T[] : [];
 
     const updated = updateSection(section.id, {
       mandatedResponseStructure: arr(brief?.mandatedResponseStructure),
@@ -240,11 +242,13 @@ router.post("/rfp/sections/:id/extract-brief", async (req, res): Promise<void> =
       crossReferences:           arr(brief?.crossReferences),
       discrepancies:             arr(brief?.discrepancies),
       gaps:                      arr(brief?.gaps),
-      scoringWeight:             (brief?.scoringWeight as string | null) ?? section.scoringWeight,
-      briefStatus:               "extracted",
-      briefError:                null,
+      scoringWeight:  (brief?.scoringWeight as string | null) ?? section.scoringWeight,
+      briefStatus:    "extracted",
+      briefError:     null,
+      status:         "extracted",
     });
 
+    appendAuditEvent(pack.id, section.id, "brief_extracted", `Brief extracted for ${section.code}: ${section.title}`, "RRAI");
     req.log.info({ sectionId: section.id }, "rfp: brief extracted");
     res.json({ section: updated });
   } catch (err) {
@@ -260,71 +264,69 @@ router.post("/rfp/sections/:id/draft", async (req, res): Promise<void> => {
   const section = getSection(req.params.id);
   if (!section) { res.status(404).json({ error: "Section not found" }); return; }
   const pack = getPack(section.packId);
-  if (!pack) { res.status(404).json({ error: "Pack not found" }); return; }
+  if (!pack)    { res.status(404).json({ error: "Pack not found" }); return; }
 
   req.log.info({ sectionId: section.id, code: section.code }, "rfp: generating draft");
 
   const briefJson = JSON.stringify({
-    section: { code: section.code, title: section.title },
-    scoringWeight:             section.scoringWeight,
+    section:               { code: section.code, title: section.title },
+    scoringWeight:         section.scoringWeight,
     mandatedResponseStructure: section.mandatedResponseStructure,
-    requirements:              section.requirements,
-    minimumResponseItems:      section.minimumResponseItems,
-    buyerActivities:           section.buyerActivities,
-    buyerChallenges:           section.buyerChallenges,
-    considerations:            section.considerations,
-    keyDates:                  section.keyDates,
-    constraints:               section.constraints,
-    commercialTerms:           section.commercialTerms,
-    namedOwners:               section.namedOwners,
-    regulatoryAnchors:         section.regulatoryAnchors,
-    discrepancies:             section.discrepancies,
-    gaps:                      section.gaps,
+    requirements:          section.requirements,
+    minimumResponseItems:  section.minimumResponseItems,
+    buyerActivities:       section.buyerActivities,
+    buyerChallenges:       section.buyerChallenges,
+    considerations:        section.considerations,
+    keyDates:              section.keyDates,
+    constraints:           section.constraints,
+    commercialTerms:       section.commercialTerms,
+    namedOwners:           section.namedOwners,
+    regulatoryAnchors:     section.regulatoryAnchors,
+    discrepancies:         section.discrepancies,
+    gaps:                  section.gaps,
   }, null, 2);
 
   const { system: rawSystem, userTemplate } = parsePromptFile(readPrompt("drafting.md"));
-  const system = rawSystem.replace("{{HOUSE_VOICE}}", HOUSE_VOICE);
+  const system      = rawSystem.replace("{{HOUSE_VOICE}}", HOUSE_VOICE);
   const userContent = userTemplate
-    .replace("{{BUYER_NAME}}", pack.buyer)
+    .replace("{{BUYER_NAME}}",     pack.buyer)
     .replace("{{BIDDER_CONTEXT}}", BIDDER_CONTEXT)
-    .replace("{{BRIEF_JSON}}", briefJson)
-    .replace("{{KNOWLEDGE}}", RR_KNOWLEDGE)
-    .replace("{{HOUSE_VOICE}}", HOUSE_VOICE);
+    .replace("{{BRIEF_JSON}}",     briefJson)
+    .replace("{{KNOWLEDGE}}",      RR_KNOWLEDGE)
+    .replace("{{HOUSE_VOICE}}",    HOUSE_VOICE);
 
   try {
     const result = await callClaudeJSON<{
-      lens?: string;
-      complianceVerdict?: string;
-      components?: Partial<DraftComponents>;
-      placeholders?: string[];
-      openDependencies?: string[];
-    }>(system, userContent, { maxTokens: 8000 });
+      lens?: string; complianceVerdict?: string;
+      components?: Partial<DraftComponents>; placeholders?: string[]; openDependencies?: string[];
+    }>(system, userContent, { maxTokens: 8192 });
 
-    const def = defaultComponents();
+    const def  = defaultComponents();
     const comp = (result?.components ?? {}) as Partial<DraftComponents>;
     const components: DraftComponents = {
-      understanding:                   comp.understanding                   ?? def.understanding,
-      approachAndRecommendedOption:    comp.approachAndRecommendedOption    ?? def.approachAndRecommendedOption,
-      deliveryPlan:                    comp.deliveryPlan                    ?? def.deliveryPlan,
-      domainComponent:                 comp.domainComponent                 ?? def.domainComponent,
-      resourcing:                      comp.resourcing                      ?? def.resourcing,
-      acceptanceGates:                 comp.acceptanceGates                 ?? def.acceptanceGates,
-      preWork:                         comp.preWork                         ?? def.preWork,
-      assumptions:                     comp.assumptions                     ?? def.assumptions,
-      configCustomisationThirdParty:   comp.configCustomisationThirdParty   ?? def.configCustomisationThirdParty,
-      costs:                           comp.costs                           ?? def.costs,
-      risks:                           comp.risks                           ?? def.risks,
+      understanding:                comp.understanding                   ?? def.understanding,
+      approachAndRecommendedOption: comp.approachAndRecommendedOption    ?? def.approachAndRecommendedOption,
+      deliveryPlan:                 comp.deliveryPlan                    ?? def.deliveryPlan,
+      domainComponent:              comp.domainComponent                 ?? def.domainComponent,
+      resourcing:                   comp.resourcing                      ?? def.resourcing,
+      acceptanceGates:              comp.acceptanceGates                 ?? def.acceptanceGates,
+      preWork:                      comp.preWork                         ?? def.preWork,
+      assumptions:                  comp.assumptions                     ?? def.assumptions,
+      configCustomisationThirdParty: comp.configCustomisationThirdParty  ?? def.configCustomisationThirdParty,
+      costs:                        comp.costs                           ?? def.costs,
+      risks:                        comp.risks                           ?? def.risks,
     };
 
     const draft = saveDraft(section.id, {
-      lens:                result?.lens ?? "Commercial",
-      complianceVerdict:   result?.complianceVerdict ?? "Partially Complies",
+      lens:             result?.lens ?? "Commercial",
+      complianceVerdict: result?.complianceVerdict ?? "Partially Complies",
       components,
-      placeholders:        Array.isArray(result?.placeholders) ? result.placeholders : [],
-      openDependencies:    Array.isArray(result?.openDependencies) ? result.openDependencies : [],
+      placeholders:     Array.isArray(result?.placeholders)      ? result.placeholders      : [],
+      openDependencies: Array.isArray(result?.openDependencies)  ? result.openDependencies  : [],
     });
+    appendAuditEvent(pack.id, section.id, "draft_generated", `Draft generated for ${section.code}: ${section.title}`, "RRAI");
     req.log.info({ sectionId: section.id }, "rfp: draft generated");
-    res.json({ draft });
+    res.json({ draft, sectionStatus: "drafted" });
   } catch (err) {
     req.log.error({ err }, "rfp: draft generation failed");
     res.status(500).json({ error: (err as Error).message });
@@ -334,18 +336,54 @@ router.post("/rfp/sections/:id/draft", async (req, res): Promise<void> => {
 // ── Update draft ──────────────────────────────────────────────────────────────
 
 router.patch("/rfp/sections/:id/draft", (req, res): void => {
+  const section = getSection(req.params.id);
+  if (!section?.draft) { res.status(404).json({ error: "Draft not found" }); return; }
   const updates = req.body as Partial<{ components: DraftComponents; placeholders: string[]; openDependencies: string[]; complianceVerdict: string }>;
   const draft = updateDraft(req.params.id, updates);
   if (!draft) { res.status(404).json({ error: "Draft not found" }); return; }
+  appendAuditEvent(section.packId, section.id, "draft_edited", `${section.code} components saved`, "user");
   res.json({ draft });
 });
 
 // ── Advance status ────────────────────────────────────────────────────────────
 
 router.post("/rfp/sections/:id/draft/advance", (req, res): void => {
-  const draft = advanceDraftStatus(req.params.id);
-  if (!draft) { res.status(404).json({ error: "Draft not found or already approved" }); return; }
-  res.json({ draft });
+  const section = getSection(req.params.id);
+  if (!section?.draft) { res.status(404).json({ error: "Draft not found" }); return; }
+  const prevStatus = section.draft.status;
+  const result = advanceDraftStatus(req.params.id);
+  if (!result.ok) { res.status(422).json({ error: result.error }); return; }
+
+  const type    = result.draft.status === "approved" ? "approved" : "status_changed";
+  const summary = result.draft.status === "approved"
+    ? `${section.code} approved`
+    : `${section.code}: ${prevStatus} → ${result.draft.status}`;
+  appendAuditEvent(section.packId, section.id, type, summary, "user", { from: prevStatus, to: result.draft.status });
+  res.json({ draft: result.draft, sectionStatus: result.sectionStatus });
+});
+
+// ── Reopen ────────────────────────────────────────────────────────────────────
+
+router.post("/rfp/sections/:id/draft/reopen", (req, res): void => {
+  const section = getSection(req.params.id);
+  if (!section?.draft) { res.status(404).json({ error: "Draft not found" }); return; }
+  const result = reopenDraft(req.params.id);
+  if (!result) { res.status(404).json({ error: "Section not found" }); return; }
+  appendAuditEvent(section.packId, section.id, "reopened", `${section.code} reopened for editing`, "user");
+  res.json(result);
+});
+
+// ── Audit & revisions ─────────────────────────────────────────────────────────
+
+router.get("/rfp/sections/:id/audit", (req, res): void => {
+  const section = getSection(req.params.id);
+  if (!section) { res.status(404).json({ error: "Section not found" }); return; }
+  const events = getAuditEvents(section.packId, section.id);
+  res.json({ events });
+});
+
+router.get("/rfp/sections/:id/revisions", (req, res): void => {
+  res.json({ revisions: getRevisions(req.params.id) });
 });
 
 export default router;

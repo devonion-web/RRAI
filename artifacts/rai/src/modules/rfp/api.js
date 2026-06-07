@@ -15,7 +15,7 @@ async function req(method, path, body) {
   return res.json()
 }
 
-// ── Document storage (unchanged) ──────────────────────────────────────────────
+// ── Document storage ──────────────────────────────────────────────────────────
 
 export async function rfpUploadFiles(formData) {
   const res = await fetch(`${BASE}/upload-files`, { method: 'POST', body: formData })
@@ -37,45 +37,48 @@ export async function rfpRemoveDocument(id) {
 
 // ── Bid pack ──────────────────────────────────────────────────────────────────
 
-// Create a pack from already-uploaded document IDs
 export async function rfpCreatePack({ name, buyer, documentIds }) {
   return req('POST', '/packs', { name, buyer, documentIds })
 }
 
-// Fetch a pack (with all sections and drafts)
 export async function rfpGetPack(packId) {
-  const res = await fetch(`${BASE}/packs/${packId}`)
-  if (!res.ok) {
-    let msg = `Failed: ${res.status}`
-    try { const j = await res.json(); msg = j.error || msg } catch {}
-    throw new Error(msg)
-  }
-  return res.json()
+  return req('GET', `/packs/${packId}`)
 }
 
-// Detect scored response sections in the pack
 export async function rfpDetectSections(packId) {
   return req('POST', `/packs/${packId}/detect-sections`)
 }
 
+export async function rfpGetPackAudit(packId) {
+  return req('GET', `/packs/${packId}/audit`)
+}
+
 // ── Sections ──────────────────────────────────────────────────────────────────
 
-// Extract brief for a section (synchronous, ~5–10 s)
 export async function rfpExtractBrief(sectionId) {
   return req('POST', `/sections/${sectionId}/extract-brief`)
 }
 
-// Generate 12-part draft for a section (synchronous, ~15–20 s)
 export async function rfpGenerateDraft(sectionId) {
   return req('POST', `/sections/${sectionId}/draft`)
 }
 
-// Save edited components / placeholders
-export async function rfpUpdateDraft(sectionId, { components, placeholders }) {
-  return req('PATCH', `/sections/${sectionId}/draft`, { components, placeholders })
+export async function rfpUpdateDraft(sectionId, body) {
+  return req('PATCH', `/sections/${sectionId}/draft`, body)
 }
 
-// Advance status: draft → in_review → approved
 export async function rfpAdvanceDraftStatus(sectionId) {
   return req('POST', `/sections/${sectionId}/draft/advance`)
+}
+
+export async function rfpReopenDraft(sectionId) {
+  return req('POST', `/sections/${sectionId}/draft/reopen`)
+}
+
+export async function rfpGetSectionAudit(sectionId) {
+  return req('GET', `/sections/${sectionId}/audit`)
+}
+
+export async function rfpGetRevisions(sectionId) {
+  return req('GET', `/sections/${sectionId}/revisions`)
 }
