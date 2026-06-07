@@ -224,3 +224,127 @@ export async function rfpAdvanceResponse(reqId) {
 export async function rfpReopenResponse(reqId) {
   return req('POST', `/requirements/${reqId}/response/reopen`)
 }
+
+// ── Quality reviews ───────────────────────────────────────────────────────────
+
+export async function rfpGetQualityReviews(packId, { reviewType, targetId } = {}) {
+  const params = new URLSearchParams()
+  if (reviewType) params.set('reviewType', reviewType)
+  if (targetId)   params.set('targetId',   targetId)
+  const qs = params.toString() ? `?${params}` : ''
+  return req('GET', `/packs/${packId}/quality-reviews${qs}`)
+}
+
+// ── Validate decomp (SSE) ─────────────────────────────────────────────────────
+
+export async function rfpValidateDecomp(packId) {
+  const res = await fetch(`${BASE}/packs/${packId}/validate-decomp`, { method: 'POST' })
+  if (!res.ok) {
+    let msg = `Validate-decomp failed: ${res.status}`
+    try { const j = await res.json(); msg = j.error || msg } catch {}
+    throw new Error(msg)
+  }
+  const reader  = res.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer    = ''
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+    const events = buffer.split('\n\n')
+    buffer = events.pop() ?? ''
+    for (const block of events) {
+      for (const line of block.split('\n')) {
+        if (!line.startsWith('data: ')) continue
+        const payload = JSON.parse(line.slice(6))
+        if (payload.error) throw new Error(payload.error)
+        return payload   // { qualityReview, workflowStage }
+      }
+    }
+  }
+  throw new Error('Validate-decomp stream ended without a data event.')
+}
+
+// ── Gate override ─────────────────────────────────────────────────────────────
+
+export async function rfpOverrideGate(packId, { reviewType, reason, actor, targetId, advanceTo } = {}) {
+  return req('POST', `/packs/${packId}/gate/override`, { reviewType, reason, actor, targetId, advanceTo })
+}
+
+// ── Validate ownership ────────────────────────────────────────────────────────
+
+export async function rfpValidateOwnership(packId) {
+  return req('POST', `/packs/${packId}/validate-ownership`)
+}
+
+// ── Validate response (per requirement) ───────────────────────────────────────
+
+export async function rfpValidateResponse(reqId) {
+  return req('POST', `/requirements/${reqId}/validate-response`)
+}
+
+// ── Rewrite block (SSE) ───────────────────────────────────────────────────────
+
+export async function rfpRewriteBlock(reqId, blockKey) {
+  const res = await fetch(`${BASE}/requirements/${reqId}/blocks/${encodeURIComponent(blockKey)}/rewrite`, { method: 'POST' })
+  if (!res.ok) {
+    let msg = `Rewrite failed: ${res.status}`
+    try { const j = await res.json(); msg = j.error || msg; if (j.escalated) { const e = new Error(msg); e.escalated = true; throw e } } catch (inner) { if (inner.escalated) throw inner }
+    throw new Error(msg)
+  }
+  const reader  = res.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer    = ''
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+    const events = buffer.split('\n\n')
+    buffer = events.pop() ?? ''
+    for (const block of events) {
+      for (const line of block.split('\n')) {
+        if (!line.startsWith('data: ')) continue
+        const payload = JSON.parse(line.slice(6))
+        if (payload.error) throw new Error(payload.error)
+        return payload   // { block }
+      }
+    }
+  }
+  throw new Error('Rewrite stream ended without a data event.')
+}
+
+// ── Assemble ──────────────────────────────────────────────────────────────────
+
+export async function rfpAssemble(packId) {
+  return req('POST', `/packs/${packId}/assemble`)
+}
+
+// ── Validate final (SSE) ──────────────────────────────────────────────────────
+
+export async function rfpValidateFinal(packId) {
+  const res = await fetch(`${BASE}/packs/${packId}/validate-final`, { method: 'POST' })
+  if (!res.ok) {
+    let msg = `Validate-final failed: ${res.status}`
+    try { const j = await res.json(); msg = j.error || msg } catch {}
+    throw new Error(msg)
+  }
+  const reader  = res.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer    = ''
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+    const events = buffer.split('\n\n')
+    buffer = events.pop() ?? ''
+    for (const block of events) {
+      for (const line of block.split('\n')) {
+        if (!line.startsWith('data: ')) continue
+        const payload = JSON.parse(line.slice(6))
+        if (payload.error) throw new Error(payload.error)
+        return payload   // { qualityReview, requirementFlags, workflowStage }
+      }
+    }
+  }
+  throw new Error('Validate-final stream ended without a data event.')
+}

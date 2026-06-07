@@ -1,0 +1,74 @@
+Refactor the RRAI RFP Response Drafter into a GATED, VALIDATED workflow. Keep the current
+direction: the bid document drives structure, order and response format; decompose the RFP,
+map ownership from RR's engagement role, focus on RR-owned + shared requirements, and answer
+minimum-first from each requirement's stated expectations. The principle: RRAI does not just
+generate bid content — it manages a controlled process where each requirement is decomposed,
+owned, answered, checked, improved, and only then assembled for export.
+
+=== STATE ADDITIONS ===
+- Pack: add workflowStage (decompose | validate_decomp | map_ownership | validate_ownership |
+  respond | validate_response | rewrite | revalidate | assemble | export).
+- Requirement: add ownerConfidence (low | medium | high) and a responseStage.
+- New model QualityReview { id, bidPackId, targetType (pack|requirement|response), targetId,
+  reviewType (decomposition|ownership|response|final), score, passed (bool), findings,
+  missingItems, recommendedActions, createdAt }.
+- A gate = the workflow cannot advance past a stage until that stage's QualityReview.passed
+  is true OR a human explicitly overrides. Log every override as an AuditEvent.
+
+=== THE 10-STAGE WORKFLOW ===
+1. Decompose (pack-level).
+2. Validate decomposition -> QualityReview(decomposition). Fail -> re-run / flag for human.
+3. Map ownership (sets owner + ownerConfidence + rationale).
+4. Validate ownership confidence -> QualityReview(ownership). Any low, medium, OR shared item
+   REQUIRES human confirmation before response generation; only high-confidence, clearly-RR
+   items auto-proceed.
+5. Generate response blocks (per RR requirement, minimum-first).
+6. Validate response coverage -> QualityReview(response), per requirement/block.
+7. Rewrite weak blocks (regenerate ONLY the failing block, not the whole response).
+8. Revalidate the rewritten block. Cap auto-rewrite at 2 attempts, then escalate to human.
+9. Assemble (RR's confirmed, passed responses).
+10. Final export gate -> QualityReview(final). Export only when it passes.
+Stages 5-8 loop per requirement and per block; 1-4, 9-10 are pack-level.
+
+=== VALIDATION: DECOMPOSITION (mostly deterministic) ===
+- Document order preserved.
+- No numbered sections missed (check the section-number sequence is complete).
+- Every "Your Response (at a minimum)" item became a minimumExpectation.
+- Narrative sections decomposed properly (LLM review).
+- System Requirements List items remain traceable.
+- Cross-cutting constraints captured once and surfaced on each requirement.
+
+=== VALIDATION: OWNERSHIP ===
+- Set ownerConfidence low|medium|high with a rationale.
+- low / medium / shared -> require human confirmation before any response generation.
+
+=== VALIDATION: RESPONSE (per RequirementResponse) ===
+- Every minimumExpectation is explicitly addressed.
+- The answer starts from the customer's stated expectation, not a generic RR template.
+- sourceText is accurately reflected.
+- RR's remit is respected.
+- Shared / LogicGate dependencies are clearly marked.
+- No fabricated figures, dates, commitments or named resources (pattern-check + review).
+- Placeholders inserted wherever RR or LogicGate input is required.
+- Commercially useful but not overclaiming (LLM review).
+Failed block -> regenerate only that block; store the failed check AND the rewrite action in
+the audit log.
+
+=== VALIDATION IMPLEMENTATION ===
+- Run deterministic/code checks first; use a model-as-reviewer (structured outputs) only for
+  the judgement checks noted above. Each check contributes to the QualityReview findings.
+
+=== UI STATUS (show clearly per requirement and per pack) ===
+Passed | Needs human confirmation | Failed validation | Missing placeholders |
+Low-confidence ownership | Ready for export. Surface workflowStage on the dashboard.
+
+=== RETAIN ===
+Structured outputs; SSE/keepalive long-call handling; DB persistence; audit log; inline
+placeholder + review UI.
+
+=== RETIRE ===
+The old fixed-template SectionDraft path.
+
+Build order: state models + QualityReview first; then decompose + its gate; then ownership +
+confidence gate; then the minimum-first responder + response gate + rewrite loop; then
+assemble + final export gate. Wire the workflowStage tracker through from the start.

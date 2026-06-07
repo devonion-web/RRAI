@@ -13,7 +13,19 @@ export type AuditEventType =
   | "profile_saved"       | "decomposed"
   | "ownership_confirmed" | "ownership_overridden"
   | "response_generated"  | "block_edited"       | "block_reviewed"
-  | "response_advanced"   | "response_approved";
+  | "response_advanced"   | "response_approved"
+  | "validation_run"      | "gate_overridden"    | "block_rewritten"
+  | "stage_advanced"      | "assembled";
+
+export type WorkflowStage =
+  | "decompose" | "validate_decomp" | "map_ownership" | "validate_ownership"
+  | "respond"   | "validate_response" | "rewrite"     | "revalidate"
+  | "assemble"  | "export";
+
+export type OwnerConfidence = "low" | "medium" | "high";
+
+export type ResponseStage =
+  | "pending" | "responding" | "validating" | "rewriting" | "passed" | "failed";
 
 export interface AuditEvent {
   id: string;
@@ -95,18 +107,17 @@ export interface BidPack {
   createdAt: number;
   parsedContent: string;
   sections: BidSection[];
+  workflowStage: WorkflowStage;
 }
 
 export interface BidSection {
   id: string;
   packId: string;
   status: SectionStatus;
-  // From detect-sections
   code: string;
   title: string;
   scoringWeight: string | null;
   summary: string;
-  // From extract-brief
   mandatedResponseStructure: string[];
   requirements: BriefRequirement[];
   minimumResponseItems: string[];
@@ -123,7 +134,6 @@ export interface BidSection {
   gaps: string[];
   briefStatus: "pending" | "extracted" | "error";
   briefError: string | null;
-  // Draft
   draft: SectionDraft | null;
 }
 
@@ -140,15 +150,13 @@ function scanTokens(v: unknown): number {
 }
 
 export function countUnfilledPlaceholders(draft: SectionDraft): number {
-  // New format: use structured placeholder array
   if (draft.placeholders.length > 0) {
     return draft.placeholders.filter((p) => !p.filled).length;
   }
-  // Fallback: scan component text for old-style tokens
   return scanTokens(draft.components);
 }
 
-// ── New: engagement-profile types ─────────────────────────────────────────────
+// ── Engagement-profile types ──────────────────────────────────────────────────
 
 export interface EngagementProfile {
   id: string;
@@ -161,7 +169,7 @@ export interface EngagementProfile {
   updatedAt: number;
 }
 
-// ── New: requirement types ─────────────────────────────────────────────────────
+// ── Requirement types ─────────────────────────────────────────────────────────
 
 export type RequirementOwner = "RR" | "LogicGate" | "shared" | "M&S";
 
@@ -184,11 +192,14 @@ export interface Requirement {
   owner: RequirementOwner;
   ownerRationale: string;
   ownerConfirmed: boolean;
+  ownerConfidence: OwnerConfidence;
+  responseStage: ResponseStage;
+  rewriteAttempts: number;
   parentId: string | null;
   crossCuttingConstraints: CrossCuttingConstraint[];
 }
 
-// ── New: requirement response types ───────────────────────────────────────────
+// ── Requirement response types ─────────────────────────────────────────────────
 
 export type ResponseStatus = "draft" | "in_review" | "approved";
 
@@ -199,6 +210,9 @@ export interface ResponseBlock {
   answer: string;
   placeholders: Placeholder[];
   reviewed: boolean;
+  validationState: "pending" | "passed" | "failed" | "rewriting";
+  rewriteAttempts: number;
+  validationFindings: string[];
 }
 
 export interface RequirementResponse {
@@ -212,6 +226,28 @@ export interface RequirementResponse {
   updatedAt: number;
 }
 
+// ── QualityReview types ────────────────────────────────────────────────────────
+
+export type QualityReviewType = "decomposition" | "ownership" | "response" | "final";
+
+export interface QualityReview {
+  id: string;
+  bidPackId: string;
+  targetType: "pack" | "requirement" | "response" | "block";
+  targetId: string;
+  reviewType: QualityReviewType;
+  score: number;
+  passed: boolean;
+  findings: string[];
+  missingItems: string[];
+  recommendedActions: string[];
+  checks: Record<string, boolean>;
+  overridden: boolean;
+  overrideReason: string | null;
+  overrideActor: string | null;
+  createdAt: number;
+}
+
 // ── Store ─────────────────────────────────────────────────────────────────────
 
 const PACKS           = new Map<string, BidPack>();
@@ -223,6 +259,7 @@ const PROFILES        = new Map<string, EngagementProfile>();   // packId → pr
 const REQUIREMENTS    = new Map<string, Requirement[]>();        // packId → requirements
 const REQ_TO_PACK     = new Map<string, string>();               // reqId → packId
 const RESPONSES       = new Map<string, RequirementResponse>();  // reqId → response
+const QUALITY_REVIEWS = new Map<string, QualityReview[]>();      // packId → reviews
 
 const TTL_MS = 6 * 60 * 60 * 1000;
 
@@ -243,6 +280,7 @@ setInterval(() => {
       AUDIT_LOG.delete(id);
       PROFILES.delete(id);
       REQUIREMENTS.delete(id);
+      QUALITY_REVIEWS.delete(id);
     }
   }
 }, 30 * 60 * 1000);
@@ -290,7 +328,10 @@ export function getRevisions(sectionId: string): SectionRevision[] {
 // ── Pack CRUD ─────────────────────────────────────────────────────────────────
 
 export function createPack(name: string, buyer: string, parsedContent: string): BidPack {
-  const pack: BidPack = { id: randomUUID(), name, buyer, createdAt: Date.now(), parsedContent, sections: [] };
+  const pack: BidPack = {
+    id: randomUUID(), name, buyer, createdAt: Date.now(),
+    parsedContent, sections: [], workflowStage: "decompose",
+  };
   PACKS.set(pack.id, pack);
   AUDIT_LOG.set(pack.id, []);
   return pack;
@@ -304,7 +345,6 @@ export function setSections(
 ): BidSection[] {
   const pack = PACKS.get(packId);
   if (!pack) return [];
-  // Preserve status for sections already worked on (match by code)
   const existing = new Map(pack.sections.map((s) => [s.code, s]));
   for (const s of pack.sections) SECTION_TO_PACK.delete(s.id);
 
@@ -435,7 +475,6 @@ export function advanceDraftStatus(sectionId: string): AdvanceResult {
   const next = STATUS_FLOW[section.draft.status];
   if (!next) return { ok: false, error: "Already at final status" };
 
-  // Gate: cannot approve with unfilled placeholders
   if (next === "approved") {
     const unfilled = countUnfilledPlaceholders(section.draft);
     if (unfilled > 0) {
@@ -471,14 +510,14 @@ export function saveProfile(
   if (!getPack(packId)) return null;
   const existing = PROFILES.get(packId);
   const profile: EngagementProfile = {
-    id:          existing?.id ?? randomUUID(),
-    bidPackId:   packId,
-    ourRole:     data.ourRole,
+    id:           existing?.id ?? randomUUID(),
+    bidPackId:    packId,
+    ourRole:      data.ourRole,
     primePartner: data.primePartner,
-    ourRemit:    data.ourRemit,
+    ourRemit:     data.ourRemit,
     otherParties: data.otherParties,
-    createdAt:   existing?.createdAt ?? Date.now(),
-    updatedAt:   Date.now(),
+    createdAt:    existing?.createdAt ?? Date.now(),
+    updatedAt:    Date.now(),
   };
   PROFILES.set(packId, profile);
   return profile;
@@ -492,7 +531,13 @@ export function getProfile(packId: string): EngagementProfile | null {
 
 export function saveRequirements(
   packId: string,
-  reqs: Array<Omit<Requirement, "id" | "bidPackId">>,
+  reqs: Array<
+    Omit<Requirement, "id" | "bidPackId" | "ownerConfidence" | "responseStage" | "rewriteAttempts"> & {
+      ownerConfidence?: OwnerConfidence;
+      responseStage?:   ResponseStage;
+      rewriteAttempts?: number;
+    }
+  >,
 ): Requirement[] {
   if (!getPack(packId)) return [];
   const old = REQUIREMENTS.get(packId) ?? [];
@@ -501,7 +546,13 @@ export function saveRequirements(
   const requirements: Requirement[] = reqs.map((r) => {
     const id = randomUUID();
     REQ_TO_PACK.set(id, packId);
-    return { id, bidPackId: packId, ...r };
+    return {
+      ownerConfidence: "medium" as OwnerConfidence,
+      responseStage:   "pending" as ResponseStage,
+      rewriteAttempts: 0,
+      ...r,
+      id, bidPackId: packId,
+    };
   });
   REQUIREMENTS.set(packId, requirements);
   return requirements;
@@ -522,12 +573,14 @@ export function updateRequirementOwnership(
   owner: RequirementOwner,
   ownerRationale: string,
   ownerConfirmed: boolean,
+  ownerConfidence?: OwnerConfidence,
 ): Requirement | null {
   const req = getRequirement(reqId);
   if (!req) return null;
   req.owner          = owner;
   req.ownerRationale = ownerRationale;
   req.ownerConfirmed = ownerConfirmed;
+  if (ownerConfidence !== undefined) req.ownerConfidence = ownerConfidence;
   return req;
 }
 
@@ -535,7 +588,17 @@ export function updateRequirementOwnership(
 
 export function saveResponse(
   reqId: string,
-  data: { lens?: string; blocks: ResponseBlock[]; openDependencies: string[] },
+  data: {
+    lens?: string;
+    blocks: Array<
+      Omit<ResponseBlock, "validationState" | "rewriteAttempts" | "validationFindings"> & {
+        validationState?:    ResponseBlock["validationState"];
+        rewriteAttempts?:    number;
+        validationFindings?: string[];
+      }
+    >;
+    openDependencies: string[];
+  },
 ): RequirementResponse | null {
   if (!getRequirement(reqId)) return null;
   const existing = RESPONSES.get(reqId);
@@ -543,7 +606,12 @@ export function saveResponse(
     id:               existing?.id ?? randomUUID(),
     requirementId:    reqId,
     lens:             data.lens ?? "Commercial",
-    blocks:           data.blocks,
+    blocks:           data.blocks.map((b) => ({
+      validationState:    "pending" as const,
+      rewriteAttempts:    0,
+      validationFindings: [] as string[],
+      ...b,
+    })),
     openDependencies: data.openDependencies,
     status:           existing?.status ?? "draft",
     createdAt:        existing?.createdAt ?? Date.now(),
@@ -626,4 +694,148 @@ export function reopenResponse(reqId: string): RequirementResponse | null {
   resp.status    = "draft";
   resp.updatedAt = Date.now();
   return resp;
+}
+
+// ── QualityReview CRUD ────────────────────────────────────────────────────────
+
+export function saveQualityReview(
+  packId: string,
+  review: Omit<QualityReview, "id" | "bidPackId" | "overridden" | "overrideReason" | "overrideActor" | "createdAt">,
+): QualityReview {
+  const qr: QualityReview = {
+    ...review,
+    id:             randomUUID(),
+    bidPackId:      packId,
+    overridden:     false,
+    overrideReason: null,
+    overrideActor:  null,
+    createdAt:      Date.now(),
+  };
+  if (!QUALITY_REVIEWS.has(packId)) QUALITY_REVIEWS.set(packId, []);
+  QUALITY_REVIEWS.get(packId)!.push(qr);
+  appendAuditEvent(packId, null, "validation_run",
+    `${review.reviewType} validation: ${qr.passed ? "PASSED" : "FAILED"} (score ${qr.score})`,
+    "system", { reviewType: review.reviewType, targetId: review.targetId });
+  return qr;
+}
+
+export function getQualityReviews(
+  packId: string,
+  reviewType?: QualityReviewType,
+  targetId?: string,
+): QualityReview[] {
+  const reviews = QUALITY_REVIEWS.get(packId) ?? [];
+  return reviews.filter((r) =>
+    (!reviewType || r.reviewType === reviewType) &&
+    (!targetId   || r.targetId  === targetId),
+  );
+}
+
+export function getLatestQualityReview(
+  packId: string,
+  reviewType: QualityReviewType,
+  targetId?: string,
+): QualityReview | null {
+  const reviews = getQualityReviews(packId, reviewType, targetId);
+  return reviews.length > 0 ? reviews[reviews.length - 1] : null;
+}
+
+export function overrideGate(
+  packId: string,
+  reviewType: QualityReviewType,
+  reason: string,
+  actor: string,
+  targetId?: string,
+): QualityReview | null {
+  const qr = getLatestQualityReview(packId, reviewType, targetId);
+  if (!qr) return null;
+  qr.overridden     = true;
+  qr.overrideReason = reason;
+  qr.overrideActor  = actor;
+  appendAuditEvent(packId, null, "gate_overridden",
+    `Gate override: ${reviewType} — ${reason}`, actor, { reviewType, targetId });
+  return qr;
+}
+
+export function canPassGate(packId: string, reviewType: QualityReviewType, targetId?: string): boolean {
+  const qr = getLatestQualityReview(packId, reviewType, targetId);
+  if (!qr) return false;
+  return qr.passed || qr.overridden;
+}
+
+// ── Workflow stage ─────────────────────────────────────────────────────────────
+
+export function setWorkflowStage(packId: string, stage: WorkflowStage): boolean {
+  const pack = PACKS.get(packId);
+  if (!pack) return false;
+  pack.workflowStage = stage;
+  appendAuditEvent(packId, null, "stage_advanced", `Workflow advanced to: ${stage}`);
+  return true;
+}
+
+export function getWorkflowStage(packId: string): WorkflowStage | null {
+  return PACKS.get(packId)?.workflowStage ?? null;
+}
+
+// ── Requirement response stage ─────────────────────────────────────────────────
+
+export function setRequirementResponseStage(reqId: string, stage: ResponseStage): boolean {
+  const req = getRequirement(reqId);
+  if (!req) return false;
+  req.responseStage = stage;
+  return true;
+}
+
+// ── Block validation helpers ───────────────────────────────────────────────────
+
+export function setBlockValidation(
+  reqId: string,
+  blockKey: string,
+  state: ResponseBlock["validationState"],
+  findings: string[] = [],
+): boolean {
+  const resp = RESPONSES.get(reqId);
+  if (!resp) return false;
+  const block = resp.blocks.find((b) => b.key === blockKey);
+  if (!block) return false;
+  block.validationState    = state;
+  block.validationFindings = findings;
+  if (state === "rewriting") block.rewriteAttempts = (block.rewriteAttempts ?? 0) + 1;
+  resp.updatedAt = Date.now();
+  return true;
+}
+
+export function replaceBlockAnswer(
+  reqId: string,
+  blockKey: string,
+  answer: string,
+  placeholders: Placeholder[],
+): ResponseBlock | null {
+  const resp = RESPONSES.get(reqId);
+  if (!resp) return null;
+  const block = resp.blocks.find((b) => b.key === blockKey);
+  if (!block) return null;
+  block.answer       = answer;
+  block.placeholders = placeholders;
+  block.reviewed     = false;
+  resp.updatedAt     = Date.now();
+  return block;
+}
+
+// ── Assemble ──────────────────────────────────────────────────────────────────
+
+export interface AssembledRequirement {
+  requirement: Requirement;
+  response:    RequirementResponse;
+}
+
+export function assembleResponses(packId: string): AssembledRequirement[] {
+  const reqs = getRequirements(packId).filter((r) =>
+    (r.owner === "RR" || r.owner === "shared") && r.ownerConfirmed,
+  );
+  return reqs.flatMap((req) => {
+    const resp = getResponse(req.id);
+    if (!resp || resp.status !== "approved") return [];
+    return [{ requirement: req, response: resp }];
+  });
 }

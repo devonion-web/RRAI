@@ -69,6 +69,7 @@ Output this schema exactly:
       "mandatedStructure": "string | null — any explicit format the buyer mandates",
       "owner": "RR | LogicGate | shared | M&S",
       "ownerRationale": "string — one sentence",
+      "ownerConfidence": "low | medium | high — how certain is this ownership classification",
       "parentId": "string | null — parent requirement code if this is a sub-requirement"
     }
   ]

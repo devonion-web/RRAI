@@ -15,8 +15,11 @@ import {
   saveRequirements, getRequirements, getRequirement, updateRequirementOwnership,
   saveResponse, getResponse, updateBlockAnswer, fillBlockPlaceholder, setBlockReviewed,
   advanceResponseStatus, reopenResponse,
+  saveQualityReview, getQualityReviews, getLatestQualityReview, overrideGate, canPassGate,
+  setWorkflowStage, setRequirementResponseStage, setBlockValidation, replaceBlockAnswer,
+  assembleResponses,
   type DraftComponents, type Placeholder, type RequirementOwner, type ResponseBlock,
-  type CrossCuttingConstraint,
+  type CrossCuttingConstraint, type QualityReviewType, type OwnerConfidence,
 } from "../lib/bidPackStore";
 import { parseExcelForRequirements } from "../lib/xlsxParser";
 
@@ -569,7 +572,7 @@ router.post("/rfp/packs/:id/decompose", async (req, res): Promise<void> => {
       code: string; order: number; title: string; sourceText: string;
       scoringWeight: string | null; minimumExpectations: string[];
       considerations: string[]; mandatedStructure: string | null;
-      owner: string; ownerRationale: string; parentId: string | null;
+      owner: string; ownerRationale: string; ownerConfidence?: string; parentId: string | null;
     };
     type DecomposeResult = {
       crossCuttingConstraints: Array<{ type: string; text: string }>;
@@ -605,10 +608,13 @@ router.post("/rfp/packs/:id/decompose", async (req, res): Promise<void> => {
       minimumExpectations:   Array.isArray(r.minimumExpectations) ? r.minimumExpectations : [],
       considerations:        Array.isArray(r.considerations) ? r.considerations : [],
       mandatedStructure:     r.mandatedStructure ?? null,
-      owner:                 (VALID_OWNERS.has(r.owner) ? r.owner : "shared") as RequirementOwner,
-      ownerRationale:        r.ownerRationale ?? "",
-      ownerConfirmed:        false,
-      parentId:              r.parentId ?? null,
+      owner:           (VALID_OWNERS.has(r.owner) ? r.owner : "shared") as RequirementOwner,
+      ownerRationale:  r.ownerRationale ?? "",
+      ownerConfirmed:  false,
+      ownerConfidence: (["low","medium","high"].includes(r.ownerConfidence ?? "") ? r.ownerConfidence : "medium") as OwnerConfidence,
+      responseStage:   "pending" as const,
+      rewriteAttempts: 0,
+      parentId:        r.parentId ?? null,
       crossCuttingConstraints,
     })));
 
@@ -633,8 +639,8 @@ router.get("/rfp/packs/:id/requirements", (req, res): void => {
 });
 
 router.patch("/rfp/requirements/:id/ownership", (req, res): void => {
-  const { owner, ownerRationale, ownerConfirmed } = req.body as {
-    owner?: string; ownerRationale?: string; ownerConfirmed?: boolean;
+  const { owner, ownerRationale, ownerConfirmed, ownerConfidence } = req.body as {
+    owner?: string; ownerRationale?: string; ownerConfirmed?: boolean; ownerConfidence?: string;
   };
   const req_ = getRequirement(req.params.id);
   if (!req_) { res.status(404).json({ error: "Requirement not found" }); return; }
@@ -643,17 +649,18 @@ router.patch("/rfp/requirements/:id/ownership", (req, res): void => {
   if (owner && !VALID_OWNERS.includes(owner)) {
     res.status(400).json({ error: `owner must be one of ${VALID_OWNERS.join(", ")}` }); return;
   }
-  const finalOwner    = (owner ?? req_.owner) as RequirementOwner;
-  const finalRationale = ownerRationale ?? req_.ownerRationale;
-  const finalConfirmed = ownerConfirmed ?? req_.ownerConfirmed;
-  const updated = updateRequirementOwnership(req.params.id, finalOwner, finalRationale, finalConfirmed);
+  const finalOwner      = (owner ?? req_.owner) as RequirementOwner;
+  const finalRationale  = ownerRationale ?? req_.ownerRationale;
+  const finalConfirmed  = ownerConfirmed ?? req_.ownerConfirmed;
+  const finalConfidence = (["low","medium","high"].includes(ownerConfidence ?? "") ? ownerConfidence : undefined) as OwnerConfidence | undefined;
+  const updated = updateRequirementOwnership(req.params.id, finalOwner, finalRationale, finalConfirmed, finalConfidence);
   if (!updated) { res.status(404).json({ error: "Requirement not found" }); return; }
 
   const wasOverride = owner && owner !== req_.owner;
   appendAuditEvent(req_.bidPackId, null,
     wasOverride ? "ownership_overridden" : "ownership_confirmed",
     `${req_.code}: ownership ${finalConfirmed ? "confirmed" : "set"} as ${finalOwner}`, "user",
-    { reqId: req.params.id, owner: finalOwner, rationale: finalRationale });
+    { reqId: req.params.id, owner: finalOwner, rationale: finalRationale, confidence: finalConfidence });
   res.json({ requirement: updated });
 });
 
@@ -735,7 +742,7 @@ router.post("/rfp/requirements/:id/respond", async (req, res): Promise<void> => 
     const enrichBlocks = Array.isArray(result.enrichmentBlocks) ? result.enrichmentBlocks : [];
     const allRaw      = [...minBlocks, ...enrichBlocks];
 
-    const blocks: ResponseBlock[] = allRaw.map((b) => ({
+    const blocks = allRaw.map((b) => ({
       key:      b.key  ?? `block_${Math.random().toString(36).slice(2, 7)}`,
       type:     (b.type === "minimum" ? "minimum" : "enrichment") as "minimum" | "enrichment",
       prompt:   b.prompt  ?? "",
@@ -824,6 +831,451 @@ router.post("/rfp/requirements/:id/response/reopen", (req, res): void => {
   if (req_) appendAuditEvent(req_.bidPackId, null, "response_advanced",
     `Response for ${req_?.code} reopened`, "user");
   res.json({ response });
+});
+
+// ── Quality reviews ────────────────────────────────────────────────────────────
+
+router.get("/rfp/packs/:id/quality-reviews", (req, res): void => {
+  const pack = getPack(req.params.id);
+  if (!pack) { res.status(404).json({ error: "Pack not found" }); return; }
+  const { reviewType, targetId } = req.query as { reviewType?: string; targetId?: string };
+  const reviews = getQualityReviews(
+    req.params.id,
+    reviewType as QualityReviewType | undefined,
+    targetId,
+  );
+  res.json({ reviews });
+});
+
+// ── Validate decomposition (SSE) ──────────────────────────────────────────────
+
+router.post("/rfp/packs/:id/validate-decomp", async (req, res): Promise<void> => {
+  const pack = getPack(req.params.id);
+  if (!pack) { res.status(404).json({ error: "Pack not found" }); return; }
+  const requirements = getRequirements(req.params.id);
+  if (!requirements.length) { res.status(400).json({ error: "No requirements to validate — decompose first" }); return; }
+  const profile = getProfile(req.params.id);
+
+  res.setHeader("Content-Type",      "text/event-stream");
+  res.setHeader("Cache-Control",     "no-cache");
+  res.setHeader("Connection",        "keep-alive");
+  res.setHeader("X-Accel-Buffering", "no");
+  res.flushHeaders();
+
+  const keepAlive = setInterval(() => res.write(": keepalive\n\n"), 15_000);
+  const finish    = (payload: Record<string, unknown>) => {
+    clearInterval(keepAlive);
+    res.write(`data: ${JSON.stringify(payload)}\n\n`);
+    res.end();
+  };
+
+  req.log.info({ packId: pack.id, reqCount: requirements.length }, "rfp: validating decomposition");
+
+  try {
+    // ── Deterministic checks ──────────────────────────────────────────────────
+    const sorted = [...requirements].sort((a, b) => a.order - b.order);
+    const orderPreserved = sorted.every((r, i) => r.order === i + 1);
+    const constraintsCaptured = sorted.some((r) => r.crossCuttingConstraints.length > 0);
+    const minimumExpectationsCaptured = sorted.every((r) => {
+      const hasMustInclude = /at a minimum|must include|your response/i.test(r.sourceText);
+      return hasMustInclude ? r.minimumExpectations.length > 0 : true;
+    });
+
+    const detFindings: string[] = [];
+    if (!orderPreserved)                detFindings.push("Requirements are not in sequential order");
+    if (!minimumExpectationsCaptured)   detFindings.push("Some requirements with 'at a minimum' language have empty minimumExpectations");
+    if (!constraintsCaptured)           detFindings.push("No cross-cutting constraints captured");
+
+    // ── LLM review ────────────────────────────────────────────────────────────
+    const profileJson = JSON.stringify(profile ?? {}, null, 2);
+    const reqsJson    = JSON.stringify(sorted.map((r) => ({
+      code: r.code, order: r.order, title: r.title,
+      minimumExpectations: r.minimumExpectations,
+      owner: r.owner, ownerConfidence: r.ownerConfidence,
+      crossCuttingConstraintsCount: r.crossCuttingConstraints.length,
+    })), null, 2);
+
+    const { system, userTemplate } = parsePromptFile(readPrompt("validate-decomp.md"));
+    const userContent = userTemplate
+      .replace("{{PROFILE_JSON}}",      profileJson)
+      .replace("{{SOURCE_TEXT}}",       pack.parsedContent.slice(0, 40_000))
+      .replace("{{REQUIREMENTS_JSON}}", reqsJson)
+      .replace("{{CONSTRAINTS_JSON}}",  JSON.stringify(sorted[0]?.crossCuttingConstraints ?? [], null, 2));
+
+    type ValidateDecompResult = {
+      score: number; passed: boolean;
+      checks: Record<string, boolean>;
+      findings: string[]; missingItems: string[]; recommendedActions: string[];
+    };
+
+    const llmResult = await callClaudeJSON<ValidateDecompResult>(system, userContent, { maxTokens: 4096 });
+
+    const checks = {
+      ...((llmResult?.checks) ?? {}),
+      orderPreserved,
+      minimumExpectationsCaptured,
+      constraintsCaptured,
+    };
+    const passed = (llmResult?.passed ?? false) && orderPreserved && minimumExpectationsCaptured;
+    const score  = passed ? (llmResult?.score ?? 80) : Math.min(llmResult?.score ?? 50, 69);
+
+    const qr = saveQualityReview(req.params.id, {
+      targetType:         "pack",
+      targetId:           req.params.id,
+      reviewType:         "decomposition",
+      score,
+      passed,
+      findings:           [...detFindings, ...(llmResult?.findings ?? [])],
+      missingItems:       llmResult?.missingItems ?? [],
+      recommendedActions: llmResult?.recommendedActions ?? [],
+      checks,
+    });
+
+    if (passed) setWorkflowStage(req.params.id, "map_ownership");
+    req.log.info({ packId: pack.id, passed, score }, "rfp: decomp validation complete");
+    finish({ qualityReview: qr, workflowStage: pack.workflowStage });
+  } catch (err) {
+    req.log.error({ err }, "rfp: validate-decomp failed");
+    finish({ error: (err as Error).message });
+  }
+});
+
+// ── Gate override ─────────────────────────────────────────────────────────────
+
+router.post("/rfp/packs/:id/gate/override", (req, res): void => {
+  const pack = getPack(req.params.id);
+  if (!pack) { res.status(404).json({ error: "Pack not found" }); return; }
+  const { reviewType, reason, actor, targetId, advanceTo } = req.body as {
+    reviewType?: string; reason?: string; actor?: string;
+    targetId?: string; advanceTo?: string;
+  };
+  if (!reviewType || !reason) {
+    res.status(400).json({ error: "reviewType and reason are required" }); return;
+  }
+  const VALID_TYPES = ["decomposition", "ownership", "response", "final"];
+  if (!VALID_TYPES.includes(reviewType)) {
+    res.status(400).json({ error: `reviewType must be one of ${VALID_TYPES.join(", ")}` }); return;
+  }
+  const qr = overrideGate(req.params.id, reviewType as QualityReviewType, reason, actor ?? "user", targetId);
+  if (!qr) { res.status(404).json({ error: "No quality review found for this reviewType — run validation first" }); return; }
+
+  // Optionally advance workflowStage after override
+  const VALID_STAGES = ["decompose","validate_decomp","map_ownership","validate_ownership","respond","validate_response","rewrite","revalidate","assemble","export"];
+  if (advanceTo && VALID_STAGES.includes(advanceTo)) {
+    setWorkflowStage(req.params.id, advanceTo as Parameters<typeof setWorkflowStage>[1]);
+  }
+  res.json({ qualityReview: qr, workflowStage: pack.workflowStage });
+});
+
+// ── Validate ownership (deterministic gate) ───────────────────────────────────
+
+router.post("/rfp/packs/:id/validate-ownership", (req, res): void => {
+  const pack = getPack(req.params.id);
+  if (!pack) { res.status(404).json({ error: "Pack not found" }); return; }
+  const requirements = getRequirements(req.params.id);
+
+  const rrOrShared     = requirements.filter((r) => r.owner === "RR" || r.owner === "shared");
+  const unconfirmedLow    = rrOrShared.filter((r) => r.ownerConfidence === "low"    && !r.ownerConfirmed);
+  const unconfirmedMed    = rrOrShared.filter((r) => r.ownerConfidence === "medium" && !r.ownerConfirmed);
+  const unconfirmedShared = requirements.filter((r) => r.owner === "shared"         && !r.ownerConfirmed);
+
+  const findings: string[] = [];
+  const missingItems: string[] = [];
+  if (unconfirmedLow.length)    findings.push(`${unconfirmedLow.length} low-confidence requirement(s) need human confirmation`);
+  if (unconfirmedMed.length)    findings.push(`${unconfirmedMed.length} medium-confidence requirement(s) need human confirmation`);
+  if (unconfirmedShared.length) findings.push(`${unconfirmedShared.length} shared requirement(s) need human confirmation`);
+  for (const r of [...unconfirmedLow, ...unconfirmedMed, ...unconfirmedShared]) {
+    missingItems.push(`${r.code}: ${r.title} (owner=${r.owner}, confidence=${r.ownerConfidence})`);
+  }
+
+  const passed = findings.length === 0 && rrOrShared.every((r) => r.ownerConfirmed);
+  const score  = passed ? 100 : Math.max(0, 100 - ([...new Set([...unconfirmedLow, ...unconfirmedMed, ...unconfirmedShared])].length * 15));
+
+  const qr = saveQualityReview(req.params.id, {
+    targetType: "pack", targetId: req.params.id, reviewType: "ownership",
+    score, passed, findings, missingItems,
+    recommendedActions: missingItems.map((m) => `Confirm ownership: ${m}`),
+    checks: {
+      allLowConfirmed:    unconfirmedLow.length    === 0,
+      allMediumConfirmed: unconfirmedMed.length    === 0,
+      allSharedConfirmed: unconfirmedShared.length === 0,
+      allConfirmed:       passed,
+    },
+  });
+
+  if (passed) setWorkflowStage(req.params.id, "respond");
+  req.log.info({ packId: pack.id, passed }, "rfp: ownership validation complete");
+  res.json({
+    qualityReview: qr,
+    workflowStage: pack.workflowStage,
+    needsConfirmation: [...new Set([...unconfirmedLow, ...unconfirmedMed, ...unconfirmedShared])]
+      .map((r) => ({ id: r.id, code: r.code, title: r.title, owner: r.owner, ownerConfidence: r.ownerConfidence })),
+  });
+});
+
+// ── Validate response (per requirement, JSON) ─────────────────────────────────
+
+router.post("/rfp/requirements/:id/validate-response", async (req, res): Promise<void> => {
+  const requirement = getRequirement(req.params.id);
+  if (!requirement) { res.status(404).json({ error: "Requirement not found" }); return; }
+  const response = getResponse(req.params.id);
+  if (!response)    { res.status(404).json({ error: "Response not found — generate a response first" }); return; }
+  const profile  = getProfile(requirement.bidPackId);
+
+  setRequirementResponseStage(req.params.id, "validating");
+  req.log.info({ reqId: requirement.id, blocks: response.blocks.length }, "rfp: validating response blocks");
+
+  try {
+    const profileJson     = JSON.stringify(profile ?? {}, null, 2);
+    const requirementJson = JSON.stringify({
+      code: requirement.code, title: requirement.title,
+      sourceText:          requirement.sourceText,
+      minimumExpectations: requirement.minimumExpectations,
+      owner:               requirement.owner,
+      crossCuttingConstraints: requirement.crossCuttingConstraints,
+    }, null, 2);
+
+    const { system, userTemplate } = parsePromptFile(readPrompt("validate-response.md"));
+
+    type ValidateRespResult = {
+      blockKey: string; score: number; passed: boolean;
+      checks: Record<string, boolean>;
+      findings: string[]; missingItems: string[]; recommendedActions: string[];
+    };
+
+    const blockResults: ValidateRespResult[] = [];
+    for (const block of response.blocks.filter((b) => b.type === "minimum")) {
+      const userContent = userTemplate
+        .replace("{{PROFILE_JSON}}",     profileJson)
+        .replace("{{REQUIREMENT_JSON}}", requirementJson)
+        .replace(/\{\{BLOCK_KEY\}\}/g,   block.key)
+        .replace("{{BLOCK_TYPE}}",       block.type)
+        .replace("{{BLOCK_PROMPT}}",     block.prompt)
+        .replace("{{BLOCK_ANSWER}}",     block.answer);
+
+      const llmResult = await callClaudeJSON<ValidateRespResult>(system, userContent, { maxTokens: 2048 });
+      const passed    = llmResult?.passed ?? false;
+      const findings  = llmResult?.findings ?? [];
+      setBlockValidation(req.params.id, block.key, passed ? "passed" : "failed", findings);
+      blockResults.push({
+        blockKey:           block.key,
+        score:              llmResult?.score ?? 0,
+        passed,
+        checks:             llmResult?.checks ?? {},
+        findings,
+        missingItems:       llmResult?.missingItems ?? [],
+        recommendedActions: llmResult?.recommendedActions ?? [],
+      });
+    }
+
+    const allPassed    = blockResults.every((b) => b.passed);
+    const overallScore = blockResults.length > 0
+      ? Math.round(blockResults.reduce((s, b) => s + b.score, 0) / blockResults.length)
+      : 100;
+
+    const qr = saveQualityReview(requirement.bidPackId, {
+      targetType:  "requirement", targetId: requirement.id, reviewType: "response",
+      score:       overallScore, passed:   allPassed,
+      findings:    blockResults.flatMap((b) => b.findings),
+      missingItems: blockResults.flatMap((b) => b.missingItems),
+      recommendedActions: blockResults.flatMap((b) => b.recommendedActions),
+      checks:      Object.fromEntries(blockResults.map((b) => [b.blockKey, b.passed])),
+    });
+
+    setRequirementResponseStage(req.params.id, allPassed ? "passed" : "failed");
+    req.log.info({ reqId: requirement.id, passed: allPassed, score: overallScore }, "rfp: response validation complete");
+    res.json({ qualityReview: qr, blockResults });
+  } catch (err) {
+    setRequirementResponseStage(req.params.id, "failed");
+    req.log.error({ err }, "rfp: validate-response failed");
+    res.status(500).json({ error: (err as Error).message });
+  }
+});
+
+// ── Rewrite block (SSE) ───────────────────────────────────────────────────────
+
+router.post("/rfp/requirements/:id/blocks/:blockKey/rewrite", async (req, res): Promise<void> => {
+  const requirement = getRequirement(req.params.id);
+  if (!requirement) { res.status(404).json({ error: "Requirement not found" }); return; }
+  const response = getResponse(req.params.id);
+  if (!response)    { res.status(404).json({ error: "Response not found" }); return; }
+  const profile  = getProfile(requirement.bidPackId);
+
+  const { blockKey } = req.params;
+  const block = response.blocks.find((b) => b.key === blockKey);
+  if (!block) { res.status(404).json({ error: "Block not found" }); return; }
+
+  const MAX_REWRITES = 2;
+  if ((block.rewriteAttempts ?? 0) >= MAX_REWRITES) {
+    res.status(400).json({
+      error: `Block has reached the maximum of ${MAX_REWRITES} auto-rewrites. Human review required.`,
+      escalated: true,
+    });
+    return;
+  }
+
+  res.setHeader("Content-Type",      "text/event-stream");
+  res.setHeader("Cache-Control",     "no-cache");
+  res.setHeader("Connection",        "keep-alive");
+  res.setHeader("X-Accel-Buffering", "no");
+  res.flushHeaders();
+
+  const keepAlive = setInterval(() => res.write(": keepalive\n\n"), 15_000);
+  const finish    = (payload: Record<string, unknown>) => {
+    clearInterval(keepAlive);
+    res.write(`data: ${JSON.stringify(payload)}\n\n`);
+    res.end();
+  };
+
+  req.log.info({ reqId: requirement.id, blockKey, attempt: (block.rewriteAttempts ?? 0) + 1 }, "rfp: rewriting block");
+
+  try {
+    setBlockValidation(req.params.id, blockKey, "rewriting", block.validationFindings ?? []);
+
+    const profileJson     = JSON.stringify(profile ?? {}, null, 2);
+    const requirementJson = JSON.stringify({
+      code: requirement.code, title: requirement.title,
+      sourceText:          requirement.sourceText,
+      minimumExpectations: requirement.minimumExpectations,
+      owner: requirement.owner,
+      crossCuttingConstraints: requirement.crossCuttingConstraints,
+    }, null, 2);
+
+    const latestQr = getLatestQualityReview(requirement.bidPackId, "response", requirement.id);
+
+    const { system, userTemplate } = parsePromptFile(readPrompt("rewrite-block.md"));
+    const userContent = userTemplate
+      .replace("{{PROFILE_JSON}}",       profileJson)
+      .replace("{{REQUIREMENT_JSON}}",   requirementJson)
+      .replace("{{BLOCK_KEY}}",          blockKey)
+      .replace("{{BLOCK_TYPE}}",         block.type)
+      .replace("{{BLOCK_PROMPT}}",       block.prompt)
+      .replace("{{ORIGINAL_ANSWER}}",    block.answer)
+      .replace("{{FINDINGS_JSON}}",      JSON.stringify(block.validationFindings ?? [], null, 2))
+      .replace("{{MISSING_ITEMS_JSON}}", JSON.stringify(latestQr?.missingItems ?? [], null, 2))
+      .replace("{{ATTEMPT_NUMBER}}",     String((block.rewriteAttempts ?? 0) + 1));
+
+    type RewriteResult = {
+      answer: string;
+      placeholders: Array<{ id: string; description: string; group: string | null }>;
+      changesLog: string[];
+    };
+
+    const llmResult = await callClaudeJSON<RewriteResult>(system, userContent, { maxTokens: 8192 });
+    if (!llmResult?.answer) throw new Error("Rewrite: no answer returned");
+
+    const newPlaceholders: Placeholder[] = (Array.isArray(llmResult.placeholders) ? llmResult.placeholders : []).map((p) => ({
+      id:          p.id ?? "ph_000",
+      description: p.description ?? "",
+      group:       p.group ?? blockKey,
+      value:       null,
+      filled:      false,
+    }));
+
+    replaceBlockAnswer(req.params.id, blockKey, llmResult.answer, newPlaceholders);
+    setBlockValidation(req.params.id, blockKey, "pending", []);
+
+    appendAuditEvent(requirement.bidPackId, null, "block_rewritten",
+      `Block ${blockKey} rewritten (attempt ${(block.rewriteAttempts ?? 0) + 1})`, "RRAI",
+      { reqId: req.params.id, blockKey, changesLog: llmResult.changesLog ?? [] });
+
+    const updatedBlock = getResponse(req.params.id)?.blocks.find((b) => b.key === blockKey) ?? null;
+    req.log.info({ reqId: requirement.id, blockKey }, "rfp: block rewrite complete");
+    finish({ block: updatedBlock });
+  } catch (err) {
+    setBlockValidation(req.params.id, blockKey, "failed", block.validationFindings ?? []);
+    req.log.error({ err }, "rfp: rewrite-block failed");
+    finish({ error: (err as Error).message });
+  }
+});
+
+// ── Assemble ──────────────────────────────────────────────────────────────────
+
+router.post("/rfp/packs/:id/assemble", (req, res): void => {
+  const pack = getPack(req.params.id);
+  if (!pack) { res.status(404).json({ error: "Pack not found" }); return; }
+  const assembled = assembleResponses(req.params.id);
+  if (!assembled.length) {
+    res.status(400).json({ error: "No approved RR/shared responses to assemble. Approve all responses first." }); return;
+  }
+  setWorkflowStage(req.params.id, "assemble");
+  appendAuditEvent(req.params.id, null, "assembled",
+    `Assembled ${assembled.length} requirement response(s)`, "user");
+  req.log.info({ packId: pack.id, count: assembled.length }, "rfp: assembled");
+  res.json({ assembled, workflowStage: pack.workflowStage, count: assembled.length });
+});
+
+// ── Validate final (SSE) ──────────────────────────────────────────────────────
+
+router.post("/rfp/packs/:id/validate-final", async (req, res): Promise<void> => {
+  const pack = getPack(req.params.id);
+  if (!pack) { res.status(404).json({ error: "Pack not found" }); return; }
+  const profile   = getProfile(req.params.id);
+  const assembled = assembleResponses(req.params.id);
+  if (!assembled.length) {
+    res.status(400).json({ error: "Nothing assembled — run assemble first" }); return;
+  }
+
+  res.setHeader("Content-Type",      "text/event-stream");
+  res.setHeader("Cache-Control",     "no-cache");
+  res.setHeader("Connection",        "keep-alive");
+  res.setHeader("X-Accel-Buffering", "no");
+  res.flushHeaders();
+
+  const keepAlive = setInterval(() => res.write(": keepalive\n\n"), 15_000);
+  const finish    = (payload: Record<string, unknown>) => {
+    clearInterval(keepAlive);
+    res.write(`data: ${JSON.stringify(payload)}\n\n`);
+    res.end();
+  };
+
+  req.log.info({ packId: pack.id, count: assembled.length }, "rfp: running final validation");
+
+  try {
+    const profileJson   = JSON.stringify(profile ?? {}, null, 2);
+    const assembledJson = JSON.stringify(assembled.map((a) => ({
+      requirement: {
+        id: a.requirement.id, code: a.requirement.code, title: a.requirement.title,
+        owner: a.requirement.owner, minimumExpectations: a.requirement.minimumExpectations,
+      },
+      blocks: a.response.blocks.map((b) => ({ key: b.key, type: b.type, answer: b.answer })),
+    })), null, 2);
+
+    const { system, userTemplate } = parsePromptFile(readPrompt("validate-final.md"));
+    const userContent = userTemplate
+      .replace("{{PROFILE_JSON}}",   profileJson)
+      .replace("{{ASSEMBLED_JSON}}", assembledJson.slice(0, 40_000));
+
+    type ValidateFinalResult = {
+      score: number; passed: boolean;
+      checks: Record<string, boolean>;
+      findings: string[]; missingItems: string[]; recommendedActions: string[];
+      requirementFlags: Array<{ requirementId: string; issue: string }>;
+    };
+
+    const llmResult = await callClaudeJSON<ValidateFinalResult>(system, userContent, { maxTokens: 4096 });
+
+    const qr = saveQualityReview(req.params.id, {
+      targetType:         "pack", targetId: req.params.id, reviewType: "final",
+      score:              llmResult?.score ?? 0,
+      passed:             llmResult?.passed ?? false,
+      findings:           llmResult?.findings ?? [],
+      missingItems:       llmResult?.missingItems ?? [],
+      recommendedActions: llmResult?.recommendedActions ?? [],
+      checks:             llmResult?.checks ?? {},
+    });
+
+    if (qr.passed) setWorkflowStage(req.params.id, "export");
+    req.log.info({ packId: pack.id, passed: qr.passed, score: qr.score }, "rfp: final validation complete");
+    finish({
+      qualityReview:    qr,
+      requirementFlags: llmResult?.requirementFlags ?? [],
+      workflowStage:    pack.workflowStage,
+    });
+  } catch (err) {
+    req.log.error({ err }, "rfp: validate-final failed");
+    finish({ error: (err as Error).message });
+  }
 });
 
 export default router;
