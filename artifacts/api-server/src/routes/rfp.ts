@@ -9,7 +9,10 @@ import { parseExcelForRequirements, chunkText } from "../lib/xlsxParser";
 import type { Logger } from "pino";
 
 const MAX_CHARS_PER_CHUNK = 18_000;
-const MAX_SUMMARY_CHARS  = 80_000;
+const MAX_SUMMARY_CHARS  = 120_000;
+// Each doc gets an equal share of the limit so no single large PDF crowds others out
+const maxDocChars = (docs: { length: number }) =>
+  Math.floor(MAX_SUMMARY_CHARS / Math.max(docs.length, 1));
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -72,23 +75,31 @@ async function claudeIntelligenceSummary(
   vendorContext: string,
   log: Logger,
 ): Promise<Record<string, unknown>> {
-  const system = `You are a senior RFP analyst at Risk Rising reviewing a procurement pack for the first time.
+  const system = `You are a senior bid analyst at Risk Rising conducting a first-pass read of a procurement pack.
 
-Extract actionable bid intelligence across 8 panels. Every item must be specific to this RFP — no generic statements.
+Your task is to extract EIGHT panels of actionable intelligence from the documents below. The documents may be PDFs, Word files, spreadsheets, or pasted text — read all of them carefully.
 
 ${RR_CONTEXT}
 
-Rules:
-- key_dates: only dates explicitly stated in the documents. If none, use [].
-- evaluation_criteria: how responses will be scored or evaluated. Include weightings if stated.
-- submission_requirements: format, length, font, page limits, file type, submission portal, any structural rules.
-- key_constraints: commercial, legal, geographic, regulatory, technical or timeline constraints that constrain the response or engagement.
-- rr_response_areas: topics where Risk Rising owns the response (implementation, delivery, support, commercials, training). Each must have a one-sentence reason.
-- logicgate_response_areas: topics where LogicGate must validate or respond (platform features, security, SLAs, roadmap). Each with a reason.
-- open_questions: specific gaps or ambiguities in the RFP that must be resolved before a high-quality response can be submitted.
-- key_risks: risks to submitting a winning response or to the engagement if won. Each with impact level and a concrete action.
+INSTRUCTIONS FOR EACH PANEL — be thorough, never leave a panel empty if relevant content exists:
 
-Output ONLY valid JSON — no prose, no code fences:
+KEY_DATES — Find every date anywhere in any document related to the bid process. Scan headers, timelines, cover letters, appendices, Q&A sections, and procurement schedules. Include: submission deadlines, clarification cutoff dates, award dates, contract start dates, mobilisation windows, evaluation periods, demonstration dates, pricing freeze dates. Approximate dates ("approximately Q3 2026", "within 4 weeks of award") count — include them. If genuinely no dates anywhere, return [].
+
+EVALUATION_CRITERIA — How will the buyer score responses? Look for: scoring matrices, weighting percentages, quality/price ratios, MEAT criteria, pass/fail gates, technical assessment frameworks, reference requirements, demonstration criteria. Quote weightings exactly as stated.
+
+SUBMISSION_REQUIREMENTS — What format/structure must the response follow? Page limits, font size, file format (.docx/.pdf), portal submission, mandatory section order, word counts, appendix rules, number of copies, signatures required.
+
+KEY_CONSTRAINTS — What restricts this engagement? UK-only delivery, incumbent supplier, mandatory accreditations (ISO 27001, Cyber Essentials, G-Cloud), IR35, geographic coverage, security clearance, timeline mandated by buyer, integration with specific systems.
+
+RR_RESPONSE_AREAS — Topics Risk Rising must write and own the response to: implementation approach, project delivery methodology, training, change management, UAT, hypercare, support model, managed service, account management, commercials, project governance, resource model. Give a one-sentence reason for each.
+
+LOGICGATE_RESPONSE_AREAS — Topics requiring LogicGate platform input: platform features, technical architecture, security posture, hosting/cloud, SLAs, API capabilities, integrations, product roadmap, certifications, performance benchmarks. Give a one-sentence reason for each.
+
+OPEN_QUESTIONS — Gaps or ambiguities that must be clarified before submitting a strong response. What is unclear, contradictory, or missing?
+
+KEY_RISKS — Specific risks to this bid or engagement. Be concrete. Include: timeline risk, data migration uncertainty, integration complexity, incumbent advantage, resource availability, LogicGate capability gaps. Rate each High/Medium/Low and give a concrete action.
+
+Output ONLY valid JSON — no prose, no markdown, no code fences:
 {
   "key_dates": [{"label": "string", "date": "string", "note": "string|null"}],
   "evaluation_criteria": [{"criterion": "string", "weight": "string|null", "note": "string|null"}],
@@ -103,7 +114,7 @@ Output ONLY valid JSON — no prose, no code fences:
   const user = `Company: ${company}\nVendor context: ${vendorContext}\n\nDocument content:\n${allContent}`;
 
   try {
-    const result = await callClaudeJSON<Record<string, unknown>>(system, user, { maxTokens: 3000 });
+    const result = await callClaudeJSON<Record<string, unknown>>(system, user, { maxTokens: 4000 });
     return result ?? {};
   } catch (err) {
     log.warn({ err }, "claudeIntelligenceSummary failed — returning empty summary");
@@ -177,18 +188,21 @@ async function runWorkbenchJob(
     const classifications = await claudeClassifyDocuments(docs, log);
     updateJob(jobId, { documentClassifications: classifications });
 
-    // Build combined content for summary and sections
+    // Build combined content — each doc gets an equal slice so no single large PDF starves others
+    const charLimit = maxDocChars(docs);
     let content = "";
     for (const doc of docs) {
       if (doc.text) {
-        const toAdd = `\n\n=== ${doc.name} ===\n${doc.text}`;
-        if (content.length + toAdd.length <= MAX_SUMMARY_CHARS) content += toAdd;
+        // Take up to charLimit chars from this doc; if the doc is short, use all of it
+        const slice = doc.text.length > charLimit ? doc.text.slice(0, charLimit) + "\n[...truncated]" : doc.text;
+        content += `\n\n=== ${doc.name} ===\n${slice}`;
       } else if (doc.structuredRows && doc.structuredRows.length > 0) {
-        const reqs = doc.structuredRows.slice(0, 150).map((r) => r.requirement).filter(Boolean).join("\n");
-        const toAdd = `\n\n=== ${doc.name} (requirements) ===\n${reqs}`;
-        if (content.length + toAdd.length <= MAX_SUMMARY_CHARS) content += toAdd;
+        const reqs = doc.structuredRows.slice(0, 200).map((r) => r.requirement).filter(Boolean).join("\n");
+        const slice = reqs.length > charLimit ? reqs.slice(0, charLimit) + "\n[...truncated]" : reqs;
+        content += `\n\n=== ${doc.name} (requirements spreadsheet) ===\n${slice}`;
       }
     }
+    log.info({ jobId, totalContentChars: content.length, docCount: docs.length, charLimitPerDoc: charLimit }, "rfp: content assembled");
 
     if (!content.trim()) {
       updateJob(jobId, { status: "error", error: "No readable content found in uploaded documents." });
