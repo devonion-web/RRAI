@@ -9,7 +9,8 @@ import {
   rfpCreatePack, rfpDetectSections,
   rfpExtractBrief, rfpGenerateDraft, rfpUpdateDraft,
   rfpAdvanceDraftStatus, rfpReopenDraft,
-  rfpGetSectionAudit,
+  rfpGetSectionAudit, rfpGetPack,
+  rfpFillPlaceholder, rfpMarkComponentReviewed,
 } from './api.js'
 
 // ── Brand ─────────────────────────────────────────────────────────────────────
@@ -32,7 +33,8 @@ const EVENT_META = {
   brief_extracted:  { icon: '📋', label: 'Brief extracted' },
   draft_generated:  { icon: '✦',  label: 'Draft generated' },
   draft_edited:     { icon: '✏', label: 'Draft saved' },
-  placeholder_filled: { icon: '✓', label: 'Placeholder filled' },
+  placeholder_filled:  { icon: '✓', label: 'Placeholder filled' },
+  component_reviewed:  { icon: '◉', label: 'Component reviewed' },
   status_changed:   { icon: '→', label: 'Status changed' },
   approved:         { icon: '✅', label: 'Approved' },
   exported:         { icon: '⬇', label: 'Exported' },
@@ -41,10 +43,16 @@ const EVENT_META = {
 
 // ── Utils ─────────────────────────────────────────────────────────────────────
 function countPH(v) {
-  if (typeof v === 'string') return [...v.matchAll(/\{\{PLACEHOLDER:/g)].length
+  if (typeof v === 'string') return [...v.matchAll(/\{\{PLACEHOLDER:/g)].length + [...v.matchAll(/\{\{PH:/g)].length
   if (Array.isArray(v)) return v.reduce((n, x) => n + countPH(x), 0)
   if (v && typeof v === 'object') return Object.values(v).reduce((n, x) => n + countPH(x), 0)
   return 0
+}
+function countUnfilledPH(draft) {
+  if (!draft) return 0
+  const phs = draft.placeholders || []
+  if (phs.length > 0 && typeof phs[0] === 'object') return phs.filter(p => !p.filled).length
+  return countPH(draft.components)
 }
 function scanForPlaceholders(v, ctx = '') {
   const out = []
@@ -56,10 +64,6 @@ function scanForPlaceholders(v, ctx = '') {
     for (const [k, x] of Object.entries(v)) out.push(...scanForPlaceholders(x, k))
   }
   return out
-}
-function detectPlaceholders(components) {
-  const seen = new Set()
-  return scanForPlaceholders(components).filter(p => { if (seen.has(p.key)) return false; seen.add(p.key); return true })
 }
 function applyToAll(v, ph, rep) {
   if (typeof v === 'string') return v.split(ph).join(rep)
@@ -74,6 +78,39 @@ function timeAgo(ts) {
   if (d < 86400000) return `${Math.floor(d / 3600000)}h ago`
   return new Date(ts).toLocaleDateString('en-GB', { day: '2-digit', month: 'short' })
 }
+
+function normalizePlaceholders(draft) {
+  const phs = draft?.placeholders || []
+  if (!Array.isArray(phs) || phs.length === 0) return []
+  if (typeof phs[0] === 'string') {
+    return phs.map((desc, i) => ({ id: `ph_${String(i + 1).padStart(3, '0')}`, description: desc, group: null, value: null, filled: false }))
+  }
+  return phs
+}
+
+function parseInlineText(text, placeholders) {
+  if (!text) return [{ type: 'text', value: '' }]
+  const segments = []
+  const re = /\{\{PH:([^}]+)\}\}|\{\{PLACEHOLDER:\s*([^}]+?)\}\}/g
+  let last = 0
+  for (const m of text.matchAll(re)) {
+    if (m.index > last) segments.push({ type: 'text', value: text.slice(last, m.index) })
+    if (m[1]) {
+      const ph = placeholders.find(p => p.id === m[1])
+      segments.push({ type: 'ph', id: m[1], placeholder: ph || { id: m[1], description: m[1], filled: false, value: null, group: null } })
+    } else {
+      const desc = m[2].trim()
+      const ph = placeholders.find(p => p.description === desc)
+      segments.push({ type: 'ph', id: m[0], placeholder: ph || { id: m[0], description: desc, filled: false, value: null, group: null } })
+    }
+    last = m.index + m[0].length
+  }
+  if (last < text.length) segments.push({ type: 'text', value: text.slice(last) })
+  return segments
+}
+
+const COMP_NAMES  = ['understanding','approachAndRecommendedOption','deliveryPlan','domainComponent','resourcing','acceptanceGates','preWork','assumptions','configCustomisationThirdParty','costs','risks']
+const COMP_LABELS = { understanding:'Understanding', approachAndRecommendedOption:'Approach', deliveryPlan:'Delivery Plan', domainComponent:'Domain', resourcing:'Resourcing', acceptanceGates:'Quality Gates', preWork:'Pre-Work', assumptions:'Assumptions', configCustomisationThirdParty:'Config / 3P', costs:'Costs', risks:'Risks' }
 
 // ── Atoms ─────────────────────────────────────────────────────────────────────
 function Spinner() {
@@ -103,8 +140,111 @@ function Block({ n, label, extra, children }) {
     </div>
   )
 }
+
+// ── Inline PH components ──────────────────────────────────────────────────────
+function PHChip({ ph, onFill, isActive }) {
+  const [editing, setEditing] = useState(false)
+  const [val, setVal] = useState(ph.value || '')
+  useEffect(() => { if (isActive && !ph.filled) setEditing(true) }, [isActive, ph.filled])
+  const chipId = 'ph-chip-' + ph.id.replace(/[^a-z0-9]/gi, '_')
+
+  if (ph.filled) {
+    return (
+      <mark id={chipId} style={{ background: '#FFFBEB', color: '#78350F', borderBottom: '1px solid #FCD34D', borderRadius: 3, padding: '0 3px', fontStyle: 'italic' }}>
+        {ph.value}
+      </mark>
+    )
+  }
+  if (editing) {
+    return (
+      <span id={chipId} style={{ display: 'inline-flex', gap: 3, verticalAlign: 'middle', margin: '0 2px' }}>
+        <input autoFocus value={val} onChange={e => setVal(e.target.value)}
+          onKeyDown={e => {
+            if (e.key === 'Enter' && val.trim()) { onFill(ph.id, val.trim()); setEditing(false) }
+            if (e.key === 'Escape') setEditing(false)
+          }}
+          style={{ border: '1px solid #D97706', borderRadius: 4, padding: '2px 7px', fontSize: 12, width: 180, fontFamily: 'inherit', outline: 'none' }}
+        />
+        <button type="button" onClick={() => { if (val.trim()) { onFill(ph.id, val.trim()); setEditing(false) } }} disabled={!val.trim()}
+          style={{ background: val.trim() ? '#D97706' : '#CBD5E1', color: WHITE, border: 'none', borderRadius: 4, padding: '2px 9px', fontSize: 12, fontWeight: 700, cursor: val.trim() ? 'pointer' : 'not-allowed' }}>✓</button>
+        <button type="button" onClick={() => setEditing(false)}
+          style={{ background: 'none', border: '1px solid #E2E8F0', borderRadius: 4, padding: '2px 7px', fontSize: 12, cursor: 'pointer' }}>×</button>
+      </span>
+    )
+  }
+  return (
+    <button id={chipId} type="button" onClick={() => setEditing(true)}
+      style={{ background: '#FEF3C7', color: '#92400E', border: '1px solid #FCD34D', borderRadius: 12, padding: '1px 9px', fontSize: 11, fontWeight: 600, cursor: 'pointer', verticalAlign: 'middle', margin: '0 2px' }}
+      title={ph.description}>
+      ✎ {ph.description}
+    </button>
+  )
+}
+
+function InlineAnswer({ text, placeholders, onFillPH, activePhId }) {
+  if (!text) return <span style={{ color: MUTED, fontStyle: 'italic', fontSize: 12 }}>No content drafted.</span>
+  const paras = text.split('\n')
+  return (
+    <div style={{ fontSize: 13, lineHeight: 1.75, color: '#1E293B' }}>
+      {paras.map((para, pi) => {
+        if (!para.trim()) return <div key={pi} style={{ height: 8 }} />
+        const segments = parseInlineText(para, placeholders)
+        return (
+          <p key={pi} style={{ margin: '0 0 7px 0' }}>
+            {segments.map((seg, si) =>
+              seg.type === 'text'
+                ? <span key={si}>{seg.value}</span>
+                : <PHChip key={si} ph={seg.placeholder} isActive={activePhId === seg.id} onFill={onFillPH} />
+            )}
+          </p>
+        )
+      })}
+    </div>
+  )
+}
+
+function ComponentCard({ n, compKey, label, reqCtx, placeholders, reviewed, onMarkReviewed, children }) {
+  const [mode, setMode] = useState('review')
+  const compPHs       = placeholders.filter(p => p.group === compKey)
+  const unfilledCount = compPHs.filter(p => !p.filled).length
+  const canReview     = unfilledCount === 0
+  const borderCol     = reviewed ? '#BBF7D0' : BORDER
+  return (
+    <div style={{ marginBottom: 18, border: `1px solid ${borderCol}`, borderRadius: 8, overflow: 'hidden' }}>
+      <div style={{ background: NAVY, padding: '8px 14px', display: 'flex', alignItems: 'center', gap: 8 }}>
+        {n !== undefined && <SectionNum n={n} />}
+        <span style={{ color: WHITE, fontWeight: 700, fontSize: 12, flex: 1 }}>{label}</span>
+        {reviewed && <span style={{ color: '#4ADE80', fontSize: 11, fontWeight: 700 }}>✓ Reviewed</span>}
+        <button type="button" onClick={() => setMode(m => m === 'review' ? 'edit' : 'review')}
+          style={{ background: 'rgba(255,255,255,0.12)', border: '1px solid rgba(255,255,255,0.2)', borderRadius: 4, color: WHITE, padding: '2px 10px', fontSize: 11, cursor: 'pointer' }}>
+          {mode === 'review' ? '✏ Edit' : '◉ Review'}
+        </button>
+      </div>
+      {reqCtx && (
+        <div style={{ background: '#F8FAFC', borderBottom: `1px solid ${BORDER}`, padding: '7px 14px', display: 'flex', gap: 10, alignItems: 'flex-start' }}>
+          <span style={{ fontSize: 9, fontWeight: 700, color: MUTED, textTransform: 'uppercase', letterSpacing: '0.07em', marginTop: 3, flexShrink: 0, minWidth: 68 }}>Buyer asks</span>
+          <span style={{ fontSize: 12, color: MUTED, lineHeight: 1.55 }}>{reqCtx}</span>
+        </div>
+      )}
+      <div style={{ background: WHITE, padding: '12px 14px' }}>
+        {children({ mode })}
+      </div>
+      <div style={{ background: '#FAFBFC', borderTop: `1px solid ${BORDER}`, padding: '6px 14px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <span style={{ fontSize: 11, color: unfilledCount > 0 ? AMBER : (compPHs.length > 0 ? GREEN : MUTED) }}>
+          {unfilledCount > 0 ? `${unfilledCount} gap${unfilledCount !== 1 ? 's' : ''} to fill` : compPHs.length > 0 ? '✓ All gaps filled' : 'drafted'}
+        </span>
+        <button type="button" onClick={() => !reviewed && canReview && onMarkReviewed(compKey)}
+          disabled={reviewed || !canReview}
+          style={{ background: reviewed ? '#D1FAE5' : canReview ? NAVY : '#F1F5F9', color: reviewed ? GREEN : canReview ? WHITE : MUTED, border: reviewed ? `1px solid ${GREEN}` : 'none', borderRadius: 6, padding: '4px 12px', fontSize: 11, fontWeight: 700, cursor: reviewed || !canReview ? 'not-allowed' : 'pointer' }}>
+          {reviewed ? '✓ Reviewed' : canReview ? 'Mark reviewed' : 'Fill gaps first'}
+        </button>
+      </div>
+    </div>
+  )
+}
+
 function TA({ value, onChange, rows = 4, yellow = false }) {
-  const ph = typeof value === 'string' && value.includes('{{PLACEHOLDER:')
+  const ph = typeof value === 'string' && (value.includes('{{PLACEHOLDER:') || value.includes('{{PH:'))
   return (
     <textarea value={value || ''} onChange={e => onChange(e.target.value)} rows={rows}
       style={{ width: '100%', padding: '8px 10px', border: `1px solid ${BORDER}`, borderRadius: 6, fontSize: 13, fontFamily: 'Georgia, serif', lineHeight: 1.7, resize: 'vertical', boxSizing: 'border-box', color: '#1E293B', background: (yellow || ph) ? '#FFFBEB' : '#FAFBFC' }}
@@ -118,7 +258,7 @@ function StringList({ items, onChange }) {
         <div key={i} style={{ display: 'flex', gap: 6, marginBottom: 5, alignItems: 'flex-start' }}>
           <span style={{ color: MUTED, fontSize: 12, paddingTop: 8, flexShrink: 0 }}>•</span>
           <textarea value={item} onChange={e => { const n = [...items]; n[i] = e.target.value; onChange(n) }} rows={2}
-            style={{ flex: 1, padding: '5px 8px', border: `1px solid ${BORDER}`, borderRadius: 4, fontSize: 12, fontFamily: 'inherit', resize: 'vertical', lineHeight: 1.4, background: item.includes('{{PLACEHOLDER:') ? '#FFFBEB' : WHITE }} />
+            style={{ flex: 1, padding: '5px 8px', border: `1px solid ${BORDER}`, borderRadius: 4, fontSize: 12, fontFamily: 'inherit', resize: 'vertical', lineHeight: 1.4, background: (item.includes('{{PLACEHOLDER:') || item.includes('{{PH:')) ? '#FFFBEB' : WHITE }} />
           <button onClick={() => onChange(items.filter((_, j) => j !== i))} style={{ background: 'none', border: 'none', cursor: 'pointer', color: MUTED, fontSize: 16, paddingTop: 6 }}>×</button>
         </div>
       ))}
@@ -141,7 +281,7 @@ function InlineTable({ columns, rows, onChange }) {
                 {columns.map(c => (
                   <td key={c.key} style={{ padding: 3, verticalAlign: 'top' }}>
                     <textarea value={row[c.key] || ''} onChange={e => updateCell(i, c.key, e.target.value)} rows={c.rows || 2}
-                      style={{ width: '100%', padding: '4px 6px', border: `1px solid ${BORDER}`, borderRadius: 3, fontSize: 11, fontFamily: 'inherit', resize: 'vertical', boxSizing: 'border-box', lineHeight: 1.4, background: (row[c.key] || '').includes('{{PLACEHOLDER:') ? '#FFFBEB' : 'transparent' }} />
+                      style={{ width: '100%', padding: '4px 6px', border: `1px solid ${BORDER}`, borderRadius: 3, fontSize: 11, fontFamily: 'inherit', resize: 'vertical', boxSizing: 'border-box', lineHeight: 1.4, background: ((row[c.key] || '').includes('{{PLACEHOLDER:') || (row[c.key] || '').includes('{{PH:')) ? '#FFFBEB' : 'transparent' }} />
                   </td>
                 ))}
                 <td style={{ textAlign: 'center', verticalAlign: 'top', padding: '6px 4px' }}>
@@ -396,7 +536,7 @@ function DashboardScreen({ pack, sections, onSectionsChange, onOpenSection, onRe
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: 14 }}>
           {sections.map((s, idx) => {
             const meta   = STATUS_META[s.status] || STATUS_META.not_started
-            const phCount = s.draft ? countPH(s.draft.components) : 0
+            const phCount = s.draft ? countUnfilledPH(s.draft) : 0
             const isBL   = briefLoading === s.id
             const isDL   = draftLoading === s.id
             return (
@@ -462,23 +602,27 @@ function DashboardScreen({ pack, sections, onSectionsChange, onOpenSection, onRe
 // ── Draft screen ──────────────────────────────────────────────────────────────
 function DraftScreen({ section, sections, currentIdx, buyer, onBack, onNavigate, onSectionChanged }) {
   const d = section.draft
-  const [comp, setComp]         = useState(d?.components || {})
-  const [verdict, setVerdict]   = useState(d?.complianceVerdict || 'Partially Complies')
-  const [openDeps, setOpenDeps] = useState(d?.openDependencies || [])
-  const [status, setStatus]     = useState(d?.status || 'draft')
+  const [comp, setComp]             = useState(d?.components || {})
+  const [verdict, setVerdict]       = useState(d?.complianceVerdict || 'Partially Complies')
+  const [openDeps, setOpenDeps]     = useState(d?.openDependencies || [])
+  const [status, setStatus]         = useState(d?.status || 'draft')
   const [sectionStatus, setSectionStatus] = useState(section.status || 'drafted')
-  const [phValues, setPhValues] = useState({})
-  const [dirty, setDirty]       = useState(false)
-  const [saving, setSaving]     = useState(false)
-  const [advancing, setAdv]     = useState(false)
-  const [reopening, setReop]    = useState(false)
-  const [exporting, setExp]     = useState(false)
-  const [exportErr, setExpErr]  = useState(null)
-  const [history, setHistory]   = useState([])
-  const [advErr, setAdvErr]     = useState(null)
+  const [placeholders, setPHs]      = useState(() => normalizePlaceholders(d))
+  const [reviewed, setReviewed]     = useState(d?.reviewed || {})
+  const [reqCtx]                    = useState(d?.requirementContext || {})
+  const [activePhId, setActivePhId] = useState(null)
+  const [dirty, setDirty]           = useState(false)
+  const [saving, setSaving]         = useState(false)
+  const [advancing, setAdv]         = useState(false)
+  const [reopening, setReop]        = useState(false)
+  const [exporting, setExp]         = useState(false)
+  const [exportErr, setExpErr]      = useState(null)
+  const [history, setHistory]       = useState([])
+  const [advErr, setAdvErr]         = useState(null)
 
-  const placeholders  = detectPlaceholders(comp)
-  const unfilledCount = placeholders.filter(p => !phValues[p.key]?.trim()).length
+  const unfilledCount       = placeholders.filter(p => !p.filled).length
+  const allReviewed         = COMP_NAMES.every(k => reviewed[k])
+  const canAdvanceToApprove = status !== 'in_review' || (allReviewed && unfilledCount === 0)
 
   useEffect(() => {
     rfpGetSectionAudit(section.id).then(({ events }) => setHistory([...(events || [])].reverse())).catch(() => {})
@@ -494,16 +638,30 @@ function DraftScreen({ section, sections, currentIdx, buyer, onBack, onNavigate,
   function setRes(field, val) { setComp(p => ({ ...p, resourcing: { ...p.resourcing, [field]: val } })); setDirty(true) }
   function setF(field) { return v => set(field, v) }
 
-  function applyPh(key, placeholder, value) {
-    if (!value?.trim()) return
-    setComp(prev => applyToAll(prev, placeholder, value))
-    setDirty(true)
+  async function fillPH(phId, value) {
+    setPHs(prev => prev.map(p => p.id === phId ? { ...p, value, filled: true } : p))
+    try { await rfpFillPlaceholder(section.id, phId, value); await refreshHistory() }
+    catch { setPHs(prev => prev.map(p => p.id === phId ? { ...p, value: null, filled: false } : p)) }
+  }
+
+  async function markReviewed(compName) {
+    const newVal = !reviewed[compName]
+    setReviewed(prev => ({ ...prev, [compName]: newVal }))
+    try { await rfpMarkComponentReviewed(section.id, compName, newVal); await refreshHistory() }
+    catch { setReviewed(prev => ({ ...prev, [compName]: !newVal })) }
+  }
+
+  function scrollToChip(phId) {
+    setActivePhId(phId)
+    setTimeout(() => {
+      document.getElementById('ph-chip-' + phId.replace(/[^a-z0-9]/gi, '_'))?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    }, 50)
   }
 
   async function save() {
     setSaving(true)
     try {
-      const { draft } = await rfpUpdateDraft(section.id, { components: comp, complianceVerdict: verdict, openDependencies: openDeps })
+      const { draft } = await rfpUpdateDraft(section.id, { components: comp, complianceVerdict: verdict, openDependencies: openDeps, reviewed, placeholders })
       onSectionChanged({ sectionId: section.id, draft })
       setDirty(false)
       await refreshHistory()
@@ -528,8 +686,7 @@ function DraftScreen({ section, sections, currentIdx, buyer, onBack, onNavigate,
     setReop(true)
     try {
       const resp = await rfpReopenDraft(section.id)
-      setStatus(resp.draft.status)
-      setSectionStatus(resp.sectionStatus)
+      setStatus(resp.draft.status); setSectionStatus(resp.sectionStatus)
       onSectionChanged({ sectionId: section.id, draft: resp.draft, sectionStatus: resp.sectionStatus })
       await refreshHistory()
     } catch {}
@@ -539,8 +696,14 @@ function DraftScreen({ section, sections, currentIdx, buyer, onBack, onNavigate,
   async function doExport() {
     if (dirty) await save()
     setExp(true); setExpErr(null)
-    try { await exportSectionDocx({ buyer, sectionCode: section.code, sectionTitle: section.title, draft: { components: comp, complianceVerdict: verdict, openDependencies: openDeps } }) }
-    catch (e) { setExpErr(e.message) }
+    try {
+      let resolvedComp = comp
+      for (const ph of placeholders.filter(p => p.filled)) {
+        resolvedComp = applyToAll(resolvedComp, `{{PH:${ph.id}}}`, ph.value)
+        resolvedComp = applyToAll(resolvedComp, `{{PLACEHOLDER: ${ph.description}}}`, ph.value)
+      }
+      await exportSectionDocx({ buyer, sectionCode: section.code, sectionTitle: section.title, draft: { components: resolvedComp, complianceVerdict: verdict, openDependencies: openDeps } })
+    } catch (e) { setExpErr(e.message) }
     setExp(false)
   }
 
@@ -552,25 +715,33 @@ function DraftScreen({ section, sections, currentIdx, buyer, onBack, onNavigate,
   const prevSection = currentIdx > 0 ? sections[currentIdx - 1] : null
   const nextSection = currentIdx < sections.length - 1 ? sections[currentIdx + 1] : null
 
+  const briefFallback = {
+    understanding: [section.buyerChallenges, section.requirements?.map(r => r.text)].flat().filter(Boolean).slice(0, 3).join('; ') || null,
+    approachAndRecommendedOption: section.mandatedResponseStructure?.slice(0, 3).join('; ') || null,
+    deliveryPlan: section.keyDates?.length ? section.keyDates.map(d => `${d.date}: ${d.event}`).join('; ') : section.constraints?.slice(0, 2).join('; ') || null,
+    resourcing: section.namedOwners?.length ? section.namedOwners.map(o => `${o.name} (${o.area})`).join(', ') : null,
+    costs: section.commercialTerms?.slice(0, 2).join('; ') || null,
+    configCustomisationThirdParty: section.considerations?.slice(0, 2).join('; ') || null,
+  }
+
   const MILESTONES_COLS = [{ key: 'phase', label: 'Phase', w: '15%', rows: 2 }, { key: 'timing', label: 'Timing', w: '15%', rows: 2 }, { key: 'activities', label: 'Activities', w: '45%', rows: 3 }, { key: 'exit', label: 'Exit criteria', w: '25%', rows: 3 }]
   const TEAM_COLS       = [{ key: 'role', label: 'Role', w: '20%', rows: 2 }, { key: 'responsibility', label: 'Responsibility', w: '55%', rows: 3 }, { key: 'phases', label: 'Phases', w: '25%', rows: 2 }]
   const GATES_COLS      = [{ key: 'gate', label: 'Gate', w: '20%', rows: 2 }, { key: 'entry', label: 'Entry criteria', w: '40%', rows: 3 }, { key: 'exit', label: 'Exit criteria', w: '40%', rows: 3 }]
   const RISKS_COLS      = [{ key: 'risk', label: 'Risk', w: '30%', rows: 3 }, { key: 'likelihoodImpact', label: 'L×I', w: '10%', rows: 2 }, { key: 'mitigation', label: 'Mitigation', w: '40%', rows: 3 }, { key: 'owner', label: 'Owner', w: '20%', rows: 2 }]
-  const VERDICTS        = ['Complies', 'Partially Complies', 'Does Not Comply']
-  const VCOLS           = { 'Complies': GREEN, 'Partially Complies': AMBER, 'Does Not Comply': RED }
+  const VERDICTS = ['Complies', 'Partially Complies', 'Does Not Comply']
+  const VCOLS    = { 'Complies': GREEN, 'Partially Complies': AMBER, 'Does Not Comply': RED }
 
   return (
     <div style={{ fontFamily: 'Inter, Arial, sans-serif', background: BG, minHeight: '100vh' }}>
       {/* Header */}
       <div style={{ background: NAVY, padding: '8px 20px', display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
         <button onClick={onBack} style={{ background: 'rgba(255,255,255,0.1)', border: '1px solid rgba(255,255,255,0.2)', borderRadius: 6, color: WHITE, padding: '4px 10px', fontSize: 11, fontWeight: 600, cursor: 'pointer' }}>← Dashboard</button>
-        {/* Prev/next navigation */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
           <button onClick={() => prevSection && navigateTo(prevSection)} disabled={!prevSection}
-            style={{ background: prevSection ? 'rgba(255,255,255,0.12)' : 'transparent', border: '1px solid rgba(255,255,255,0.15)', borderRadius: 4, color: prevSection ? WHITE : 'rgba(255,255,255,0.3)', padding: '3px 8px', fontSize: 13, cursor: prevSection ? 'pointer' : 'not-allowed' }} title={prevSection ? `← ${prevSection.code}` : ''}>‹</button>
+            style={{ background: prevSection ? 'rgba(255,255,255,0.12)' : 'transparent', border: '1px solid rgba(255,255,255,0.15)', borderRadius: 4, color: prevSection ? WHITE : 'rgba(255,255,255,0.3)', padding: '3px 8px', fontSize: 13, cursor: prevSection ? 'pointer' : 'not-allowed' }}>‹</button>
           <span style={{ color: 'rgba(255,255,255,0.5)', fontSize: 11 }}>{currentIdx + 1} / {sections.length}</span>
           <button onClick={() => nextSection && navigateTo(nextSection)} disabled={!nextSection}
-            style={{ background: nextSection ? 'rgba(255,255,255,0.12)' : 'transparent', border: '1px solid rgba(255,255,255,0.15)', borderRadius: 4, color: nextSection ? WHITE : 'rgba(255,255,255,0.3)', padding: '3px 8px', fontSize: 13, cursor: nextSection ? 'pointer' : 'not-allowed' }} title={nextSection ? `${nextSection.code} →` : ''}>›</button>
+            style={{ background: nextSection ? 'rgba(255,255,255,0.12)' : 'transparent', border: '1px solid rgba(255,255,255,0.15)', borderRadius: 4, color: nextSection ? WHITE : 'rgba(255,255,255,0.3)', padding: '3px 8px', fontSize: 13, cursor: nextSection ? 'pointer' : 'not-allowed' }}>›</button>
         </div>
         <VerdictBadge verdict={verdict} />
         <span style={{ color: WHITE, fontWeight: 700, fontSize: 14 }}>{section.code} — {section.title}</span>
@@ -588,76 +759,161 @@ function DraftScreen({ section, sections, currentIdx, buyer, onBack, onNavigate,
       <div style={{ display: 'flex', maxWidth: 1440, margin: '0 auto' }}>
         {/* Main editor */}
         <div style={{ flex: 1, padding: '20px 24px', minWidth: 0 }}>
-          {/* Compliance verdict */}
           <Block label="Compliance Verdict">
             <div style={{ display: 'flex', gap: 8 }}>
               {VERDICTS.map(v => (
-                <button key={v} onClick={() => { setVerdict(v); setDirty(true) }}
+                <button key={v} type="button" onClick={() => { setVerdict(v); setDirty(true) }}
                   style={{ flex: 1, padding: '8px 0', border: `2px solid ${verdict === v ? VCOLS[v] : BORDER}`, borderRadius: 6, background: verdict === v ? VCOLS[v] + '18' : 'none', color: verdict === v ? VCOLS[v] : MUTED, fontSize: 12, fontWeight: verdict === v ? 700 : 400, cursor: 'pointer' }}>
                   {v}
                 </button>
               ))}
             </div>
           </Block>
-          <Block n={1} label="Understanding of the Challenge"><TA value={comp.understanding} onChange={v => set('understanding', v)} rows={5} /></Block>
-          <Block n={2} label="Approach & Recommended Option"><TA value={comp.approachAndRecommendedOption} onChange={v => set('approachAndRecommendedOption', v)} rows={6} /></Block>
-          <Block n={3} label="Delivery Plan">
-            <div style={{ marginBottom: 10 }}>
-              <div style={{ fontSize: 10, fontWeight: 700, color: MUTED, marginBottom: 4, textTransform: 'uppercase' }}>Narrative</div>
-              <TA value={comp.deliveryPlan?.narrative} onChange={v => setDP('narrative', v)} rows={3} />
-            </div>
-            <div style={{ fontSize: 10, fontWeight: 700, color: MUTED, marginBottom: 6, textTransform: 'uppercase' }}>Milestones</div>
-            <InlineTable columns={MILESTONES_COLS} rows={comp.deliveryPlan?.milestones || []} onChange={v => setDP('milestones', v)} />
-          </Block>
-          <Block n={4} label="Domain Component">
-            <div style={{ marginBottom: 8 }}>
-              <div style={{ fontSize: 10, fontWeight: 700, color: MUTED, marginBottom: 4, textTransform: 'uppercase' }}>Title</div>
-              <input value={comp.domainComponent?.title || ''} onChange={e => setDC('title', e.target.value)} style={{ width: '100%', padding: '7px 10px', border: `1px solid ${BORDER}`, borderRadius: 6, fontSize: 13, boxSizing: 'border-box', fontFamily: 'inherit' }} />
-            </div>
-            <TA value={comp.domainComponent?.content} onChange={v => setDC('content', v)} rows={5} />
-          </Block>
-          <Block n={5} label="Resourcing">
-            <div style={{ marginBottom: 10 }}>
-              <div style={{ fontSize: 10, fontWeight: 700, color: MUTED, marginBottom: 6, textTransform: 'uppercase' }}>Delivery team</div>
-              <InlineTable columns={TEAM_COLS} rows={comp.resourcing?.deliveryTeam || []} onChange={v => setRes('deliveryTeam', v)} />
-            </div>
-            <div style={{ fontSize: 10, fontWeight: 700, color: MUTED, marginBottom: 4, textTransform: 'uppercase' }}>Buyer-side commitment required</div>
-            <TA value={comp.resourcing?.buyerCommitment} onChange={v => setRes('buyerCommitment', v)} rows={3} />
-          </Block>
-          <Block n={6} label="Acceptance & Quality Gates"><InlineTable columns={GATES_COLS} rows={comp.acceptanceGates || []} onChange={setF('acceptanceGates')} /></Block>
-          <Block n={7} label="Pre-Work Required by Buyer"><StringList items={comp.preWork || []} onChange={setF('preWork')} /></Block>
-          <Block n={8} label="Assumptions, Limitations & Dependencies"><StringList items={comp.assumptions || []} onChange={setF('assumptions')} /></Block>
-          <Block n={9} label="Configuration / Customisation / Third-Party"><TA value={comp.configCustomisationThirdParty} onChange={v => set('configCustomisationThirdParty', v)} rows={5} /></Block>
-          <Block n={10} label="Costs & Fit-Gaps"><TA value={comp.costs} onChange={v => set('costs', v)} rows={4} yellow /></Block>
-          <Block n={11} label="Risks & Mitigations"><InlineTable columns={RISKS_COLS} rows={comp.risks || []} onChange={setF('risks')} /></Block>
-          {openDeps.length > 0 && <Block label="Open Dependencies / Clarification Questions"><StringList items={openDeps} onChange={setOpenDeps} /></Block>}
+
+          <ComponentCard n={1} compKey="understanding" label="Understanding of the Challenge"
+            reqCtx={reqCtx.understanding || briefFallback.understanding}
+            placeholders={placeholders} reviewed={!!reviewed.understanding} onMarkReviewed={markReviewed}>
+            {({ mode }) => mode === 'edit'
+              ? <TA value={comp.understanding} onChange={v => set('understanding', v)} rows={5} />
+              : <InlineAnswer text={comp.understanding} placeholders={placeholders} onFillPH={fillPH} activePhId={activePhId} />}
+          </ComponentCard>
+
+          <ComponentCard n={2} compKey="approachAndRecommendedOption" label="Approach & Recommended Option"
+            reqCtx={reqCtx.approachAndRecommendedOption || briefFallback.approachAndRecommendedOption}
+            placeholders={placeholders} reviewed={!!reviewed.approachAndRecommendedOption} onMarkReviewed={markReviewed}>
+            {({ mode }) => mode === 'edit'
+              ? <TA value={comp.approachAndRecommendedOption} onChange={v => set('approachAndRecommendedOption', v)} rows={6} />
+              : <InlineAnswer text={comp.approachAndRecommendedOption} placeholders={placeholders} onFillPH={fillPH} activePhId={activePhId} />}
+          </ComponentCard>
+
+          <ComponentCard n={3} compKey="deliveryPlan" label="Delivery Plan"
+            reqCtx={reqCtx.deliveryPlan || briefFallback.deliveryPlan}
+            placeholders={placeholders} reviewed={!!reviewed.deliveryPlan} onMarkReviewed={markReviewed}>
+            {({ mode }) => (<>
+              <div style={{ marginBottom: 10 }}>
+                <div style={{ fontSize: 10, fontWeight: 700, color: MUTED, marginBottom: 4, textTransform: 'uppercase' }}>Narrative</div>
+                {mode === 'edit'
+                  ? <TA value={comp.deliveryPlan?.narrative} onChange={v => setDP('narrative', v)} rows={3} />
+                  : <InlineAnswer text={comp.deliveryPlan?.narrative} placeholders={placeholders} onFillPH={fillPH} activePhId={activePhId} />}
+              </div>
+              <div style={{ fontSize: 10, fontWeight: 700, color: MUTED, marginBottom: 6, textTransform: 'uppercase' }}>Milestones</div>
+              <InlineTable columns={MILESTONES_COLS} rows={comp.deliveryPlan?.milestones || []} onChange={v => setDP('milestones', v)} />
+            </>)}
+          </ComponentCard>
+
+          <ComponentCard n={4} compKey="domainComponent" label="Domain Component"
+            reqCtx={reqCtx.domainComponent}
+            placeholders={placeholders} reviewed={!!reviewed.domainComponent} onMarkReviewed={markReviewed}>
+            {({ mode }) => (<>
+              <div style={{ marginBottom: 8 }}>
+                <div style={{ fontSize: 10, fontWeight: 700, color: MUTED, marginBottom: 4, textTransform: 'uppercase' }}>Title</div>
+                <input value={comp.domainComponent?.title || ''} onChange={e => setDC('title', e.target.value)} style={{ width: '100%', padding: '7px 10px', border: `1px solid ${BORDER}`, borderRadius: 6, fontSize: 13, boxSizing: 'border-box', fontFamily: 'inherit' }} />
+              </div>
+              {mode === 'edit'
+                ? <TA value={comp.domainComponent?.content} onChange={v => setDC('content', v)} rows={5} />
+                : <InlineAnswer text={comp.domainComponent?.content} placeholders={placeholders} onFillPH={fillPH} activePhId={activePhId} />}
+            </>)}
+          </ComponentCard>
+
+          <ComponentCard n={5} compKey="resourcing" label="Resourcing"
+            reqCtx={reqCtx.resourcing || briefFallback.resourcing}
+            placeholders={placeholders} reviewed={!!reviewed.resourcing} onMarkReviewed={markReviewed}>
+            {({ mode }) => (<>
+              <div style={{ marginBottom: 10 }}>
+                <div style={{ fontSize: 10, fontWeight: 700, color: MUTED, marginBottom: 6, textTransform: 'uppercase' }}>Delivery team</div>
+                <InlineTable columns={TEAM_COLS} rows={comp.resourcing?.deliveryTeam || []} onChange={v => setRes('deliveryTeam', v)} />
+              </div>
+              <div style={{ fontSize: 10, fontWeight: 700, color: MUTED, marginBottom: 4, textTransform: 'uppercase' }}>Buyer-side commitment required</div>
+              {mode === 'edit'
+                ? <TA value={comp.resourcing?.buyerCommitment} onChange={v => setRes('buyerCommitment', v)} rows={3} />
+                : <InlineAnswer text={comp.resourcing?.buyerCommitment} placeholders={placeholders} onFillPH={fillPH} activePhId={activePhId} />}
+            </>)}
+          </ComponentCard>
+
+          <ComponentCard n={6} compKey="acceptanceGates" label="Acceptance & Quality Gates"
+            reqCtx={reqCtx.acceptanceGates} placeholders={placeholders} reviewed={!!reviewed.acceptanceGates} onMarkReviewed={markReviewed}>
+            {() => <InlineTable columns={GATES_COLS} rows={comp.acceptanceGates || []} onChange={setF('acceptanceGates')} />}
+          </ComponentCard>
+
+          <ComponentCard n={7} compKey="preWork" label="Pre-Work Required by Buyer"
+            reqCtx={reqCtx.preWork} placeholders={placeholders} reviewed={!!reviewed.preWork} onMarkReviewed={markReviewed}>
+            {() => <StringList items={comp.preWork || []} onChange={setF('preWork')} />}
+          </ComponentCard>
+
+          <ComponentCard n={8} compKey="assumptions" label="Assumptions, Limitations & Dependencies"
+            reqCtx={reqCtx.assumptions} placeholders={placeholders} reviewed={!!reviewed.assumptions} onMarkReviewed={markReviewed}>
+            {() => <StringList items={comp.assumptions || []} onChange={setF('assumptions')} />}
+          </ComponentCard>
+
+          <ComponentCard n={9} compKey="configCustomisationThirdParty" label="Configuration / Customisation / Third-Party"
+            reqCtx={reqCtx.configCustomisationThirdParty || briefFallback.configCustomisationThirdParty}
+            placeholders={placeholders} reviewed={!!reviewed.configCustomisationThirdParty} onMarkReviewed={markReviewed}>
+            {({ mode }) => mode === 'edit'
+              ? <TA value={comp.configCustomisationThirdParty} onChange={v => set('configCustomisationThirdParty', v)} rows={5} />
+              : <InlineAnswer text={comp.configCustomisationThirdParty} placeholders={placeholders} onFillPH={fillPH} activePhId={activePhId} />}
+          </ComponentCard>
+
+          <ComponentCard n={10} compKey="costs" label="Costs & Fit-Gaps"
+            reqCtx={reqCtx.costs || briefFallback.costs}
+            placeholders={placeholders} reviewed={!!reviewed.costs} onMarkReviewed={markReviewed}>
+            {({ mode }) => mode === 'edit'
+              ? <TA value={comp.costs} onChange={v => set('costs', v)} rows={4} yellow />
+              : <InlineAnswer text={comp.costs} placeholders={placeholders} onFillPH={fillPH} activePhId={activePhId} />}
+          </ComponentCard>
+
+          <ComponentCard n={11} compKey="risks" label="Risks & Mitigations"
+            reqCtx={reqCtx.risks} placeholders={placeholders} reviewed={!!reviewed.risks} onMarkReviewed={markReviewed}>
+            {() => <InlineTable columns={RISKS_COLS} rows={comp.risks || []} onChange={setF('risks')} />}
+          </ComponentCard>
+
+          {openDeps.length > 0 && (
+            <Block label="Open Dependencies / Clarification Questions">
+              <StringList items={openDeps} onChange={setOpenDeps} />
+            </Block>
+          )}
         </div>
 
         {/* Sidebar */}
         <div style={{ width: 286, flexShrink: 0, padding: '20px 16px 20px 0' }}>
           <div style={{ position: 'sticky', top: 20, display: 'flex', flexDirection: 'column', gap: 10, maxHeight: 'calc(100vh - 100px)', overflowY: 'auto' }}>
-            {/* Placeholders */}
+            {/* Gaps navigator */}
             <div style={{ background: WHITE, border: `1px solid ${BORDER}`, borderRadius: 8, overflow: 'hidden', flexShrink: 0 }}>
               <div style={{ padding: '8px 12px', borderBottom: `1px solid ${BORDER}`, background: '#FAFBFC' }}>
-                <div style={{ fontSize: 10, fontWeight: 700, color: NAVY, textTransform: 'uppercase', letterSpacing: '0.04em' }}>Placeholders</div>
+                <div style={{ fontSize: 10, fontWeight: 700, color: NAVY, textTransform: 'uppercase', letterSpacing: '0.04em' }}>Gaps to fill</div>
                 <div style={{ fontSize: 11, color: unfilledCount > 0 ? AMBER : GREEN, marginTop: 2, fontWeight: 600 }}>{unfilledCount > 0 ? `${unfilledCount} need input` : '✓ All filled'}</div>
               </div>
-              <div style={{ padding: '10px 12px', maxHeight: 300, overflowY: 'auto' }}>
-                {placeholders.length === 0 ? <div style={{ fontSize: 12, color: GREEN, fontStyle: 'italic' }}>None found</div>
-                  : placeholders.map(ph => {
-                    const filled = !!phValues[ph.key]?.trim()
-                    return (
-                      <div key={ph.key} style={{ marginBottom: 10 }}>
-                        <div style={{ fontSize: 10, fontWeight: 700, color: filled ? GREEN : AMBER, textTransform: 'uppercase', marginBottom: 1 }}>{filled ? '✓' : '○'} {ph.key}</div>
-                        <div style={{ fontSize: 9, color: MUTED, marginBottom: 3 }}>in {ph.context}</div>
-                        <div style={{ display: 'flex', gap: 4 }}>
-                          <input value={phValues[ph.key] || ''} onChange={e => setPhValues(p => ({ ...p, [ph.key]: e.target.value }))} placeholder="Enter value…" style={{ flex: 1, padding: '4px 7px', border: `1px solid ${BORDER}`, borderRadius: 4, fontSize: 11, minWidth: 0 }} />
-                          <button onClick={() => applyPh(ph.key, ph.placeholder, phValues[ph.key])} disabled={!phValues[ph.key]?.trim()}
-                            style={{ background: phValues[ph.key]?.trim() ? BLUE : '#CBD5E1', color: WHITE, border: 'none', borderRadius: 4, padding: '4px 7px', fontSize: 10, fontWeight: 700, cursor: phValues[ph.key]?.trim() ? 'pointer' : 'not-allowed' }}>Apply</button>
-                        </div>
+              <div style={{ padding: '10px 12px', maxHeight: 270, overflowY: 'auto' }}>
+                {placeholders.length === 0
+                  ? <div style={{ fontSize: 12, color: GREEN, fontStyle: 'italic' }}>No gaps — ready to review</div>
+                  : placeholders.map(ph => (
+                    <div key={ph.id} style={{ marginBottom: 8, display: 'flex', alignItems: 'flex-start', gap: 6 }}>
+                      <span style={{ fontSize: 13, color: ph.filled ? GREEN : AMBER, flexShrink: 0, lineHeight: 1.2, marginTop: 1 }}>{ph.filled ? '✓' : '○'}</span>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontSize: 11, color: ph.filled ? MUTED : '#92400E', fontWeight: ph.filled ? 400 : 600, lineHeight: 1.3 }}>{ph.description}</div>
+                        {ph.filled && <div style={{ fontSize: 10, color: MUTED, marginTop: 1, wordBreak: 'break-word' }}>{ph.value}</div>}
+                        {!ph.filled && (
+                          <button type="button" onClick={() => scrollToChip(ph.id)}
+                            style={{ marginTop: 3, fontSize: 10, color: BLUE, background: 'none', border: 'none', padding: 0, cursor: 'pointer', textDecoration: 'underline' }}>
+                            ↗ Jump to gap
+                          </button>
+                        )}
                       </div>
-                    )
-                  })}
+                    </div>
+                  ))}
+              </div>
+            </div>
+
+            {/* Review progress */}
+            <div style={{ background: WHITE, border: `1px solid ${BORDER}`, borderRadius: 8, padding: '10px 12px', flexShrink: 0 }}>
+              <div style={{ fontSize: 10, fontWeight: 700, color: NAVY, textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: 8 }}>Review progress</div>
+              {COMP_NAMES.map(k => (
+                <div key={k} style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+                  <span style={{ fontSize: 11, color: reviewed[k] ? GREEN : '#CBD5E1' }}>{reviewed[k] ? '✓' : '○'}</span>
+                  <span style={{ fontSize: 11, color: reviewed[k] ? NAVY : MUTED, fontWeight: reviewed[k] ? 600 : 400, flex: 1 }}>{COMP_LABELS[k]}</span>
+                </div>
+              ))}
+              <div style={{ marginTop: 8, paddingTop: 8, borderTop: `1px solid ${BORDER}`, fontSize: 11, color: allReviewed ? GREEN : MUTED, fontWeight: 600 }}>
+                {COMP_NAMES.filter(k => reviewed[k]).length} / {COMP_NAMES.length} reviewed
               </div>
             </div>
 
@@ -668,30 +924,32 @@ function DraftScreen({ section, sections, currentIdx, buyer, onBack, onNavigate,
                 <StatusBadge status={sectionStatus} />
               </div>
               <div style={{ fontSize: 11, color: MUTED, lineHeight: 1.5, marginBottom: 10 }}>
-                {sectionStatus === 'drafted'   && 'Fill placeholders and review all components. Mark ready when done.'}
-                {sectionStatus === 'in_review' && 'Under review. Approve once a human has checked all content and placeholders.'}
+                {sectionStatus === 'drafted'   && 'Fill gaps and mark each component reviewed. Then send for review.'}
+                {sectionStatus === 'in_review' && 'Under review. Approve once all components are reviewed and all gaps are filled.'}
                 {sectionStatus === 'approved'  && 'Approved and export-ready.'}
                 {sectionStatus === 'reopened'  && 'Reopened for further editing.'}
               </div>
               {advErr && <div style={{ marginBottom: 8, fontSize: 11, color: RED, background: '#FEE2E2', padding: '5px 8px', borderRadius: 6 }}>{advErr}</div>}
-              {unfilledCount > 0 && sectionStatus === 'in_review' && (
+              {status === 'in_review' && !canAdvanceToApprove && (
                 <div style={{ marginBottom: 8, fontSize: 11, color: AMBER, background: '#FEF9C3', padding: '5px 8px', borderRadius: 6 }}>
-                  ⚠ Fill {unfilledCount} placeholder{unfilledCount !== 1 ? 's' : ''} before approving.
+                  {unfilledCount > 0 && <div>⚠ {unfilledCount} gap{unfilledCount !== 1 ? 's' : ''} still to fill.</div>}
+                  {!allReviewed && <div>⚠ {COMP_NAMES.filter(k => !reviewed[k]).length} component{COMP_NAMES.filter(k => !reviewed[k]).length !== 1 ? 's' : ''} not reviewed.</div>}
                 </div>
               )}
               {sectionStatus !== 'approved' && (
-                <button onClick={advance} disabled={advancing}
-                  style={{ width: '100%', background: advancing ? '#CBD5E1' : (sectionStatus === 'in_review' ? GREEN : BLUE), color: WHITE, border: 'none', borderRadius: 6, padding: '9px 0', fontSize: 12, fontWeight: 700, cursor: advancing ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, marginBottom: 6 }}>
+                <button type="button" onClick={advance}
+                  disabled={advancing || (status === 'in_review' && !canAdvanceToApprove)}
+                  style={{ width: '100%', background: advancing || (status === 'in_review' && !canAdvanceToApprove) ? '#CBD5E1' : (sectionStatus === 'in_review' ? GREEN : BLUE), color: WHITE, border: 'none', borderRadius: 6, padding: '9px 0', fontSize: 12, fontWeight: 700, cursor: advancing || (status === 'in_review' && !canAdvanceToApprove) ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, marginBottom: 6 }}>
                   {advancing ? <><Spinner /> Updating…</> : sectionStatus === 'in_review' ? '✓ Approve Response' : 'Mark for Review'}
                 </button>
               )}
               {sectionStatus === 'approved' && (
                 <>
-                  <button onClick={doExport} disabled={exporting}
+                  <button type="button" onClick={doExport} disabled={exporting}
                     style={{ width: '100%', background: exporting ? '#CBD5E1' : NAVY, color: WHITE, border: 'none', borderRadius: 6, padding: '9px 0', fontSize: 12, fontWeight: 700, cursor: exporting ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, marginBottom: 6 }}>
                     {exporting ? <><Spinner /> Generating…</> : '⬇ Export to .docx'}
                   </button>
-                  <button onClick={reopen} disabled={reopening}
+                  <button type="button" onClick={reopen} disabled={reopening}
                     style={{ width: '100%', background: 'none', border: `1px solid ${AMBER}`, color: AMBER, borderRadius: 6, padding: '7px 0', fontSize: 11, fontWeight: 600, cursor: reopening ? 'not-allowed' : 'pointer' }}>
                     {reopening ? 'Reopening…' : '↩ Reopen for editing'}
                   </button>
@@ -745,12 +1003,10 @@ export default function RFPModule({ onBack }) {
     const storedId = sessionStorage.getItem(SESSION_KEY)
     if (!storedId) return
     setRecovering(true)
-    import('./api.js').then(({ rfpGetPack }) =>
-      rfpGetPack(storedId)
-        .then(p => { setPack(p); setSections(p.sections || []); setScreen('dashboard') })
-        .catch(() => sessionStorage.removeItem(SESSION_KEY))
-        .finally(() => setRecovering(false))
-    )
+    rfpGetPack(storedId)
+      .then(p => { setPack(p); setSections(p.sections || []); setScreen('dashboard') })
+      .catch(() => sessionStorage.removeItem(SESSION_KEY))
+      .finally(() => setRecovering(false))
   }, [])
 
   function handlePack(p) {

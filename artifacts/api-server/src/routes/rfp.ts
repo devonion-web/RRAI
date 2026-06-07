@@ -9,8 +9,9 @@ import { storeTextDoc, storeExcelDoc, getDocs, removeDoc, storeSize } from "../l
 import {
   createPack, getPack, setSections, getSection, updateSection,
   saveDraft, updateDraft, advanceDraftStatus, reopenDraft,
+  fillPlaceholder, markComponentReviewed,
   appendAuditEvent, getAuditEvents, getRevisions, saveRevision,
-  type DraftComponents,
+  type DraftComponents, type Placeholder,
 } from "../lib/bidPackStore";
 import { parseExcelForRequirements } from "../lib/xlsxParser";
 
@@ -329,14 +330,19 @@ router.post("/rfp/sections/:id/draft", async (req, res): Promise<void> => {
     .replace("{{KNOWLEDGE}}",      RR_KNOWLEDGE)
     .replace("{{HOUSE_VOICE}}",    HOUSE_VOICE);
 
+  type DraftResult = {
+    lens?: string;
+    complianceVerdict?: string;
+    components?: Partial<DraftComponents>;
+    placeholders?: Array<string | { id?: string; description?: string; group?: string }>;
+    requirementContext?: Record<string, string>;
+    openDependencies?: string[];
+  };
   try {
-    let result: {
-      lens?: string; complianceVerdict?: string;
-      components?: Partial<DraftComponents>; placeholders?: string[]; openDependencies?: string[];
-    } | null = null;
+    let result: DraftResult | null = null;
     for (const maxTokens of [16_000, 32_000]) {
       try {
-        result = await callClaudeJSON<typeof result>(system, userContent, { maxTokens });
+        result = await callClaudeJSON<DraftResult>(system, userContent, { maxTokens });
         break;
       } catch (err) {
         const msg = (err as Error).message;
@@ -366,12 +372,33 @@ router.post("/rfp/sections/:id/draft", async (req, res): Promise<void> => {
       risks:                        comp.risks                           ?? def.risks,
     };
 
+    const rawPHs = Array.isArray(result?.placeholders) ? result.placeholders : [];
+    const placeholders: Placeholder[] = rawPHs.map((p: unknown, idx: number) => {
+      if (typeof p === "string") {
+        return { id: `ph_${String(idx + 1).padStart(3, "0")}`, description: p, group: null, value: null, filled: false };
+      }
+      const ph = p as { id?: string; description?: string; group?: string };
+      return {
+        id: ph.id || `ph_${String(idx + 1).padStart(3, "0")}`,
+        description: ph.description || "",
+        group: ph.group || null,
+        value: null,
+        filled: false,
+      };
+    });
+    const rawReqCtx = result?.requirementContext;
+    const requirementContext: Record<string, string> =
+      rawReqCtx && typeof rawReqCtx === "object" && !Array.isArray(rawReqCtx)
+        ? (rawReqCtx as Record<string, string>)
+        : {};
+
     const draft = saveDraft(section.id, {
-      lens:             result?.lens ?? "Commercial",
-      complianceVerdict: result?.complianceVerdict ?? "Partially Complies",
+      lens:               result?.lens ?? "Commercial",
+      complianceVerdict:  result?.complianceVerdict ?? "Partially Complies",
       components,
-      placeholders:     Array.isArray(result?.placeholders)      ? result.placeholders      : [],
-      openDependencies: Array.isArray(result?.openDependencies)  ? result.openDependencies  : [],
+      requirementContext,
+      placeholders,
+      openDependencies:   Array.isArray(result?.openDependencies) ? result.openDependencies : [],
     });
     appendAuditEvent(pack.id, section.id, "draft_generated", `Draft generated for ${section.code}: ${section.title}`, "RRAI");
     req.log.info({ sectionId: section.id }, "rfp: draft generated");
@@ -387,11 +414,48 @@ router.post("/rfp/sections/:id/draft", async (req, res): Promise<void> => {
 router.patch("/rfp/sections/:id/draft", (req, res): void => {
   const section = getSection(req.params.id);
   if (!section?.draft) { res.status(404).json({ error: "Draft not found" }); return; }
-  const updates = req.body as Partial<{ components: DraftComponents; placeholders: string[]; openDependencies: string[]; complianceVerdict: string }>;
+  const updates = req.body as Partial<{
+    components: DraftComponents;
+    placeholders: Placeholder[];
+    openDependencies: string[];
+    complianceVerdict: string;
+    reviewed: Record<string, boolean>;
+  }>;
   const draft = updateDraft(req.params.id, updates);
   if (!draft) { res.status(404).json({ error: "Draft not found" }); return; }
   appendAuditEvent(section.packId, section.id, "draft_edited", `${section.code} components saved`, "user");
   res.json({ draft });
+});
+
+// ── Fill placeholder ──────────────────────────────────────────────────────────
+
+router.post("/rfp/sections/:id/placeholders/:phId/fill", (req, res): void => {
+  const section = getSection(req.params.id);
+  if (!section?.draft) { res.status(404).json({ error: "Draft not found" }); return; }
+  const { value } = req.body as { value?: string };
+  if (!value?.trim()) { res.status(400).json({ error: "value is required" }); return; }
+  const ph = fillPlaceholder(req.params.id, req.params.phId, value.trim());
+  if (!ph) { res.status(404).json({ error: "Placeholder not found" }); return; }
+  appendAuditEvent(section.packId, section.id, "placeholder_filled",
+    `Gap filled: "${ph.description}" → "${ph.value?.slice(0, 40)}"`, "user",
+    { phId: ph.id, description: ph.description });
+  res.json({ placeholder: ph });
+});
+
+// ── Mark component reviewed ───────────────────────────────────────────────────
+
+router.patch("/rfp/sections/:id/components/:compName/reviewed", (req, res): void => {
+  const section = getSection(req.params.id);
+  if (!section?.draft) { res.status(404).json({ error: "Draft not found" }); return; }
+  const { reviewed } = req.body as { reviewed?: boolean };
+  const ok = markComponentReviewed(req.params.id, req.params.compName, !!reviewed);
+  if (!ok) { res.status(404).json({ error: "Section or draft not found" }); return; }
+  if (reviewed) {
+    appendAuditEvent(section.packId, section.id, "component_reviewed",
+      `${req.params.compName} reviewed in ${section.code}`, "user",
+      { component: req.params.compName });
+  }
+  res.json({ reviewed: !!reviewed });
 });
 
 // ── Advance status ────────────────────────────────────────────────────────────

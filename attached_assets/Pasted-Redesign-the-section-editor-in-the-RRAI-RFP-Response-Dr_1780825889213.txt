@@ -1,0 +1,55 @@
+Redesign the section editor in the RRAI RFP Response Drafter so each component clearly
+separates three things: the requirement (the question), the drafted answer (editable),
+and the gaps to fill (inline). Right now these are mixed, and placeholders are exiled to
+the sidebar away from where they belong.
+
+1. DATA / SCHEMA
+   - Add `requirementContext: string` to each component in the draft schema. Have the
+     drafting prompt populate it with what the RFP/brief asks for that component (from the
+     brief's requirements / mandatedResponseStructure / minimumResponseItems).
+   - Represent placeholders as an array on the section draft:
+     { id, description, group, value (nullable), filled (bool) }.
+     In each answer string, store a token "{{PH:id}}" where the value belongs — keep the
+     token even after filling, so the gap stays auditable. Exported text replaces each
+     token with its value. (Have the drafting step emit this array + tokens going forward;
+     existing drafts can be regenerated.)
+   - Add `reviewed: boolean` per component.
+
+2. COMPONENT CARD LAYOUT (all 12 components, stacked top to bottom)
+   a. "What M&S asks for" — render requirementContext as a MUTED, READ-ONLY block (grey,
+      small label). This is the question. If a draft has no requirementContext yet, fall
+      back to showing the section's brief requirements at the top of the editor.
+   b. "Drafted answer" — the editable working content (see modes below).
+   c. Card footer — a "Mark reviewed" tick and a small status (drafted · N to fill · reviewed).
+
+3. INLINE PLACEHOLDERS (the key change)
+   - REVIEW MODE (default): render the answer as text with each {{PH:id}} shown inline at
+     its exact position. Unfilled = an AMBER chip labelled with the placeholder
+     description; click it for a small inline input, type, save → the value shows inline,
+     subtly marked as a filled gap. Filling sets value/filled on that placeholder.
+   - EDIT MODE (per-card toggle): a plain textarea showing the raw answer text (tokens
+     visible) so the user can amend/correct the prose. Save returns to review mode.
+   - Do NOT build a full contenteditable widget — the read-mode-chips + edit-mode-textarea
+     split keeps it simple and reliable.
+
+4. SIDEBAR BECOMES A NAVIGATOR (keep it, repurpose it)
+   - Keep the "N need input" list, plus Status and History.
+   - Clicking a placeholder in the list scrolls to and focuses its inline chip in the
+     answer (link by placeholder id). The list is now "jump to each gap," not where you
+     fill them.
+
+5. COMPLETION + AUDIT
+   - A component can be marked reviewed only when it has no unfilled placeholders.
+   - The section can be marked ready/approved only when ALL components are reviewed and
+     zero placeholders remain.
+   - Write an AuditEvent on placeholder_filled and on component-reviewed (alongside the
+     existing status_changed), so History reflects real progress.
+
+6. VISUAL LANGUAGE (three clear treatments)
+   - Requirement = muted/grey, read-only.
+   - Drafted answer = normal editable text on white.
+   - Placeholder = amber chip (unfilled) / subtly-marked value (filled).
+   - Reviewed = green check on the card.
+
+Keep the existing top bar (Dashboard, prev/next, verdict, weight, status), the Commercial-
+lens banner, and the right-rail Status/History.

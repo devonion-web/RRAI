@@ -8,8 +8,8 @@ export type SectionStatus =
 
 export type AuditEventType =
   | "pack_uploaded"   | "section_detected" | "brief_extracted"
-  | "draft_generated" | "draft_edited"     | "placeholder_filled"
-  | "status_changed"  | "approved"         | "exported"          | "reopened";
+  | "draft_generated" | "draft_edited"     | "placeholder_filled" | "component_reviewed"
+  | "status_changed"  | "approved"         | "exported"           | "reopened";
 
 export interface AuditEvent {
   id: string;
@@ -28,6 +28,16 @@ export interface SectionRevision {
   components: DraftComponents;
   complianceVerdict: string;
   createdAt: number;
+}
+
+// ── Placeholder type ──────────────────────────────────────────────────────────
+
+export interface Placeholder {
+  id: string;           // e.g. "ph_001" — matches {{PH:ph_001}} tokens in content
+  description: string;  // human label, e.g. "day rate for senior consultant"
+  group: string | null; // component name this placeholder primarily belongs to
+  value: string | null; // filled value, null until filled
+  filled: boolean;
 }
 
 // ── Extraction types ──────────────────────────────────────────────────────────
@@ -63,7 +73,9 @@ export interface SectionDraft {
   lens: string;
   complianceVerdict: string;
   components: DraftComponents;
-  placeholders: string[];
+  requirementContext: Record<string, string>;  // component name → what the buyer asks for
+  reviewed: Record<string, boolean>;           // component name → reviewed by human
+  placeholders: Placeholder[];
   openDependencies: string[];
   status: "draft" | "in_review" | "approved";
   createdAt: number;
@@ -114,14 +126,22 @@ export interface BidSection {
 // ── Placeholder scanner ───────────────────────────────────────────────────────
 
 function scanTokens(v: unknown): number {
-  if (typeof v === "string") return [...(v as string).matchAll(/\{\{PLACEHOLDER:/g)].length;
+  if (typeof v === "string") {
+    const s = v as string;
+    return [...s.matchAll(/\{\{PLACEHOLDER:/g)].length + [...s.matchAll(/\{\{PH:/g)].length;
+  }
   if (Array.isArray(v)) return (v as unknown[]).reduce<number>((n, x) => n + scanTokens(x), 0);
   if (v && typeof v === "object") return Object.values(v as Record<string, unknown>).reduce<number>((n, x) => n + scanTokens(x), 0);
   return 0;
 }
 
-export function countUnfilledPlaceholders(components: DraftComponents): number {
-  return scanTokens(components);
+export function countUnfilledPlaceholders(draft: SectionDraft): number {
+  // New format: use structured placeholder array
+  if (draft.placeholders.length > 0) {
+    return draft.placeholders.filter((p) => !p.filled).length;
+  }
+  // Fallback: scan component text for old-style tokens
+  return scanTokens(draft.components);
 }
 
 // ── Store ─────────────────────────────────────────────────────────────────────
@@ -254,7 +274,14 @@ export function updateSection(sectionId: string, updates: Partial<BidSection>): 
 
 export function saveDraft(
   sectionId: string,
-  data: { lens?: string; complianceVerdict: string; components: DraftComponents; placeholders: string[]; openDependencies: string[] },
+  data: {
+    lens?: string;
+    complianceVerdict: string;
+    components: DraftComponents;
+    requirementContext?: Record<string, string>;
+    placeholders: Placeholder[];
+    openDependencies: string[];
+  },
 ): SectionDraft | null {
   const section = getSection(sectionId);
   if (!section) return null;
@@ -263,6 +290,8 @@ export function saveDraft(
     lens:                data.lens ?? "Commercial",
     complianceVerdict:   data.complianceVerdict,
     components:          data.components,
+    requirementContext:  data.requirementContext ?? {},
+    reviewed:            {},
     placeholders:        data.placeholders,
     openDependencies:    data.openDependencies,
     status:              "draft",
@@ -273,6 +302,25 @@ export function saveDraft(
   section.status = "drafted";
   saveRevision(section);
   return draft;
+}
+
+export function fillPlaceholder(sectionId: string, phId: string, value: string): Placeholder | null {
+  const section = getSection(sectionId);
+  if (!section?.draft) return null;
+  const ph = section.draft.placeholders.find((p) => p.id === phId);
+  if (!ph) return null;
+  ph.value = value;
+  ph.filled = true;
+  section.draft.updatedAt = Date.now();
+  return ph;
+}
+
+export function markComponentReviewed(sectionId: string, compName: string, reviewed: boolean): boolean {
+  const section = getSection(sectionId);
+  if (!section?.draft) return false;
+  section.draft.reviewed[compName] = reviewed;
+  section.draft.updatedAt = Date.now();
+  return true;
 }
 
 export function updateDraft(
@@ -308,7 +356,7 @@ export function advanceDraftStatus(sectionId: string): AdvanceResult {
 
   // Gate: cannot approve with unfilled placeholders
   if (next === "approved") {
-    const unfilled = countUnfilledPlaceholders(section.draft.components);
+    const unfilled = countUnfilledPlaceholders(section.draft);
     if (unfilled > 0) {
       return { ok: false, error: `Cannot approve: ${unfilled} placeholder${unfilled !== 1 ? "s" : ""} still unfilled` };
     }

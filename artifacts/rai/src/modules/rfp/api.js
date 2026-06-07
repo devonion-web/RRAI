@@ -112,3 +112,11 @@ export async function rfpGetSectionAudit(sectionId) {
 export async function rfpGetRevisions(sectionId) {
   return req('GET', `/sections/${sectionId}/revisions`)
 }
+
+export async function rfpFillPlaceholder(sectionId, phId, value) {
+  return req('POST', `/sections/${sectionId}/placeholders/${encodeURIComponent(phId)}/fill`, { value })
+}
+
+export async function rfpMarkComponentReviewed(sectionId, compName, reviewed) {
+  return req('PATCH', `/sections/${sectionId}/components/${encodeURIComponent(compName)}/reviewed`, { reviewed })
+}

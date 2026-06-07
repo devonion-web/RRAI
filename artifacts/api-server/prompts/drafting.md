@@ -2,11 +2,11 @@
 **Commercial lens · step 4 of the RFP Response Drafter pipeline**
 
 Purpose: turn the extracted brief plus retrieved knowledge into a structured draft
-response for one scored section, as JSON, with placeholders for anything only a human
-can supply.
+response for one scored section, as JSON, with placeholder chips for anything only a
+human can supply.
 
 **Interpolation variables** (replace only these before sending; the literal
-`{{PLACEHOLDER: ...}}` token in the instructions is sample model output, not a variable):
+`{{PH:ph_001}}` tokens in the instructions are sample model output, not variables):
 - `{{BUYER_NAME}}` — e.g. `M&S`
 - `{{BIDDER_CONTEXT}}` — who is bidding and the partner roles, e.g.
   `LogicGate (platform, prime); Risk Rising (implementation / services partner)`
@@ -38,9 +38,11 @@ Method — follow in order:
 
 Non-negotiable guardrails:
 - NEVER invent figures, day rates, costs, dates or named people. For anything not present in
-  the brief or knowledge, insert a typed placeholder written exactly like
-  `{{PLACEHOLDER: short description}}` and add the same description to the `placeholders`
-  array.
+  the brief or knowledge, insert a typed placeholder token exactly like `{{PH:ph_001}}` in
+  the text, and add a corresponding entry to the `placeholders` array.
+- Placeholder IDs must be sequential strings: `ph_001`, `ph_002`, etc. Each ID must be unique.
+- The `group` field on each placeholder must be the exact component key where the token first
+  appears (e.g. `"resourcing"`, `"costs"`, `"deliveryPlan"`).
 - State assumptions and dependencies explicitly. Do not overstate delivery confidence.
 - This is Commercial-lens output. Set `lens` to `Commercial`. It must never be presented as,
   or reused as, independent Analyst content.
@@ -66,8 +68,21 @@ Draft the section response using exactly this schema:
   "lens": "Commercial",
   "section": { "code": "string", "title": "string" },
   "complianceVerdict": "Complies | Partially Complies | Does Not Comply",
+  "requirementContext": {
+    "understanding": "one sentence — what the buyer wants demonstrated in this component",
+    "approachAndRecommendedOption": "one sentence",
+    "deliveryPlan": "one sentence",
+    "domainComponent": "one sentence",
+    "resourcing": "one sentence",
+    "acceptanceGates": "one sentence",
+    "preWork": "one sentence",
+    "assumptions": "one sentence",
+    "configCustomisationThirdParty": "one sentence",
+    "costs": "one sentence",
+    "risks": "one sentence"
+  },
   "components": {
-    "understanding": "string",
+    "understanding": "string — use {{PH:ph_001}} tokens for any missing facts",
     "approachAndRecommendedOption": "string",
     "deliveryPlan": {
       "narrative": "string",
@@ -85,12 +100,17 @@ Draft the section response using exactly this schema:
     "costs": "string",
     "risks": [ { "risk": "string", "likelihoodImpact": "string", "mitigation": "string", "owner": "string" } ]
   },
-  "placeholders": ["string"],
+  "placeholders": [
+    { "id": "ph_001", "description": "short human label, e.g. day rate for senior consultant", "group": "resourcing" }
+  ],
   "openDependencies": ["string"]
 }
 ```
 
 Guidance per component:
+- `requirementContext`: for each component key, write one concise sentence describing exactly
+  what this buyer's section requires — derived from the brief. This is shown to the human
+  reviewer as context. Do not repeat the component name.
 - `understanding`: one short paragraph on the buyer's driver and constraint.
 - `approachAndRecommendedOption`: present options where invited; lead with the recommended
   one and the rationale.
@@ -105,9 +125,10 @@ Guidance per component:
   readiness.
 - `configCustomisationThirdParty`: confirm what is configuration vs customisation, and name
   third-party dependencies.
-- `costs`: reference the pricing submission; use placeholders for all figures.
+- `costs`: reference the pricing submission; use `{{PH:ph_NNN}}` tokens for all figures.
 - `risks`: a register; give each risk a named owner and a mitigation.
-- `placeholders`: every description used in a `{{PLACEHOLDER: ...}}` token in the draft.
+- `placeholders`: one entry per unique token — sequential IDs, the human-readable description,
+  and the component key where the token first appears.
 - `openDependencies`: carry over the brief's `gaps` that block a confident response.
 
 Return JSON only.
