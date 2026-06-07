@@ -1,11 +1,12 @@
 const BASE = '/api/rfp'
 
-async function post(path, body) {
-  const res = await fetch(`${BASE}${path}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  })
+async function req(method, path, body) {
+  const opts = { method, headers: {} }
+  if (body !== undefined) {
+    opts.headers['Content-Type'] = 'application/json'
+    opts.body = JSON.stringify(body)
+  }
+  const res = await fetch(`${BASE}${path}`, opts)
   if (!res.ok) {
     let msg = `Request failed: ${res.status}`
     try { const j = await res.json(); msg = j.error || j.message || msg } catch {}
@@ -14,15 +15,33 @@ async function post(path, body) {
   return res.json()
 }
 
+// Upload files (multipart) — returns { files: [{id, name, fileType, charCount?, rowCount?, error?}] }
+export async function rfpUploadFiles(formData) {
+  const res = await fetch(`${BASE}/upload-files`, { method: 'POST', body: formData })
+  if (!res.ok) {
+    let msg = `Upload failed: ${res.status}`
+    try { const j = await res.json(); msg = j.error || msg } catch {}
+    throw new Error(msg)
+  }
+  return res.json()
+}
+
+// Store pasted text — returns { id, name, charCount, fileType }
 export async function rfpStoreText({ name, text }) {
-  return post('/store-text', { name, text })
+  return req('POST', '/store-text', { name, text })
 }
 
-export async function rfpExtractRequirements({ documentIds, vendorContext, company }) {
-  return post('/extract-requirements', { documentIds, vendorContext, company })
+// Remove a stored document
+export async function rfpRemoveDocument(id) {
+  await fetch(`${BASE}/documents/${id}`, { method: 'DELETE' })
 }
 
-// Poll job status — returns { jobId, status, progress, rfpUnderstanding, documentClassifications, assessment, requirements, mappingRows, mappingSummary, error }
+// Fire the workbench analysis job — returns { jobId }
+export async function rfpAnalyse({ documentIds, vendorContext, company }) {
+  return req('POST', '/analyse', { documentIds, vendorContext, company })
+}
+
+// Poll job — returns { jobId, status, progress, intelligenceSummary, responseSections, documentClassifications, error }
 export async function rfpGetJob(jobId) {
   const res = await fetch(`${BASE}/jobs/${jobId}`)
   if (!res.ok) {
@@ -33,31 +52,12 @@ export async function rfpGetJob(jobId) {
   return res.json()
 }
 
-// Fire a mapping pack job — returns { jobId } immediately
-export async function rfpGenerateMappingPack({ requirements, vendorContext, company, rfpUnderstanding }) {
-  return post('/generate-mapping-pack', { requirements, vendorContext, company, rfpUnderstanding })
+// Generate a brief for a response section — sync, returns { brief }
+export async function rfpSectionBrief({ section, intelligenceSummary, company, vendorContext }) {
+  return req('POST', '/section-brief', { section, intelligenceSummary, company, vendorContext })
 }
 
-// Regenerate a single row — synchronous, returns { row }
-export async function rfpRegenerateMappingRow({ requirement, vendorContext, company, rfpUnderstanding }) {
-  return post('/regenerate-mapping-row', { requirement, vendorContext, company, rfpUnderstanding })
-}
-
-// Remove a stored document from the server
-export async function rfpRemoveDocument(id) {
-  await fetch(`${BASE}/documents/${id}`, { method: 'DELETE' })
-}
-
-// Legacy routes (kept for backward compat)
-export async function rfpClassify({ requirements, vendorContext, company }) {
-  return post('/classify', { requirements, vendorContext, company })
-}
-export async function rfpGenerateResponses({ requirements, vendorContext, company }) {
-  return post('/generate-responses', { requirements, vendorContext, company })
-}
-export async function rfpGenerateVendorPack({ requirements, vendorContext, company }) {
-  return post('/generate-vendor-pack', { requirements, vendorContext, company })
-}
-export async function rfpGenerateGapAnalysis({ requirements, vendorContext, company }) {
-  return post('/generate-gap-analysis', { requirements, vendorContext, company })
+// Draft a response section — sync, returns { draft, assumptions, vendor_inputs_needed }
+export async function rfpDraftSection({ section, brief, company, vendorContext }) {
+  return req('POST', '/draft-section', { section, brief, company, vendorContext })
 }

@@ -12,16 +12,9 @@ export interface ExtractionJob {
   id: string;
   status: JobStatus;
   progress: JobProgress;
-  // Assessment-phase outputs
-  rfpUnderstanding: Record<string, unknown> | null;
+  intelligenceSummary: Record<string, unknown> | null;
+  responseSections: Record<string, unknown>[];
   documentClassifications: Record<string, string>[];
-  assessment: Record<string, unknown> | null;  // high-level opportunity assessment sections
-  requirements: Record<string, unknown>[];     // enriched worklist items
-  // Mapping-pack outputs
-  mappingRows: Record<string, unknown>[];
-  mappingSummary: Record<string, unknown> | null;
-  // Legacy (kept for backward compat)
-  health: Record<string, unknown> | null;
   error: string | null;
   createdAt: number;
 }
@@ -41,13 +34,9 @@ export function createJob(): ExtractionJob {
     id: randomUUID(),
     status: "pending",
     progress: { done: 0, total: 1, stage: "Starting…" },
-    rfpUnderstanding: null,
+    intelligenceSummary: null,
+    responseSections: [],
     documentClassifications: [],
-    assessment: null,
-    requirements: [],
-    mappingRows: [],
-    mappingSummary: null,
-    health: null,
     error: null,
     createdAt: Date.now(),
   };
@@ -67,14 +56,4 @@ export function updateJob(id: string, updates: Partial<ExtractionJob>): void {
 export function updateProgress(id: string, done: number, total: number, stage: string): void {
   const job = JOBS.get(id);
   if (job) job.progress = { done, total, stage };
-}
-
-export function appendRequirements(id: string, reqs: Record<string, unknown>[]): void {
-  const job = JOBS.get(id);
-  if (job) job.requirements.push(...reqs);
-}
-
-export function appendMappingRows(id: string, rows: Record<string, unknown>[]): void {
-  const job = JOBS.get(id);
-  if (job) job.mappingRows.push(...rows);
 }

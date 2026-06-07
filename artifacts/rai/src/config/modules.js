@@ -1,12 +1,12 @@
 export const MODULES = [
   {
-    id: 'oi',
-    title: 'Opportunity Intelligence',
+    id: 'rfp',
+    title: 'RFP / RFI Workbench',
     description:
-      'Build and maintain a living intelligence model for every opportunity. Enrich from RFPs, discovery packs, workshop notes, BRDs and security questionnaires.',
+      'Understand, assess and respond to RFPs. Generate an intelligence summary, identify response sections, draft each response, and export to a branded Word document.',
     status: 'active',
-    icon: '🧠',
-    category: 'Intelligence',
+    icon: '📋',
+    category: 'Sales',
   },
   {
     id: 'logicgate',
@@ -15,15 +15,6 @@ export const MODULES = [
       'Pre-discovery prep, post-discovery analysis, deal scoring, proposal generation and SoW creation for LogicGate opportunities.',
     status: 'active',
     icon: '⬡',
-    category: 'Sales',
-  },
-  {
-    id: 'rfp',
-    title: 'RFP / RFI Response Manager',
-    description:
-      'Extract requirements, classify ownership, draft RR responses, generate vendor input packs and export structured response documents.',
-    status: 'active',
-    icon: '📋',
     category: 'Sales',
   },
   {
