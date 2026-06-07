@@ -224,7 +224,23 @@ router.post("/rfp/sections/:id/extract-brief", async (req, res): Promise<void> =
     .replace("{{PARSED_PACK}}",        pack.parsedContent.slice(0, 60_000));
 
   try {
-    const brief = await callClaudeJSON<Record<string, unknown>>(system, userContent, { maxTokens: 4000 });
+    let brief: Record<string, unknown> | null = null;
+    for (const maxTokens of [16_000, 32_000]) {
+      try {
+        brief = await callClaudeJSON<Record<string, unknown>>(system, userContent, { maxTokens });
+        break;
+      } catch (err) {
+        const msg = (err as Error).message;
+        if (msg.includes("truncated") && maxTokens === 16_000) {
+          req.log.warn({ sectionId: section.id, code: section.code },
+            "rfp: extract-brief truncated at 16k — retrying at 32k");
+          continue;
+        }
+        req.log.error({ err, sectionId: section.id }, "rfp: extract-brief JSON parse failed");
+        throw err;
+      }
+    }
+    if (!brief) throw new Error("extract-brief: no output after retry");
     const arr   = <T>(v: unknown): T[] => Array.isArray(v) ? v as T[] : [];
 
     const updated = updateSection(section.id, {

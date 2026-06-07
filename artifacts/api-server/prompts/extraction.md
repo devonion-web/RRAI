@@ -27,6 +27,9 @@ Rules:
   terms, dates) in `discrepancies`.
 - Capture requirement text faithfully; do not loosely paraphrase or summarise away detail.
 - Output VALID JSON ONLY. No prose, no explanation, no markdown code fences.
+- Be compact: paraphrase in one short clause per array item; never reproduce verbatim
+  multi-sentence passages. Aim for the entire JSON response to stay under 4,000 tokens.
+- If a field has more than 10 items, include only the 10 most material ones.
 
 ## USER
 
@@ -69,4 +72,4 @@ Field notes:
 PACK:
 {{PARSED_PACK}}
 
-Return JSON only.
+Return compact JSON only — no fences, no preamble, no trailing commentary.
