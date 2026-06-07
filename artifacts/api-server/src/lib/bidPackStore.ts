@@ -7,9 +7,13 @@ export type SectionStatus =
   | "in_review"   | "approved"  | "reopened";
 
 export type AuditEventType =
-  | "pack_uploaded"   | "section_detected" | "brief_extracted"
-  | "draft_generated" | "draft_edited"     | "placeholder_filled" | "component_reviewed"
-  | "status_changed"  | "approved"         | "exported"           | "reopened";
+  | "pack_uploaded"       | "section_detected"   | "brief_extracted"
+  | "draft_generated"     | "draft_edited"       | "placeholder_filled"    | "component_reviewed"
+  | "status_changed"      | "approved"           | "exported"              | "reopened"
+  | "profile_saved"       | "decomposed"
+  | "ownership_confirmed" | "ownership_overridden"
+  | "response_generated"  | "block_edited"       | "block_reviewed"
+  | "response_advanced"   | "response_approved";
 
 export interface AuditEvent {
   id: string;
@@ -144,13 +148,83 @@ export function countUnfilledPlaceholders(draft: SectionDraft): number {
   return scanTokens(draft.components);
 }
 
+// ── New: engagement-profile types ─────────────────────────────────────────────
+
+export interface EngagementProfile {
+  id: string;
+  bidPackId: string;
+  ourRole: string;
+  primePartner: string;
+  ourRemit: string[];
+  otherParties: string[];
+  createdAt: number;
+  updatedAt: number;
+}
+
+// ── New: requirement types ─────────────────────────────────────────────────────
+
+export type RequirementOwner = "RR" | "LogicGate" | "shared" | "M&S";
+
+export interface CrossCuttingConstraint {
+  type: "timeline" | "module" | "integration" | "commercial" | "other";
+  text: string;
+}
+
+export interface Requirement {
+  id: string;
+  bidPackId: string;
+  code: string;
+  order: number;
+  title: string;
+  sourceText: string;
+  scoringWeight: string | null;
+  minimumExpectations: string[];
+  considerations: string[];
+  mandatedStructure: string | null;
+  owner: RequirementOwner;
+  ownerRationale: string;
+  ownerConfirmed: boolean;
+  parentId: string | null;
+  crossCuttingConstraints: CrossCuttingConstraint[];
+}
+
+// ── New: requirement response types ───────────────────────────────────────────
+
+export type ResponseStatus = "draft" | "in_review" | "approved";
+
+export interface ResponseBlock {
+  key: string;
+  type: "minimum" | "enrichment";
+  prompt: string;
+  answer: string;
+  placeholders: Placeholder[];
+  reviewed: boolean;
+}
+
+export interface RequirementResponse {
+  id: string;
+  requirementId: string;
+  lens: string;
+  blocks: ResponseBlock[];
+  openDependencies: string[];
+  status: ResponseStatus;
+  createdAt: number;
+  updatedAt: number;
+}
+
 // ── Store ─────────────────────────────────────────────────────────────────────
 
-const PACKS          = new Map<string, BidPack>();
+const PACKS           = new Map<string, BidPack>();
 const SECTION_TO_PACK = new Map<string, string>();
-const AUDIT_LOG      = new Map<string, AuditEvent[]>(); // packId → events
-const REVISIONS      = new Map<string, SectionRevision[]>(); // sectionId → revisions
-const TTL_MS         = 6 * 60 * 60 * 1000;
+const AUDIT_LOG       = new Map<string, AuditEvent[]>();
+const REVISIONS       = new Map<string, SectionRevision[]>();
+
+const PROFILES        = new Map<string, EngagementProfile>();   // packId → profile
+const REQUIREMENTS    = new Map<string, Requirement[]>();        // packId → requirements
+const REQ_TO_PACK     = new Map<string, string>();               // reqId → packId
+const RESPONSES       = new Map<string, RequirementResponse>();  // reqId → response
+
+const TTL_MS = 6 * 60 * 60 * 1000;
 
 setInterval(() => {
   const now = Date.now();
@@ -160,8 +234,15 @@ setInterval(() => {
         SECTION_TO_PACK.delete(s.id);
         REVISIONS.delete(s.id);
       }
+      const reqs = REQUIREMENTS.get(id) ?? [];
+      for (const r of reqs) {
+        REQ_TO_PACK.delete(r.id);
+        RESPONSES.delete(r.id);
+      }
       PACKS.delete(id);
       AUDIT_LOG.delete(id);
+      PROFILES.delete(id);
+      REQUIREMENTS.delete(id);
     }
   }
 }, 30 * 60 * 1000);
@@ -379,4 +460,170 @@ export function reopenDraft(sectionId: string): { draft: SectionDraft; sectionSt
   section.draft.updatedAt = Date.now();
   section.status          = "reopened";
   return { draft: section.draft, sectionStatus: section.status };
+}
+
+// ── Engagement profile CRUD ───────────────────────────────────────────────────
+
+export function saveProfile(
+  packId: string,
+  data: Pick<EngagementProfile, "ourRole" | "primePartner" | "ourRemit" | "otherParties">,
+): EngagementProfile | null {
+  if (!getPack(packId)) return null;
+  const existing = PROFILES.get(packId);
+  const profile: EngagementProfile = {
+    id:          existing?.id ?? randomUUID(),
+    bidPackId:   packId,
+    ourRole:     data.ourRole,
+    primePartner: data.primePartner,
+    ourRemit:    data.ourRemit,
+    otherParties: data.otherParties,
+    createdAt:   existing?.createdAt ?? Date.now(),
+    updatedAt:   Date.now(),
+  };
+  PROFILES.set(packId, profile);
+  return profile;
+}
+
+export function getProfile(packId: string): EngagementProfile | null {
+  return PROFILES.get(packId) ?? null;
+}
+
+// ── Requirements CRUD ─────────────────────────────────────────────────────────
+
+export function saveRequirements(
+  packId: string,
+  reqs: Array<Omit<Requirement, "id" | "bidPackId">>,
+): Requirement[] {
+  if (!getPack(packId)) return [];
+  const old = REQUIREMENTS.get(packId) ?? [];
+  for (const r of old) { REQ_TO_PACK.delete(r.id); RESPONSES.delete(r.id); }
+
+  const requirements: Requirement[] = reqs.map((r) => {
+    const id = randomUUID();
+    REQ_TO_PACK.set(id, packId);
+    return { id, bidPackId: packId, ...r };
+  });
+  REQUIREMENTS.set(packId, requirements);
+  return requirements;
+}
+
+export function getRequirements(packId: string): Requirement[] {
+  return REQUIREMENTS.get(packId) ?? [];
+}
+
+export function getRequirement(reqId: string): Requirement | null {
+  const packId = REQ_TO_PACK.get(reqId);
+  if (!packId) return null;
+  return REQUIREMENTS.get(packId)?.find((r) => r.id === reqId) ?? null;
+}
+
+export function updateRequirementOwnership(
+  reqId: string,
+  owner: RequirementOwner,
+  ownerRationale: string,
+  ownerConfirmed: boolean,
+): Requirement | null {
+  const req = getRequirement(reqId);
+  if (!req) return null;
+  req.owner          = owner;
+  req.ownerRationale = ownerRationale;
+  req.ownerConfirmed = ownerConfirmed;
+  return req;
+}
+
+// ── Requirement response CRUD ─────────────────────────────────────────────────
+
+export function saveResponse(
+  reqId: string,
+  data: { lens?: string; blocks: ResponseBlock[]; openDependencies: string[] },
+): RequirementResponse | null {
+  if (!getRequirement(reqId)) return null;
+  const existing = RESPONSES.get(reqId);
+  const response: RequirementResponse = {
+    id:               existing?.id ?? randomUUID(),
+    requirementId:    reqId,
+    lens:             data.lens ?? "Commercial",
+    blocks:           data.blocks,
+    openDependencies: data.openDependencies,
+    status:           existing?.status ?? "draft",
+    createdAt:        existing?.createdAt ?? Date.now(),
+    updatedAt:        Date.now(),
+  };
+  RESPONSES.set(reqId, response);
+  return response;
+}
+
+export function getResponse(reqId: string): RequirementResponse | null {
+  return RESPONSES.get(reqId) ?? null;
+}
+
+export function updateBlockAnswer(reqId: string, blockKey: string, answer: string): ResponseBlock | null {
+  const resp = RESPONSES.get(reqId);
+  if (!resp) return null;
+  const block = resp.blocks.find((b) => b.key === blockKey);
+  if (!block) return null;
+  block.answer   = answer;
+  resp.updatedAt = Date.now();
+  return block;
+}
+
+export function fillBlockPlaceholder(reqId: string, blockKey: string, phId: string, value: string): Placeholder | null {
+  const resp = RESPONSES.get(reqId);
+  if (!resp) return null;
+  const block = resp.blocks.find((b) => b.key === blockKey);
+  if (!block) return null;
+  const ph = block.placeholders.find((p) => p.id === phId);
+  if (!ph) return null;
+  ph.value   = value;
+  ph.filled  = true;
+  resp.updatedAt = Date.now();
+  return ph;
+}
+
+export function setBlockReviewed(reqId: string, blockKey: string, reviewed: boolean): boolean {
+  const resp = RESPONSES.get(reqId);
+  if (!resp) return false;
+  const block = resp.blocks.find((b) => b.key === blockKey);
+  if (!block) return false;
+  block.reviewed = reviewed;
+  resp.updatedAt = Date.now();
+  return true;
+}
+
+const RESP_STATUS_FLOW: Record<ResponseStatus, ResponseStatus | null> = {
+  draft:     "in_review",
+  in_review: "approved",
+  approved:  null,
+};
+
+export type AdvanceResponseResult =
+  | { ok: true; response: RequirementResponse }
+  | { ok: false; error: string };
+
+export function advanceResponseStatus(reqId: string): AdvanceResponseResult {
+  const resp = RESPONSES.get(reqId);
+  if (!resp) return { ok: false, error: "Response not found" };
+
+  const unreviewed = resp.blocks.filter((b) => b.type === "minimum" && !b.reviewed);
+  if (unreviewed.length > 0)
+    return { ok: false, error: `${unreviewed.length} minimum block(s) not yet reviewed` };
+
+  const unfilled = resp.blocks.flatMap((b) => b.placeholders).filter((p) => !p.filled);
+  if (unfilled.length > 0)
+    return { ok: false, error: `${unfilled.length} placeholder(s) not yet filled` };
+
+  const next = RESP_STATUS_FLOW[resp.status];
+  if (!next) return { ok: false, error: "Already approved" };
+
+  resp.status    = next;
+  resp.updatedAt = Date.now();
+  return { ok: true, response: resp };
+}
+
+export function reopenResponse(reqId: string): RequirementResponse | null {
+  const resp = RESPONSES.get(reqId);
+  if (!resp) return null;
+  resp.status    = "draft";
+  resp.updatedAt = Date.now();
+  return resp;
 }

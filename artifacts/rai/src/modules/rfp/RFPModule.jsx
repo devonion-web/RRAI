@@ -6,11 +6,13 @@ import {
 import { saveAs } from 'file-saver'
 import {
   rfpUploadFiles, rfpStoreText, rfpRemoveDocument,
-  rfpCreatePack, rfpDetectSections,
-  rfpExtractBrief, rfpGenerateDraft, rfpUpdateDraft,
-  rfpAdvanceDraftStatus, rfpReopenDraft,
-  rfpGetSectionAudit, rfpGetPack,
-  rfpFillPlaceholder, rfpMarkComponentReviewed,
+  rfpCreatePack, rfpGetPack,
+  rfpSaveProfile, rfpGetProfile,
+  rfpDecompose,
+  rfpGetRequirements, rfpConfirmOwnership,
+  rfpRespond, rfpGetResponse,
+  rfpUpdateBlock, rfpFillBlockPH, rfpMarkBlockReviewed,
+  rfpAdvanceResponse, rfpReopenResponse,
 } from './api.js'
 
 // ── Brand ─────────────────────────────────────────────────────────────────────
@@ -28,17 +30,26 @@ const STATUS_META = {
   reopened:    { label: 'Reopened',    bg: '#FFEDD5', text: ORANGE },
 }
 const EVENT_META = {
-  pack_uploaded:    { icon: '📦', label: 'Pack uploaded' },
-  section_detected: { icon: '🔍', label: 'Sections detected' },
-  brief_extracted:  { icon: '📋', label: 'Brief extracted' },
-  draft_generated:  { icon: '✦',  label: 'Draft generated' },
-  draft_edited:     { icon: '✏', label: 'Draft saved' },
-  placeholder_filled:  { icon: '✓', label: 'Placeholder filled' },
-  component_reviewed:  { icon: '◉', label: 'Component reviewed' },
-  status_changed:   { icon: '→', label: 'Status changed' },
-  approved:         { icon: '✅', label: 'Approved' },
-  exported:         { icon: '⬇', label: 'Exported' },
-  reopened:         { icon: '↩', label: 'Reopened' },
+  pack_uploaded:        { icon: '📦', label: 'Pack uploaded' },
+  section_detected:     { icon: '🔍', label: 'Sections detected' },
+  brief_extracted:      { icon: '📋', label: 'Brief extracted' },
+  draft_generated:      { icon: '✦',  label: 'Draft generated' },
+  draft_edited:         { icon: '✏',  label: 'Draft saved' },
+  placeholder_filled:   { icon: '✓',  label: 'Placeholder filled' },
+  component_reviewed:   { icon: '◉',  label: 'Component reviewed' },
+  status_changed:       { icon: '→',  label: 'Status changed' },
+  approved:             { icon: '✅', label: 'Approved' },
+  exported:             { icon: '⬇',  label: 'Exported' },
+  reopened:             { icon: '↩',  label: 'Reopened' },
+  profile_saved:        { icon: '👤', label: 'Profile saved' },
+  decomposed:           { icon: '🔬', label: 'Document decomposed' },
+  ownership_confirmed:  { icon: '✓',  label: 'Ownership confirmed' },
+  ownership_overridden: { icon: '↺',  label: 'Ownership overridden' },
+  response_generated:   { icon: '✦',  label: 'Response generated' },
+  block_edited:         { icon: '✏',  label: 'Block edited' },
+  block_reviewed:       { icon: '◉',  label: 'Block reviewed' },
+  response_advanced:    { icon: '→',  label: 'Status advanced' },
+  response_approved:    { icon: '✅', label: 'Response approved' },
 }
 
 // ── Utils ─────────────────────────────────────────────────────────────────────
@@ -124,6 +135,20 @@ function StatusBadge({ status }) {
 function VerdictBadge({ verdict }) {
   const c = { 'Complies': { bg: '#D1FAE5', text: GREEN }, 'Partially Complies': { bg: '#FEF9C3', text: AMBER }, 'Does Not Comply': { bg: '#FEE2E2', text: RED } }[verdict] || { bg: '#F1F5F9', text: MUTED }
   return <span style={{ padding: '2px 8px', borderRadius: 12, fontSize: 10, fontWeight: 700, background: c.bg, color: c.text }}>{verdict || 'Not set'}</span>
+}
+function ownerColor(owner) {
+  if (owner === 'RR') return NAVY
+  if (owner === 'LogicGate') return PURPLE
+  if (owner === 'shared') return AMBER
+  return MUTED
+}
+function OwnerBadge({ owner }) {
+  const bg = ownerColor(owner)
+  return (
+    <span style={{ background: bg, color: WHITE, fontSize: 10, fontWeight: 700, padding: '2px 9px', borderRadius: 12, whiteSpace: 'nowrap' }}>
+      {owner}
+    </span>
+  )
 }
 function SectionNum({ n }) {
   return <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 22, height: 22, borderRadius: '50%', background: NAVY, color: WHITE, fontSize: 10, fontWeight: 700, flexShrink: 0 }}>{n}</span>
@@ -243,6 +268,68 @@ function ComponentCard({ n, compKey, label, reqCtx, placeholders, reviewed, onMa
   )
 }
 
+function BlockCard({ n, block, onFillPH, onMarkReviewed, onSaveAnswer, activePhId }) {
+  const [editing, setEditing]     = useState(false)
+  const [localAnswer, setLocal]   = useState(block.answer)
+  const [saving, setSaving]       = useState(false)
+  const unfilled  = block.placeholders.filter(p => !p.filled).length
+  const canReview = unfilled === 0
+  const typeColor = block.type === 'minimum' ? BLUE : PURPLE
+  const typeLabel = block.type === 'minimum' ? 'Min' : 'Enrichment'
+
+  async function handleSave() {
+    setSaving(true)
+    await onSaveAnswer(block.key, localAnswer)
+    setSaving(false); setEditing(false)
+  }
+
+  return (
+    <div id={`block-${block.key}`} style={{ background: WHITE, border: `2px solid ${block.reviewed ? '#BBF7D0' : unfilled > 0 ? '#FDE68A' : BORDER}`, borderRadius: 8, overflow: 'hidden', marginBottom: 12 }}>
+      <div style={{ background: block.reviewed ? '#D1FAE5' : NAVY, padding: '10px 14px', display: 'flex', alignItems: 'center', gap: 8 }}>
+        <span style={{ background: typeColor, color: WHITE, fontSize: 9, fontWeight: 800, padding: '2px 8px', borderRadius: 10, textTransform: 'uppercase' }}>{typeLabel}</span>
+        <span style={{ fontSize: 12, fontWeight: 700, color: block.reviewed ? GREEN : WHITE, flex: 1 }}>Block {n}</span>
+        {block.reviewed && <span style={{ fontSize: 11, color: GREEN, fontWeight: 700 }}>✓ Reviewed</span>}
+        {unfilled > 0 && !block.reviewed && <span style={{ fontSize: 11, color: '#FDE68A', fontWeight: 600 }}>⚠ {unfilled} gap{unfilled !== 1 ? 's' : ''}</span>}
+      </div>
+      <div style={{ padding: '10px 14px', fontSize: 12, color: MUTED, fontStyle: 'italic', lineHeight: 1.5, borderBottom: `1px solid ${BORDER}` }}>
+        <span style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', color: MUTED, display: 'block', marginBottom: 4 }}>Buyer asks:</span>
+        {block.prompt}
+      </div>
+      <div style={{ padding: 14 }}>
+        {!editing
+          ? <div onClick={() => setEditing(true)} style={{ cursor: 'text', minHeight: 40 }}>
+              <InlineAnswer text={block.answer} placeholders={block.placeholders} onFillPH={(phId, val) => onFillPH(block.key, phId, val)} activePhId={activePhId} />
+            </div>
+          : <div>
+              <textarea value={localAnswer} onChange={e => setLocal(e.target.value)} rows={6}
+                style={{ width: '100%', padding: '8px 10px', border: `1px solid ${BLUE}`, borderRadius: 6, fontSize: 13, fontFamily: 'inherit', resize: 'vertical', lineHeight: 1.5, boxSizing: 'border-box' }} />
+              <div style={{ display: 'flex', gap: 8, marginTop: 6 }}>
+                <button onClick={handleSave} disabled={saving}
+                  style={{ background: saving ? '#CBD5E1' : NAVY, color: WHITE, border: 'none', borderRadius: 5, padding: '5px 14px', fontSize: 12, fontWeight: 700, cursor: saving ? 'not-allowed' : 'pointer' }}>
+                  {saving ? 'Saving…' : 'Save'}
+                </button>
+                <button onClick={() => { setEditing(false); setLocal(block.answer) }}
+                  style={{ background: 'none', border: `1px solid ${BORDER}`, borderRadius: 5, padding: '5px 12px', fontSize: 12, color: MUTED, cursor: 'pointer' }}>
+                  Cancel
+                </button>
+              </div>
+            </div>
+        }
+      </div>
+      <div style={{ padding: '10px 14px', borderTop: `1px solid ${BORDER}`, background: '#FAFAFA', display: 'flex', alignItems: 'center', gap: 10 }}>
+        {canReview
+          ? <button onClick={() => onMarkReviewed(block.key, !block.reviewed)}
+              style={{ background: block.reviewed ? 'none' : GREEN, color: block.reviewed ? MUTED : WHITE, border: `1px solid ${block.reviewed ? BORDER : GREEN}`, borderRadius: 6, padding: '5px 14px', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>
+              {block.reviewed ? '↩ Un-review' : 'Mark reviewed ✓'}
+            </button>
+          : <span style={{ fontSize: 11, color: AMBER, fontWeight: 600 }}>Fill all gaps before reviewing</span>
+        }
+        <span style={{ fontSize: 11, color: MUTED, marginLeft: 'auto' }}>{block.placeholders.length} placeholder{block.placeholders.length !== 1 ? 's' : ''}</span>
+      </div>
+    </div>
+  )
+}
+
 function TA({ value, onChange, rows = 4, yellow = false }) {
   const ph = typeof value === 'string' && (value.includes('{{PLACEHOLDER:') || value.includes('{{PH:'))
   return (
@@ -356,6 +443,58 @@ async function exportSectionDocx({ buyer, sectionCode, sectionTitle, draft }) {
   saveAs(blob, `RR-${slug}-${new Date().toISOString().slice(0, 10)}.docx`)
 }
 
+async function exportResponseDocx({ req, resp, buyer }) {
+  const today = new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'long', year: 'numeric' })
+  const resolveTokens = (text) => {
+    let out = text || ''
+    for (const block of resp.blocks) {
+      for (const ph of block.placeholders) {
+        if (ph.filled && ph.value) {
+          out = out.split(`{{PH:${ph.id}}}`).join(ph.value)
+        }
+      }
+    }
+    return out
+  }
+  const ch = []
+  ch.push(new Paragraph({ spacing: { after: 120 }, children: [new TextRun({ text: 'RFP Response — Commercial Lens', font: 'Arial', size: 44, bold: true, color: DOC_NAVY })] }))
+  ch.push(dPara(buyer, { size: 32, bold: true, color: DOC_NAVY }))
+  ch.push(dPara(`${req.code}: ${req.title}`, { size: 26, color: DOC_PURPLE }))
+  if (req.scoringWeight) ch.push(dPara(`Scoring weight: ${req.scoringWeight}`, { size: 20, color: DOC_GRAY }))
+  ch.push(dPara(`Prepared by Risk Rising · ${today}`, { size: 20, color: DOC_GRAY, after: 120 }))
+  ch.push(dCallout('DRAFT — FOR INTERNAL REVIEW ONLY. Not approved for release. Commercial lens: do not present as independent analyst content.'))
+  ch.push(dSpace())
+  ch.push(dH('What the buyer asks for'))
+  ;(req.sourceText || '').split(/\n+/).filter(Boolean).forEach(p => ch.push(dPara(p, { color: DOC_GRAY })))
+  ch.push(dSpace())
+  const minBlocks = resp.blocks.filter(b => b.type === 'minimum')
+  const enrBlocks = resp.blocks.filter(b => b.type === 'enrichment')
+  if (minBlocks.length) {
+    ch.push(dH('Minimum Requirement Responses'))
+    minBlocks.forEach((b, i) => {
+      ch.push(dPara(`${i + 1}. ${b.prompt}`, { bold: true, color: DOC_NAVY, size: 22, after: 40 }))
+      resolveTokens(b.answer).split(/\n+/).filter(Boolean).forEach(p => ch.push(dPara(p)))
+      ch.push(dSpace())
+    })
+  }
+  if (enrBlocks.length) {
+    ch.push(dH('Additional Detail'))
+    enrBlocks.forEach(b => {
+      resolveTokens(b.answer).split(/\n+/).filter(Boolean).forEach(p => ch.push(dPara(p)))
+      ch.push(dSpace())
+    })
+  }
+  if (resp.openDependencies?.length) {
+    ch.push(dH('Open Dependencies'))
+    resp.openDependencies.forEach(d => ch.push(dBullet(d)))
+  }
+  const footer = new Footer({ children: [new Paragraph({ alignment: AlignmentType.RIGHT, children: [new TextRun({ text: 'Commercial lens — Risk Rising internal draft   ', font: 'Arial', size: 18, color: DOC_GRAY }), new TextRun({ children: [PageNumber.CURRENT], font: 'Arial', size: 18, color: DOC_GRAY })] })] })
+  const doc  = new Document({ sections: [{ properties: { page: { size: { width: 11906, height: 16838 }, margin: { top: 1440, bottom: 1440, left: 1440, right: 1440 } } }, footers: { default: footer }, children: ch }] })
+  const blob = await Packer.toBlob(doc)
+  const slug = `${buyer || 'RR'}-${req.code}`.replace(/[\s.]+/g, '-')
+  saveAs(blob, `RR-${slug}-${new Date().toISOString().slice(0, 10)}.docx`)
+}
+
 // ── Setup screen ──────────────────────────────────────────────────────────────
 function SetupScreen({ onPack }) {
   const [buyer, setBuyer]       = useState('')
@@ -442,542 +581,579 @@ function SetupScreen({ onPack }) {
   )
 }
 
-// ── Dashboard screen ──────────────────────────────────────────────────────────
-function DashboardScreen({ pack, sections, onSectionsChange, onOpenSection, onReset }) {
-  const [detecting, setDetecting] = useState(false)
-  const [briefLoading, setBriefLoading] = useState(null)
-  const [draftLoading, setDraftLoading] = useState(null)
-  const [detectError, setDetectError] = useState(null)
-  // Per-section errors so a failed card doesn't displace unrelated content
-  const [cardErrors, setCardErrors] = useState({})
+// ── Profile screen ────────────────────────────────────────────────────────────
+const ALL_REMIT_OPTIONS = ['implementation','delivery','data migration','training','change management','support','consulting','integration','testing','security','advisory']
 
-  function clearCardError(id) { setCardErrors(p => { const n = { ...p }; delete n[id]; return n }) }
-  function setCardError(id, msg) { setCardErrors(p => ({ ...p, [id]: msg })) }
+function ProfileScreen({ pack, onProfile }) {
+  const [ourRole, setOurRole]         = useState('delivery & consulting partner')
+  const [primePartner, setPrime]       = useState('LogicGate')
+  const [ourRemit, setOurRemit]       = useState(['implementation','delivery','data migration','training','change management','support','consulting'])
+  const [otherParties, setOtherParties] = useState('')
+  const [saving, setSaving]           = useState(false)
+  const [error, setError]             = useState(null)
 
-  useEffect(() => { if (!sections.length) detect() }, [])
-
-  async function detect() {
-    setDetecting(true); setDetectError(null)
-    try { const { sections: s } = await rfpDetectSections(pack.id); onSectionsChange(s || []) }
-    catch (e) { setDetectError(e.message) }
-    finally { setDetecting(false) }
-  }
-
-  async function extractBrief(section) {
-    setBriefLoading(section.id); clearCardError(section.id)
+  async function handleSubmit(e) {
+    e.preventDefault()
+    if (!ourRemit.length) return
+    setSaving(true); setError(null)
     try {
-      const { section: updated } = await rfpExtractBrief(section.id)
-      // Functional update avoids stale-closure overwrite from concurrent state changes
-      onSectionsChange(prev => prev.map(s => s.id === section.id ? updated : s))
-    } catch (e) { setCardError(section.id, e.message) }
-    finally { setBriefLoading(null) }
+      const { profile } = await rfpSaveProfile(pack.id, {
+        ourRole, primePartner, ourRemit,
+        otherParties: otherParties.split(',').map(s => s.trim()).filter(Boolean),
+      })
+      onProfile(profile)
+    } catch (e) { setError(e.message) }
+    setSaving(false)
   }
-
-  async function generateDraft(section) {
-    setDraftLoading(section.id); clearCardError(section.id)
-    try {
-      const { draft, sectionStatus } = await rfpGenerateDraft(section.id)
-      const updated = { ...section, draft, status: sectionStatus || 'drafted' }
-      onSectionsChange(prev => prev.map(s => s.id === section.id ? updated : s))
-      setDraftLoading(null)
-      onOpenSection(updated)
-    } catch (e) {
-      setCardError(section.id, e.message)
-      setDraftLoading(null)
-    }
-  }
-
-  const approved    = sections.filter(s => s.status === 'approved').length
-  const total       = sections.length
-  const allApproved = total > 0 && approved === total
-  const pct         = total > 0 ? Math.round((approved / total) * 100) : 0
 
   return (
-    <div style={{ maxWidth: 1100, margin: '0 auto', padding: '24px' }}>
-      {/* Pack header */}
-      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 20, flexWrap: 'wrap', gap: 12 }}>
-        <div>
-          <div style={{ fontSize: 22, fontWeight: 700, color: NAVY }}>{pack.buyer}</div>
-          <div style={{ fontSize: 13, color: MUTED }}>{pack.name}</div>
-        </div>
-        <div style={{ display: 'flex', gap: 8 }}>
-          <button onClick={detect} disabled={detecting} style={{ background: 'none', border: `1px solid ${BORDER}`, borderRadius: 6, padding: '6px 14px', fontSize: 12, color: MUTED, cursor: 'pointer' }}>↺ Re-detect</button>
-          <button onClick={onReset} style={{ background: 'none', border: `1px solid ${BORDER}`, borderRadius: 6, padding: '6px 14px', fontSize: 12, color: MUTED, cursor: 'pointer' }}>+ New pack</button>
-        </div>
+    <div style={{ maxWidth: 640, margin: '40px auto', padding: '0 24px' }}>
+      <div style={{ marginBottom: 24 }}>
+        <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', color: MUTED, marginBottom: 6 }}>Step 1 of 3</div>
+        <div style={{ fontSize: 22, fontWeight: 700, color: NAVY, marginBottom: 6 }}>Engagement Profile</div>
+        <div style={{ fontSize: 13, color: MUTED, lineHeight: 1.5 }}>Tell RRAI who is bidding and what Risk Rising owns. This drives ownership mapping across every requirement.</div>
       </div>
-
-      {/* Progress bar */}
-      {total > 0 && (
-        <div style={{ background: WHITE, border: `1px solid ${BORDER}`, borderRadius: 8, padding: '14px 18px', marginBottom: 20 }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-            <span style={{ fontSize: 13, fontWeight: 700, color: NAVY }}>Pack progress</span>
-            <span style={{ fontSize: 13, fontWeight: 700, color: allApproved ? GREEN : NAVY }}>{approved} / {total} sections approved {allApproved ? '✓' : ''}</span>
+      <form onSubmit={handleSubmit}>
+        <div style={{ background: WHITE, border: `1px solid ${BORDER}`, borderRadius: 10, padding: 24, display: 'flex', flexDirection: 'column', gap: 20 }}>
+          <div>
+            <label style={{ fontSize: 11, fontWeight: 700, color: NAVY, textTransform: 'uppercase', display: 'block', marginBottom: 6 }}>Risk Rising's Role in This Bid</label>
+            <input value={ourRole} onChange={e => setOurRole(e.target.value)} required
+              style={{ width: '100%', padding: '9px 11px', border: `1px solid ${BORDER}`, borderRadius: 6, fontSize: 13, boxSizing: 'border-box', fontFamily: 'inherit' }} />
           </div>
-          <div style={{ height: 8, background: '#E2E8F0', borderRadius: 4, overflow: 'hidden' }}>
-            <div style={{ height: '100%', width: `${pct}%`, background: allApproved ? GREEN : BLUE, borderRadius: 4, transition: 'width 0.5s ease' }} />
+          <div>
+            <label style={{ fontSize: 11, fontWeight: 700, color: NAVY, textTransform: 'uppercase', display: 'block', marginBottom: 6 }}>Prime / Lead Partner</label>
+            <input value={primePartner} onChange={e => setPrime(e.target.value)} required
+              style={{ width: '100%', padding: '9px 11px', border: `1px solid ${BORDER}`, borderRadius: 6, fontSize: 13, boxSizing: 'border-box', fontFamily: 'inherit' }} />
           </div>
-          {allApproved && <div style={{ marginTop: 8, fontSize: 12, color: GREEN, fontWeight: 600 }}>✓ All sections approved — export each via the section editor.</div>}
+          <div>
+            <label style={{ fontSize: 11, fontWeight: 700, color: NAVY, textTransform: 'uppercase', display: 'block', marginBottom: 8 }}>
+              Risk Rising's Remit <span style={{ color: RED }}>*</span>
+            </label>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7 }}>
+              {ALL_REMIT_OPTIONS.map(opt => {
+                const on = ourRemit.includes(opt)
+                return (
+                  <button key={opt} type="button"
+                    onClick={() => setOurRemit(p => on ? p.filter(r => r !== opt) : [...p, opt])}
+                    style={{ background: on ? NAVY : 'none', color: on ? WHITE : MUTED, border: `1px solid ${on ? NAVY : BORDER}`, borderRadius: 16, padding: '4px 13px', fontSize: 12, cursor: 'pointer', fontWeight: on ? 700 : 400 }}>
+                    {opt}
+                  </button>
+                )
+              })}
+            </div>
+            {ourRemit.length === 0 && <div style={{ fontSize: 11, color: RED, marginTop: 4 }}>Select at least one remit area.</div>}
+          </div>
+          <div>
+            <label style={{ fontSize: 11, fontWeight: 700, color: NAVY, textTransform: 'uppercase', display: 'block', marginBottom: 6 }}>Other Named Parties (comma-separated, optional)</label>
+            <input value={otherParties} onChange={e => setOtherParties(e.target.value)} placeholder="e.g. Panorays, AWS"
+              style={{ width: '100%', padding: '9px 11px', border: `1px solid ${BORDER}`, borderRadius: 6, fontSize: 13, boxSizing: 'border-box', fontFamily: 'inherit' }} />
+          </div>
+          {error && <div style={{ color: RED, fontSize: 12, background: '#FEE2E2', padding: '8px 12px', borderRadius: 6 }}>⚠ {error}</div>}
+          <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+            <button type="submit" disabled={saving || !ourRemit.length}
+              style={{ background: saving || !ourRemit.length ? '#CBD5E1' : NAVY, color: WHITE, border: 'none', borderRadius: 6, padding: '10px 24px', fontSize: 13, fontWeight: 700, cursor: saving || !ourRemit.length ? 'not-allowed' : 'pointer' }}>
+              {saving ? 'Saving…' : 'Save & decompose document →'}
+            </button>
+          </div>
         </div>
+      </form>
+    </div>
+  )
+}
+
+// ── Decompose screen ──────────────────────────────────────────────────────────
+function DecomposeScreen({ pack, onRequirements }) {
+  const [status, setStatus]     = useState('running')
+  const [reqCount, setReqCount] = useState(null)
+  const [error, setError]       = useState(null)
+
+  function run() {
+    setStatus('running'); setError(null)
+    rfpDecompose(pack.id)
+      .then(({ requirements }) => {
+        setReqCount(requirements.length)
+        setStatus('done')
+        setTimeout(() => onRequirements(requirements), 900)
+      })
+      .catch(e => { setError(e.message); setStatus('error') })
+  }
+
+  useEffect(() => { run() }, [])
+
+  return (
+    <div style={{ maxWidth: 600, margin: '80px auto', padding: '0 24px', textAlign: 'center' }}>
+      {status === 'running' && (
+        <>
+          <div style={{ fontSize: 11, fontWeight: 700, color: MUTED, textTransform: 'uppercase', marginBottom: 16, letterSpacing: '0.05em' }}>Step 2 of 3</div>
+          <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 20 }}><Spinner /></div>
+          <div style={{ fontSize: 18, fontWeight: 700, color: NAVY, marginBottom: 8 }}>Decomposing bid document…</div>
+          <div style={{ fontSize: 13, color: MUTED, lineHeight: 1.5 }}>Reading the document, extracting requirements in order, and pre-classifying ownership. This takes 30–90 seconds.</div>
+        </>
       )}
-
-      {detectError && <div style={{ marginBottom: 12, color: RED, fontSize: 12, background: '#FEE2E2', padding: '8px 12px', borderRadius: 6 }}>{detectError}</div>}
-      {detecting && <div style={{ background: WHITE, border: `1px solid ${BORDER}`, borderRadius: 8, padding: 24, textAlign: 'center', color: MUTED, fontSize: 13 }}>🔍 Detecting scored response sections…</div>}
-
-      {!detecting && sections.length === 0 && (
-        <div style={{ background: WHITE, border: `1px solid ${BORDER}`, borderRadius: 8, padding: 24, textAlign: 'center', color: MUTED }}>
-          <div style={{ fontSize: 15, marginBottom: 8 }}>No scored sections detected.</div>
-          <div style={{ fontSize: 12, marginBottom: 16 }}>Try pasting the scored question section directly, then re-detect.</div>
-          <button onClick={detect} style={{ background: NAVY, color: WHITE, border: 'none', borderRadius: 6, padding: '8px 18px', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>↺ Try again</button>
-        </div>
+      {status === 'done' && (
+        <>
+          <div style={{ fontSize: 48, marginBottom: 12 }}>✓</div>
+          <div style={{ fontSize: 18, fontWeight: 700, color: GREEN, marginBottom: 8 }}>{reqCount} requirement{reqCount !== 1 ? 's' : ''} extracted</div>
+          <div style={{ fontSize: 13, color: MUTED }}>Advancing to ownership mapping…</div>
+        </>
       )}
-
-      {/* Section grid */}
-      {sections.length > 0 && (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: 14 }}>
-          {sections.map((s, idx) => {
-            const meta   = STATUS_META[s.status] || STATUS_META.not_started
-            const phCount = s.draft ? countUnfilledPH(s.draft) : 0
-            const isBL   = briefLoading === s.id
-            const isDL   = draftLoading === s.id
-            return (
-              <div key={s.id} style={{ background: WHITE, border: `1px solid ${BORDER}`, borderRadius: 10, padding: '16px', display: 'flex', flexDirection: 'column', gap: 8, boxShadow: '0 1px 3px rgba(0,0,0,0.04)' }}>
-                {/* Top row */}
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-                  <span style={{ background: NAVY, color: WHITE, fontSize: 10, fontWeight: 700, padding: '2px 8px', borderRadius: 4 }}>{s.code}</span>
-                  {s.scoringWeight && <span style={{ background: '#FEF9C3', color: AMBER, fontSize: 10, fontWeight: 700, padding: '2px 6px', borderRadius: 4 }}>{s.scoringWeight}</span>}
-                  <span style={{ marginLeft: 'auto' }}><StatusBadge status={s.status} /></span>
-                  <span style={{ fontSize: 11, color: MUTED, background: '#F1F5F9', borderRadius: 4, padding: '1px 6px', minWidth: 20, textAlign: 'center' }}>{idx + 1}</span>
-                </div>
-                {/* Title */}
-                <div style={{ fontSize: 14, fontWeight: 700, color: NAVY, lineHeight: 1.3 }}>{s.title}</div>
-                {/* Summary */}
-                {s.summary && <div style={{ fontSize: 12, color: MUTED, lineHeight: 1.4 }}>{s.summary}</div>}
-                {/* Placeholder status */}
-                {s.draft && (
-                  <div style={{ fontSize: 11, fontWeight: 600, color: phCount > 0 ? AMBER : GREEN }}>
-                    {phCount > 0 ? `⚠ ${phCount} placeholder${phCount !== 1 ? 's' : ''} unfilled` : '✓ All placeholders filled'}
-                  </div>
-                )}
-                {/* Last updated */}
-                {s.draft && <div style={{ fontSize: 11, color: MUTED }}>Updated {timeAgo(s.draft.updatedAt)}</div>}
-                {/* Per-card error + Retry */}
-                {cardErrors[s.id] && (
-                  <div style={{ fontSize: 11, color: RED, background: '#FEE2E2', padding: '6px 10px', borderRadius: 6, lineHeight: 1.4 }}>
-                    ⚠ {cardErrors[s.id]}
-                  </div>
-                )}
-                {/* Action */}
-                <div style={{ marginTop: 4 }}>
-                  {(s.status === 'not_started' || (s.status === 'not_started' && cardErrors[s.id])) && !isBL && (
-                    <button onClick={() => extractBrief(s)} style={{ width: '100%', background: NAVY, color: WHITE, border: 'none', borderRadius: 6, padding: '8px 0', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>
-                      {cardErrors[s.id] ? '↺ Retry extraction' : 'Extract brief'}
-                    </button>
-                  )}
-                  {s.status === 'not_started' && isBL && (
-                    <button disabled style={{ width: '100%', background: '#CBD5E1', color: WHITE, border: 'none', borderRadius: 6, padding: '8px 0', fontSize: 12, display: 'flex', justifyContent: 'center', gap: 8, alignItems: 'center' }}><Spinner /> Extracting…</button>
-                  )}
-                  {s.status === 'extracted' && !isDL && (
-                    <button onClick={() => generateDraft(s)} style={{ width: '100%', background: cardErrors[s.id] ? AMBER : GREEN, color: WHITE, border: 'none', borderRadius: 6, padding: '8px 0', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>
-                      {cardErrors[s.id] ? '↺ Retry draft' : '✦ Generate draft'}
-                    </button>
-                  )}
-                  {s.status === 'extracted' && isDL && (
-                    <button disabled style={{ width: '100%', background: '#CBD5E1', color: WHITE, border: 'none', borderRadius: 6, padding: '8px 0', fontSize: 12, display: 'flex', justifyContent: 'center', gap: 8, alignItems: 'center' }}><Spinner /> Drafting… (this can take ~30 s)</button>
-                  )}
-                  {['drafted', 'in_review', 'approved', 'reopened'].includes(s.status) && (
-                    <button onClick={() => onOpenSection(s)} style={{ width: '100%', background: s.status === 'approved' ? '#D1FAE5' : BLUE, color: s.status === 'approved' ? GREEN : WHITE, border: s.status === 'approved' ? `1px solid ${GREEN}` : 'none', borderRadius: 6, padding: '8px 0', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>
-                      {s.status === 'approved' ? '✓ View approved →' : 'Open draft →'}
-                    </button>
-                  )}
-                </div>
-              </div>
-            )
-          })}
-        </div>
+      {status === 'error' && (
+        <>
+          <div style={{ fontSize: 14, fontWeight: 700, color: RED, marginBottom: 10 }}>Decomposition failed</div>
+          <div style={{ fontSize: 12, color: RED, background: '#FEE2E2', padding: '10px 14px', borderRadius: 6, marginBottom: 18, textAlign: 'left' }}>{error}</div>
+          <button onClick={run} style={{ background: NAVY, color: WHITE, border: 'none', borderRadius: 6, padding: '10px 24px', fontSize: 13, fontWeight: 700, cursor: 'pointer' }}>↺ Retry</button>
+        </>
       )}
     </div>
   )
 }
 
-// ── Draft screen ──────────────────────────────────────────────────────────────
-function DraftScreen({ section, sections, currentIdx, buyer, onBack, onNavigate, onSectionChanged }) {
-  const d = section.draft
-  const [comp, setComp]             = useState(d?.components || {})
-  const [verdict, setVerdict]       = useState(d?.complianceVerdict || 'Partially Complies')
-  const [openDeps, setOpenDeps]     = useState(d?.openDependencies || [])
-  const [status, setStatus]         = useState(d?.status || 'draft')
-  const [sectionStatus, setSectionStatus] = useState(section.status || 'drafted')
-  const [placeholders, setPHs]      = useState(() => normalizePlaceholders(d))
-  const [reviewed, setReviewed]     = useState(d?.reviewed || {})
-  const [reqCtx]                    = useState(d?.requirementContext || {})
-  const [activePhId, setActivePhId] = useState(null)
-  const [dirty, setDirty]           = useState(false)
-  const [saving, setSaving]         = useState(false)
-  const [advancing, setAdv]         = useState(false)
-  const [reopening, setReop]        = useState(false)
-  const [exporting, setExp]         = useState(false)
-  const [exportErr, setExpErr]      = useState(null)
-  const [history, setHistory]       = useState([])
-  const [advErr, setAdvErr]         = useState(null)
+// ── Ownership mapping ─────────────────────────────────────────────────────────
+const OWNERS = ['RR', 'LogicGate', 'shared', 'M&S']
 
-  const unfilledCount       = placeholders.filter(p => !p.filled).length
-  const allReviewed         = COMP_NAMES.every(k => reviewed[k])
-  const canAdvanceToApprove = status !== 'in_review' || (allReviewed && unfilledCount === 0)
+function OwnerRow({ req, saving, onConfirm }) {
+  const [owner, setOwner]         = useState(req.owner)
+  const [rationale, setRationale] = useState(req.ownerRationale)
+  const [editRat, setEditRat]     = useState(false)
 
-  useEffect(() => {
-    rfpGetSectionAudit(section.id).then(({ events }) => setHistory([...(events || [])].reverse())).catch(() => {})
-  }, [section.id])
+  return (
+    <div style={{ background: WHITE, border: `1px solid ${req.ownerConfirmed ? '#BBF7D0' : BORDER}`, borderRadius: 8, padding: '12px 16px' }}>
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12, flexWrap: 'wrap' }}>
+        <div style={{ flex: '2 1 200px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4, flexWrap: 'wrap' }}>
+            <span style={{ background: NAVY, color: WHITE, fontSize: 10, fontWeight: 700, padding: '2px 7px', borderRadius: 4 }}>{req.code}</span>
+            {req.scoringWeight && <span style={{ background: '#FEF9C3', color: AMBER, fontSize: 10, fontWeight: 700, padding: '2px 6px', borderRadius: 4 }}>{req.scoringWeight}</span>}
+            {req.ownerConfirmed && <span style={{ color: GREEN, fontSize: 11, fontWeight: 700 }}>✓</span>}
+          </div>
+          <div style={{ fontSize: 13, fontWeight: 600, color: NAVY, lineHeight: 1.3 }}>{req.title}</div>
+        </div>
+        <div style={{ flex: '1 1 180px' }}>
+          <div style={{ fontSize: 10, fontWeight: 700, color: MUTED, textTransform: 'uppercase', marginBottom: 5 }}>Proposed owner</div>
+          <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+            {OWNERS.map(o => (
+              <button key={o} type="button" onClick={() => setOwner(o)}
+                style={{ background: owner === o ? ownerColor(o) : 'none', color: owner === o ? WHITE : MUTED, border: `1px solid ${owner === o ? ownerColor(o) : BORDER}`, borderRadius: 12, padding: '3px 9px', fontSize: 11, cursor: 'pointer', fontWeight: owner === o ? 700 : 400 }}>
+                {o}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div style={{ flex: '2 1 200px' }}>
+          <div style={{ fontSize: 10, fontWeight: 700, color: MUTED, textTransform: 'uppercase', marginBottom: 5 }}>Rationale</div>
+          {editRat
+            ? <input value={rationale} onChange={e => setRationale(e.target.value)} onBlur={() => setEditRat(false)} autoFocus
+                style={{ width: '100%', padding: '5px 8px', border: `1px solid ${BLUE}`, borderRadius: 4, fontSize: 12, boxSizing: 'border-box', fontFamily: 'inherit' }} />
+            : <div onClick={() => setEditRat(true)} style={{ fontSize: 12, color: MUTED, lineHeight: 1.4, cursor: 'pointer', fontStyle: 'italic' }}>{rationale || '—'}</div>
+          }
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 5, alignItems: 'flex-end' }}>
+          {!req.ownerConfirmed
+            ? <button type="button" onClick={() => onConfirm(req, owner, rationale)} disabled={saving}
+                style={{ background: saving ? '#CBD5E1' : GREEN, color: WHITE, border: 'none', borderRadius: 6, padding: '6px 14px', fontSize: 12, fontWeight: 700, cursor: saving ? 'not-allowed' : 'pointer', whiteSpace: 'nowrap' }}>
+                {saving ? '…' : 'Confirm →'}
+              </button>
+            : <button type="button" onClick={() => onConfirm({ ...req, ownerConfirmed: false }, owner, rationale)}
+                style={{ background: 'none', border: `1px solid ${MUTED}`, color: MUTED, borderRadius: 6, padding: '5px 12px', fontSize: 11, cursor: 'pointer' }}>
+                Override
+              </button>
+          }
+        </div>
+      </div>
+    </div>
+  )
+}
 
-  async function refreshHistory() {
-    try { const { events } = await rfpGetSectionAudit(section.id); setHistory([...(events || [])].reverse()) } catch {}
-  }
+function MappingScreen({ pack, requirements, onDone }) {
+  const [reqs, setReqs]     = useState(requirements)
+  const [saving, setSaving] = useState({})
+  const [filter, setFilter] = useState('all')
+  const confirmed           = reqs.filter(r => r.ownerConfirmed).length
+  const allConfirmed        = confirmed === reqs.length
 
-  function set(field, val) { setComp(p => ({ ...p, [field]: val })); setDirty(true) }
-  function setDP(field, val) { setComp(p => ({ ...p, deliveryPlan: { ...p.deliveryPlan, [field]: val } })); setDirty(true) }
-  function setDC(field, val) { setComp(p => ({ ...p, domainComponent: { ...p.domainComponent, [field]: val } })); setDirty(true) }
-  function setRes(field, val) { setComp(p => ({ ...p, resourcing: { ...p.resourcing, [field]: val } })); setDirty(true) }
-  function setF(field) { return v => set(field, v) }
-
-  async function fillPH(phId, value) {
-    setPHs(prev => prev.map(p => p.id === phId ? { ...p, value, filled: true } : p))
-    try { await rfpFillPlaceholder(section.id, phId, value); await refreshHistory() }
-    catch { setPHs(prev => prev.map(p => p.id === phId ? { ...p, value: null, filled: false } : p)) }
-  }
-
-  async function markReviewed(compName) {
-    const newVal = !reviewed[compName]
-    setReviewed(prev => ({ ...prev, [compName]: newVal }))
-    try { await rfpMarkComponentReviewed(section.id, compName, newVal); await refreshHistory() }
-    catch { setReviewed(prev => ({ ...prev, [compName]: !newVal })) }
-  }
-
-  function scrollToChip(phId) {
-    setActivePhId(phId)
-    setTimeout(() => {
-      document.getElementById('ph-chip-' + phId.replace(/[^a-z0-9]/gi, '_'))?.scrollIntoView({ behavior: 'smooth', block: 'center' })
-    }, 50)
-  }
-
-  async function save() {
-    setSaving(true)
+  async function confirm(req, owner, rationale) {
+    setSaving(s => ({ ...s, [req.id]: true }))
     try {
-      const { draft } = await rfpUpdateDraft(section.id, { components: comp, complianceVerdict: verdict, openDependencies: openDeps, reviewed, placeholders })
-      onSectionChanged({ sectionId: section.id, draft })
-      setDirty(false)
-      await refreshHistory()
+      const { requirement: updated } = await rfpConfirmOwnership(req.id, { owner, ownerRationale: rationale, ownerConfirmed: true })
+      setReqs(prev => prev.map(r => r.id === req.id ? { ...r, ...updated } : r))
     } catch {}
-    setSaving(false)
+    setSaving(s => { const n = { ...s }; delete n[req.id]; return n })
   }
 
-  async function advance() {
-    if (dirty) await save()
+  async function confirmAll() {
+    for (const req of reqs.filter(r => !r.ownerConfirmed)) {
+      await confirm(req, req.owner, req.ownerRationale)
+    }
+  }
+
+  const OWNER_FILTERS = ['all', 'RR', 'shared', 'LogicGate', 'M&S']
+  const filtered = filter === 'all' ? reqs : reqs.filter(r => r.owner === filter)
+
+  return (
+    <div style={{ maxWidth: 1100, margin: '0 auto', padding: '24px' }}>
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 16, marginBottom: 20, flexWrap: 'wrap' }}>
+        <div>
+          <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', color: MUTED, marginBottom: 4 }}>Step 3 of 3</div>
+          <div style={{ fontSize: 20, fontWeight: 700, color: NAVY }}>Ownership Mapping</div>
+          <div style={{ fontSize: 12, color: MUTED, marginTop: 2 }}>Confirm or override RRAI's proposed ownership. {confirmed} / {reqs.length} confirmed.</div>
+        </div>
+        <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          <button onClick={confirmAll} disabled={allConfirmed}
+            style={{ background: 'none', border: `1px solid ${NAVY}`, color: NAVY, borderRadius: 6, padding: '7px 16px', fontSize: 12, fontWeight: 700, cursor: allConfirmed ? 'not-allowed' : 'pointer', opacity: allConfirmed ? 0.4 : 1 }}>
+            Accept all proposed →
+          </button>
+          <button onClick={() => onDone(reqs)} disabled={!allConfirmed}
+            style={{ background: allConfirmed ? NAVY : '#CBD5E1', color: WHITE, border: 'none', borderRadius: 6, padding: '7px 18px', fontSize: 13, fontWeight: 700, cursor: allConfirmed ? 'pointer' : 'not-allowed' }}>
+            Continue →
+          </button>
+        </div>
+      </div>
+      <div style={{ height: 4, background: BORDER, borderRadius: 2, marginBottom: 16, overflow: 'hidden' }}>
+        <div style={{ height: '100%', width: `${reqs.length ? Math.round((confirmed / reqs.length) * 100) : 0}%`, background: GREEN, transition: 'width 0.4s ease' }} />
+      </div>
+      <div style={{ display: 'flex', gap: 6, marginBottom: 16, flexWrap: 'wrap' }}>
+        {OWNER_FILTERS.map(f => {
+          const count = f === 'all' ? reqs.length : reqs.filter(r => r.owner === f).length
+          return (
+            <button key={f} onClick={() => setFilter(f)}
+              style={{ background: filter === f ? NAVY : 'none', color: filter === f ? WHITE : MUTED, border: `1px solid ${filter === f ? NAVY : BORDER}`, borderRadius: 16, padding: '4px 13px', fontSize: 12, cursor: 'pointer', fontWeight: filter === f ? 700 : 400 }}>
+              {f === 'all' ? 'All' : f} ({count})
+            </button>
+          )
+        })}
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+        {filtered.map(req => (
+          <OwnerRow key={req.id} req={req} saving={!!saving[req.id]} onConfirm={confirm} />
+        ))}
+      </div>
+    </div>
+  )
+}
+
+// ── Dashboard screen ──────────────────────────────────────────────────────────
+function DashboardScreen({ pack, profile, requirements, onRequirementsChange, onOpenReq, onReset }) {
+  const [filter, setFilter]           = useState('working')
+  const [respondingId, setResponding] = useState(null)
+  const [errors, setErrors]           = useState({})
+
+  const workingSet = requirements.filter(r => r.owner === 'RR' || r.owner === 'shared')
+  const doneCount  = workingSet.filter(r => r.response?.status === 'approved').length
+  const allDone    = workingSet.length > 0 && doneCount === workingSet.length
+  const pct        = workingSet.length > 0 ? Math.round((doneCount / workingSet.length) * 100) : 0
+
+  const FILTER_OPTS = ['working', 'all', 'RR', 'shared', 'LogicGate', 'M&S']
+  const filtered =
+    filter === 'all'     ? requirements :
+    filter === 'working' ? workingSet :
+    requirements.filter(r => r.owner === filter)
+
+  async function generateResponse(req) {
+    setResponding(req.id)
+    setErrors(p => { const n = { ...p }; delete n[req.id]; return n })
+    try {
+      const { response } = await rfpRespond(req.id)
+      onRequirementsChange(prev => prev.map(r => r.id === req.id ? { ...r, response } : r))
+      onOpenReq({ ...req, response })
+    } catch (e) {
+      setErrors(p => ({ ...p, [req.id]: e.message }))
+    }
+    setResponding(null)
+  }
+
+  return (
+    <div style={{ maxWidth: 1100, margin: '0 auto', padding: '24px' }}>
+      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 20, flexWrap: 'wrap', gap: 12 }}>
+        <div>
+          <div style={{ fontSize: 22, fontWeight: 700, color: NAVY }}>{pack.buyer}</div>
+          <div style={{ fontSize: 13, color: MUTED }}>{pack.name} · {requirements.length} requirements</div>
+          {profile && <div style={{ fontSize: 12, color: MUTED, marginTop: 2 }}>RR: {profile.ourRole} · Prime: {profile.primePartner}</div>}
+        </div>
+        <button onClick={onReset} style={{ background: 'none', border: `1px solid ${BORDER}`, borderRadius: 6, padding: '6px 14px', fontSize: 12, color: MUTED, cursor: 'pointer' }}>+ New pack</button>
+      </div>
+      <div style={{ background: WHITE, border: `1px solid ${BORDER}`, borderRadius: 8, padding: '14px 18px', marginBottom: 20 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+          <span style={{ fontSize: 13, fontWeight: 700, color: NAVY }}>Working set progress (RR + Shared)</span>
+          <span style={{ fontSize: 13, fontWeight: 700, color: allDone ? GREEN : NAVY }}>{doneCount} / {workingSet.length} approved</span>
+        </div>
+        <div style={{ height: 8, background: BORDER, borderRadius: 4, overflow: 'hidden' }}>
+          <div style={{ height: '100%', width: `${pct}%`, background: allDone ? GREEN : BLUE, borderRadius: 4, transition: 'width 0.5s ease' }} />
+        </div>
+        {allDone && <div style={{ marginTop: 8, fontSize: 12, color: GREEN, fontWeight: 600 }}>✓ All RR requirements approved — ready to export.</div>}
+      </div>
+      <div style={{ display: 'flex', gap: 6, marginBottom: 16, flexWrap: 'wrap' }}>
+        {FILTER_OPTS.map(f => {
+          const count = f === 'working' ? workingSet.length : f === 'all' ? requirements.length : requirements.filter(r => r.owner === f).length
+          return (
+            <button key={f} onClick={() => setFilter(f)}
+              style={{ background: filter === f ? NAVY : 'none', color: filter === f ? WHITE : MUTED, border: `1px solid ${filter === f ? NAVY : BORDER}`, borderRadius: 16, padding: '4px 13px', fontSize: 12, cursor: 'pointer', fontWeight: filter === f ? 700 : 400 }}>
+              {f === 'working' ? 'Working set' : f === 'all' ? 'All' : f} ({count})
+            </button>
+          )
+        })}
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+        {filtered.map(req => {
+          const isWorking  = req.owner === 'RR' || req.owner === 'shared'
+          const resp       = req.response
+          const respStatus = resp?.status ?? null
+          const isRes      = respondingId === req.id
+          const phCount    = resp ? resp.blocks.flatMap(b => b.placeholders).filter(p => !p.filled).length : 0
+          const unreviewed = resp ? resp.blocks.filter(b => b.type === 'minimum' && !b.reviewed).length : 0
+          return (
+            <div key={req.id} style={{ background: WHITE, border: `1px solid ${BORDER}`, borderRadius: 8, padding: '14px 16px', opacity: isWorking ? 1 : 0.55 }}>
+              <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12, flexWrap: 'wrap' }}>
+                <div style={{ flex: 1, minWidth: 200 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 5, flexWrap: 'wrap' }}>
+                    <span style={{ background: NAVY, color: WHITE, fontSize: 10, fontWeight: 700, padding: '2px 7px', borderRadius: 4 }}>{req.code}</span>
+                    <OwnerBadge owner={req.owner} />
+                    {req.scoringWeight && <span style={{ background: '#FEF9C3', color: AMBER, fontSize: 10, fontWeight: 700, padding: '2px 6px', borderRadius: 4 }}>{req.scoringWeight}</span>}
+                    {respStatus && <StatusBadge status={respStatus} />}
+                  </div>
+                  <div style={{ fontSize: 14, fontWeight: 700, color: NAVY, marginBottom: 3 }}>{req.title}</div>
+                  {resp && (
+                    <div style={{ fontSize: 11, color: phCount > 0 || unreviewed > 0 ? AMBER : GREEN }}>
+                      {phCount > 0 ? `⚠ ${phCount} gap${phCount !== 1 ? 's' : ''}` : ''}
+                      {phCount > 0 && unreviewed > 0 ? ' · ' : ''}
+                      {unreviewed > 0 ? `${unreviewed} block${unreviewed !== 1 ? 's' : ''} to review` : ''}
+                      {phCount === 0 && unreviewed === 0 ? `✓ ${resp.blocks.length} blocks ready` : ''}
+                    </div>
+                  )}
+                  {errors[req.id] && <div style={{ fontSize: 11, color: RED, background: '#FEE2E2', padding: '4px 8px', borderRadius: 4, marginTop: 4 }}>⚠ {errors[req.id]}</div>}
+                </div>
+                {isWorking && (
+                  <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                    {!resp && !isRes && (
+                      <button onClick={() => generateResponse(req)}
+                        style={{ background: GREEN, color: WHITE, border: 'none', borderRadius: 6, padding: '7px 16px', fontSize: 12, fontWeight: 700, cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                        ✦ Generate response
+                      </button>
+                    )}
+                    {!resp && isRes && (
+                      <button disabled style={{ background: '#CBD5E1', color: WHITE, border: 'none', borderRadius: 6, padding: '7px 16px', fontSize: 12, display: 'flex', gap: 6, alignItems: 'center', whiteSpace: 'nowrap' }}>
+                        <Spinner /> Drafting… (~30 s)
+                      </button>
+                    )}
+                    {resp && !isRes && (
+                      <button onClick={() => onOpenReq(req)}
+                        style={{ background: respStatus === 'approved' ? '#D1FAE5' : BLUE, color: respStatus === 'approved' ? GREEN : WHITE, border: respStatus === 'approved' ? `1px solid ${GREEN}` : 'none', borderRadius: 6, padding: '7px 16px', fontSize: 12, fontWeight: 700, cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                        {respStatus === 'approved' ? '✓ View approved →' : 'Open response →'}
+                      </button>
+                    )}
+                    {resp && isRes && (
+                      <button disabled style={{ background: '#CBD5E1', color: WHITE, border: 'none', borderRadius: 6, padding: '7px 14px', fontSize: 12, display: 'flex', gap: 6, alignItems: 'center' }}>
+                        <Spinner /> Re-drafting…
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+// ── Response screen ───────────────────────────────────────────────────────────
+function ResponseScreen({ req, requirements, reqIdx, buyer, profile, onBack, onNavigate, onReqChanged }) {
+  const [resp, setResp]         = useState(req.response || { blocks: [], status: 'draft', openDependencies: [] })
+  const [generating, setGen]    = useState(false)
+  const [genError, setGenErr]   = useState(null)
+  const [activePhId, setActivePH] = useState(null)
+  const [advancing, setAdv]     = useState(false)
+  const [advError, setAdvErr]   = useState(null)
+
+  function patchBlock(blockKey, updates) {
+    setResp(prev => ({ ...prev, blocks: prev.blocks.map(b => b.key === blockKey ? { ...b, ...updates } : b) }))
+  }
+
+  async function generate() {
+    setGen(true); setGenErr(null)
+    try {
+      const { response } = await rfpRespond(req.id)
+      setResp(response)
+      onReqChanged({ ...req, response })
+    } catch (e) { setGenErr(e.message) }
+    setGen(false)
+  }
+
+  async function handleFillPH(blockKey, phId, value) {
+    const block = resp.blocks.find(b => b.key === blockKey)
+    if (!block) return
+    patchBlock(blockKey, { placeholders: block.placeholders.map(p => p.id === phId ? { ...p, value, filled: true } : p) })
+    await rfpFillBlockPH(req.id, blockKey, phId, value).catch(() => {})
+    setActivePH(null)
+  }
+
+  async function handleMarkReviewed(blockKey, reviewed) {
+    patchBlock(blockKey, { reviewed })
+    await rfpMarkBlockReviewed(req.id, blockKey, reviewed).catch(() => {})
+  }
+
+  async function handleSaveAnswer(blockKey, answer) {
+    patchBlock(blockKey, { answer })
+    await rfpUpdateBlock(req.id, blockKey, answer).catch(() => {})
+  }
+
+  async function handleAdvance() {
     setAdv(true); setAdvErr(null)
     try {
-      const resp = await rfpAdvanceDraftStatus(section.id)
-      setStatus(resp.draft.status)
-      setSectionStatus(resp.sectionStatus || sectionStatus)
-      onSectionChanged({ sectionId: section.id, draft: resp.draft, sectionStatus: resp.sectionStatus })
-      await refreshHistory()
+      const { response: updated } = await rfpAdvanceResponse(req.id)
+      setResp(updated)
+      onReqChanged({ ...req, response: updated })
     } catch (e) { setAdvErr(e.message) }
     setAdv(false)
   }
 
-  async function reopen() {
-    setReop(true)
+  async function handleReopen() {
     try {
-      const resp = await rfpReopenDraft(section.id)
-      setStatus(resp.draft.status); setSectionStatus(resp.sectionStatus)
-      onSectionChanged({ sectionId: section.id, draft: resp.draft, sectionStatus: resp.sectionStatus })
-      await refreshHistory()
+      const { response: updated } = await rfpReopenResponse(req.id)
+      setResp(updated)
+      onReqChanged({ ...req, response: updated })
     } catch {}
-    setReop(false)
   }
 
-  async function doExport() {
-    if (dirty) await save()
-    setExp(true); setExpErr(null)
-    try {
-      let resolvedComp = comp
-      for (const ph of placeholders.filter(p => p.filled)) {
-        resolvedComp = applyToAll(resolvedComp, `{{PH:${ph.id}}}`, ph.value)
-        resolvedComp = applyToAll(resolvedComp, `{{PLACEHOLDER: ${ph.description}}}`, ph.value)
-      }
-      await exportSectionDocx({ buyer, sectionCode: section.code, sectionTitle: section.title, draft: { components: resolvedComp, complianceVerdict: verdict, openDependencies: openDeps } })
-    } catch (e) { setExpErr(e.message) }
-    setExp(false)
-  }
-
-  async function navigateTo(targetSection) {
-    if (dirty) await save()
-    onNavigate(targetSection)
-  }
-
-  const prevSection = currentIdx > 0 ? sections[currentIdx - 1] : null
-  const nextSection = currentIdx < sections.length - 1 ? sections[currentIdx + 1] : null
-
-  const briefFallback = {
-    understanding: [section.buyerChallenges, section.requirements?.map(r => r.text)].flat().filter(Boolean).slice(0, 3).join('; ') || null,
-    approachAndRecommendedOption: section.mandatedResponseStructure?.slice(0, 3).join('; ') || null,
-    deliveryPlan: section.keyDates?.length ? section.keyDates.map(d => `${d.date}: ${d.event}`).join('; ') : section.constraints?.slice(0, 2).join('; ') || null,
-    resourcing: section.namedOwners?.length ? section.namedOwners.map(o => `${o.name} (${o.area})`).join(', ') : null,
-    costs: section.commercialTerms?.slice(0, 2).join('; ') || null,
-    configCustomisationThirdParty: section.considerations?.slice(0, 2).join('; ') || null,
-  }
-
-  const MILESTONES_COLS = [{ key: 'phase', label: 'Phase', w: '15%', rows: 2 }, { key: 'timing', label: 'Timing', w: '15%', rows: 2 }, { key: 'activities', label: 'Activities', w: '45%', rows: 3 }, { key: 'exit', label: 'Exit criteria', w: '25%', rows: 3 }]
-  const TEAM_COLS       = [{ key: 'role', label: 'Role', w: '20%', rows: 2 }, { key: 'responsibility', label: 'Responsibility', w: '55%', rows: 3 }, { key: 'phases', label: 'Phases', w: '25%', rows: 2 }]
-  const GATES_COLS      = [{ key: 'gate', label: 'Gate', w: '20%', rows: 2 }, { key: 'entry', label: 'Entry criteria', w: '40%', rows: 3 }, { key: 'exit', label: 'Exit criteria', w: '40%', rows: 3 }]
-  const RISKS_COLS      = [{ key: 'risk', label: 'Risk', w: '30%', rows: 3 }, { key: 'likelihoodImpact', label: 'L×I', w: '10%', rows: 2 }, { key: 'mitigation', label: 'Mitigation', w: '40%', rows: 3 }, { key: 'owner', label: 'Owner', w: '20%', rows: 2 }]
-  const VERDICTS = ['Complies', 'Partially Complies', 'Does Not Comply']
-  const VCOLS    = { 'Complies': GREEN, 'Partially Complies': AMBER, 'Does Not Comply': RED }
+  const minBlocks     = resp.blocks.filter(b => b.type === 'minimum')
+  const enrBlocks     = resp.blocks.filter(b => b.type === 'enrichment')
+  const totalPH       = resp.blocks.flatMap(b => b.placeholders)
+  const unfilledPH    = totalPH.filter(p => !p.filled)
+  const unreviewedMin = minBlocks.filter(b => !b.reviewed)
+  const canApprove    = unfilledPH.length === 0 && unreviewedMin.length === 0 && resp.status !== 'approved'
+  const navPrev       = reqIdx > 0 ? requirements[reqIdx - 1] : null
+  const navNext       = reqIdx < requirements.length - 1 ? requirements[reqIdx + 1] : null
+  const gapList       = resp.blocks.flatMap(b => b.placeholders.filter(p => !p.filled).map(p => ({ ...p, blockKey: b.key })))
 
   return (
-    <div style={{ fontFamily: 'Inter, Arial, sans-serif', background: BG, minHeight: '100vh' }}>
-      {/* Header */}
-      <div style={{ background: NAVY, padding: '8px 20px', display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-        <button onClick={onBack} style={{ background: 'rgba(255,255,255,0.1)', border: '1px solid rgba(255,255,255,0.2)', borderRadius: 6, color: WHITE, padding: '4px 10px', fontSize: 11, fontWeight: 600, cursor: 'pointer' }}>← Dashboard</button>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-          <button onClick={() => prevSection && navigateTo(prevSection)} disabled={!prevSection}
-            style={{ background: prevSection ? 'rgba(255,255,255,0.12)' : 'transparent', border: '1px solid rgba(255,255,255,0.15)', borderRadius: 4, color: prevSection ? WHITE : 'rgba(255,255,255,0.3)', padding: '3px 8px', fontSize: 13, cursor: prevSection ? 'pointer' : 'not-allowed' }}>‹</button>
-          <span style={{ color: 'rgba(255,255,255,0.5)', fontSize: 11 }}>{currentIdx + 1} / {sections.length}</span>
-          <button onClick={() => nextSection && navigateTo(nextSection)} disabled={!nextSection}
-            style={{ background: nextSection ? 'rgba(255,255,255,0.12)' : 'transparent', border: '1px solid rgba(255,255,255,0.15)', borderRadius: 4, color: nextSection ? WHITE : 'rgba(255,255,255,0.3)', padding: '3px 8px', fontSize: 13, cursor: nextSection ? 'pointer' : 'not-allowed' }}>›</button>
-        </div>
-        <VerdictBadge verdict={verdict} />
-        <span style={{ color: WHITE, fontWeight: 700, fontSize: 14 }}>{section.code} — {section.title}</span>
-        {section.scoringWeight && <span style={{ color: 'rgba(255,255,255,0.45)', fontSize: 11 }}>{section.scoringWeight}</span>}
-        <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center' }}>
-          <StatusBadge status={sectionStatus} />
-          {dirty && <button onClick={save} disabled={saving} style={{ background: 'rgba(255,255,255,0.12)', border: '1px solid rgba(255,255,255,0.2)', borderRadius: 6, color: WHITE, padding: '4px 10px', fontSize: 11, cursor: 'pointer' }}>{saving ? 'Saving…' : 'Save'}</button>}
+    <div style={{ fontFamily: 'Inter, Arial, sans-serif', background: BG, minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
+      <div style={{ background: NAVY, padding: '0 20px', display: 'flex', alignItems: 'center', gap: 12, height: 52, borderBottom: '1px solid rgba(255,255,255,0.08)', flexShrink: 0 }}>
+        <button onClick={onBack} style={{ background: 'rgba(255,255,255,0.1)', border: '1px solid rgba(255,255,255,0.2)', borderRadius: 6, color: WHITE, padding: '4px 11px', fontSize: 11, fontWeight: 600, cursor: 'pointer' }}>← Dashboard</button>
+        <span style={{ fontSize: 12, fontWeight: 700, color: 'rgba(255,255,255,0.6)' }}>{req.code}</span>
+        <span style={{ fontSize: 13, fontWeight: 700, color: WHITE, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{req.title}</span>
+        <OwnerBadge owner={req.owner} />
+        {req.scoringWeight && <span style={{ background: '#FEF9C3', color: AMBER, fontSize: 10, fontWeight: 700, padding: '2px 7px', borderRadius: 4 }}>{req.scoringWeight}</span>}
+        <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+          <button onClick={() => navPrev && onNavigate(navPrev)} disabled={!navPrev}
+            style={{ background: 'rgba(255,255,255,0.1)', border: '1px solid rgba(255,255,255,0.2)', borderRadius: 4, color: WHITE, padding: '4px 9px', fontSize: 11, cursor: navPrev ? 'pointer' : 'not-allowed', opacity: navPrev ? 1 : 0.35 }}>‹</button>
+          <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.4)', padding: '0 2px' }}>{reqIdx + 1}/{requirements.length}</span>
+          <button onClick={() => navNext && onNavigate(navNext)} disabled={!navNext}
+            style={{ background: 'rgba(255,255,255,0.1)', border: '1px solid rgba(255,255,255,0.2)', borderRadius: 4, color: WHITE, padding: '4px 9px', fontSize: 11, cursor: navNext ? 'pointer' : 'not-allowed', opacity: navNext ? 1 : 0.35 }}>›</button>
         </div>
       </div>
-      {/* Disclaimer */}
-      <div style={{ background: '#FEF9C3', borderBottom: `1px solid ${AMBER}`, padding: '5px 24px', fontSize: 11, color: '#92400E', fontWeight: 600 }}>
-        ⚠ Commercial lens — internal draft only. Human approval required before export.
-      </div>
+      <div style={{ display: 'flex', flex: 1, overflow: 'hidden', minHeight: 0 }}>
+        <div style={{ flex: 1, overflowY: 'auto', padding: 20 }}>
+          <div style={{ background: WHITE, border: `1px solid ${BORDER}`, borderRadius: 8, padding: 16, marginBottom: 16 }}>
+            <div style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', color: MUTED, marginBottom: 6 }}>What {buyer || 'the buyer'} asks for</div>
+            <div style={{ fontSize: 13, color: NAVY, lineHeight: 1.6, whiteSpace: 'pre-wrap', maxHeight: 180, overflowY: 'auto' }}>{req.sourceText}</div>
+          </div>
 
-      <div style={{ display: 'flex', maxWidth: 1440, margin: '0 auto' }}>
-        {/* Main editor */}
-        <div style={{ flex: 1, padding: '20px 24px', minWidth: 0 }}>
-          <Block label="Compliance Verdict">
-            <div style={{ display: 'flex', gap: 8 }}>
-              {VERDICTS.map(v => (
-                <button key={v} type="button" onClick={() => { setVerdict(v); setDirty(true) }}
-                  style={{ flex: 1, padding: '8px 0', border: `2px solid ${verdict === v ? VCOLS[v] : BORDER}`, borderRadius: 6, background: verdict === v ? VCOLS[v] + '18' : 'none', color: verdict === v ? VCOLS[v] : MUTED, fontSize: 12, fontWeight: verdict === v ? 700 : 400, cursor: 'pointer' }}>
-                  {v}
-                </button>
-              ))}
+          {!resp.blocks.length && !generating && (
+            <div style={{ background: WHITE, border: `1px solid ${BORDER}`, borderRadius: 8, padding: 24, textAlign: 'center', marginBottom: 16 }}>
+              <div style={{ fontSize: 14, fontWeight: 700, color: NAVY, marginBottom: 6 }}>No response yet</div>
+              <div style={{ fontSize: 12, color: MUTED, marginBottom: 14 }}>Generate a minimum-first response — one block per minimum expectation.</div>
+              <button onClick={generate} style={{ background: GREEN, color: WHITE, border: 'none', borderRadius: 6, padding: '10px 24px', fontSize: 13, fontWeight: 700, cursor: 'pointer' }}>✦ Generate response</button>
+              {genError && <div style={{ color: RED, fontSize: 12, marginTop: 10 }}>⚠ {genError}</div>}
             </div>
-          </Block>
-
-          <ComponentCard n={1} compKey="understanding" label="Understanding of the Challenge"
-            reqCtx={reqCtx.understanding || briefFallback.understanding}
-            placeholders={placeholders} reviewed={!!reviewed.understanding} onMarkReviewed={markReviewed}>
-            {({ mode }) => mode === 'edit'
-              ? <TA value={comp.understanding} onChange={v => set('understanding', v)} rows={5} />
-              : <InlineAnswer text={comp.understanding} placeholders={placeholders} onFillPH={fillPH} activePhId={activePhId} />}
-          </ComponentCard>
-
-          <ComponentCard n={2} compKey="approachAndRecommendedOption" label="Approach & Recommended Option"
-            reqCtx={reqCtx.approachAndRecommendedOption || briefFallback.approachAndRecommendedOption}
-            placeholders={placeholders} reviewed={!!reviewed.approachAndRecommendedOption} onMarkReviewed={markReviewed}>
-            {({ mode }) => mode === 'edit'
-              ? <TA value={comp.approachAndRecommendedOption} onChange={v => set('approachAndRecommendedOption', v)} rows={6} />
-              : <InlineAnswer text={comp.approachAndRecommendedOption} placeholders={placeholders} onFillPH={fillPH} activePhId={activePhId} />}
-          </ComponentCard>
-
-          <ComponentCard n={3} compKey="deliveryPlan" label="Delivery Plan"
-            reqCtx={reqCtx.deliveryPlan || briefFallback.deliveryPlan}
-            placeholders={placeholders} reviewed={!!reviewed.deliveryPlan} onMarkReviewed={markReviewed}>
-            {({ mode }) => (<>
-              <div style={{ marginBottom: 10 }}>
-                <div style={{ fontSize: 10, fontWeight: 700, color: MUTED, marginBottom: 4, textTransform: 'uppercase' }}>Narrative</div>
-                {mode === 'edit'
-                  ? <TA value={comp.deliveryPlan?.narrative} onChange={v => setDP('narrative', v)} rows={3} />
-                  : <InlineAnswer text={comp.deliveryPlan?.narrative} placeholders={placeholders} onFillPH={fillPH} activePhId={activePhId} />}
-              </div>
-              <div style={{ fontSize: 10, fontWeight: 700, color: MUTED, marginBottom: 6, textTransform: 'uppercase' }}>Milestones</div>
-              <InlineTable columns={MILESTONES_COLS} rows={comp.deliveryPlan?.milestones || []} onChange={v => setDP('milestones', v)} />
-            </>)}
-          </ComponentCard>
-
-          <ComponentCard n={4} compKey="domainComponent" label="Domain Component"
-            reqCtx={reqCtx.domainComponent}
-            placeholders={placeholders} reviewed={!!reviewed.domainComponent} onMarkReviewed={markReviewed}>
-            {({ mode }) => (<>
-              <div style={{ marginBottom: 8 }}>
-                <div style={{ fontSize: 10, fontWeight: 700, color: MUTED, marginBottom: 4, textTransform: 'uppercase' }}>Title</div>
-                <input value={comp.domainComponent?.title || ''} onChange={e => setDC('title', e.target.value)} style={{ width: '100%', padding: '7px 10px', border: `1px solid ${BORDER}`, borderRadius: 6, fontSize: 13, boxSizing: 'border-box', fontFamily: 'inherit' }} />
-              </div>
-              {mode === 'edit'
-                ? <TA value={comp.domainComponent?.content} onChange={v => setDC('content', v)} rows={5} />
-                : <InlineAnswer text={comp.domainComponent?.content} placeholders={placeholders} onFillPH={fillPH} activePhId={activePhId} />}
-            </>)}
-          </ComponentCard>
-
-          <ComponentCard n={5} compKey="resourcing" label="Resourcing"
-            reqCtx={reqCtx.resourcing || briefFallback.resourcing}
-            placeholders={placeholders} reviewed={!!reviewed.resourcing} onMarkReviewed={markReviewed}>
-            {({ mode }) => (<>
-              <div style={{ marginBottom: 10 }}>
-                <div style={{ fontSize: 10, fontWeight: 700, color: MUTED, marginBottom: 6, textTransform: 'uppercase' }}>Delivery team</div>
-                <InlineTable columns={TEAM_COLS} rows={comp.resourcing?.deliveryTeam || []} onChange={v => setRes('deliveryTeam', v)} />
-              </div>
-              <div style={{ fontSize: 10, fontWeight: 700, color: MUTED, marginBottom: 4, textTransform: 'uppercase' }}>Buyer-side commitment required</div>
-              {mode === 'edit'
-                ? <TA value={comp.resourcing?.buyerCommitment} onChange={v => setRes('buyerCommitment', v)} rows={3} />
-                : <InlineAnswer text={comp.resourcing?.buyerCommitment} placeholders={placeholders} onFillPH={fillPH} activePhId={activePhId} />}
-            </>)}
-          </ComponentCard>
-
-          <ComponentCard n={6} compKey="acceptanceGates" label="Acceptance & Quality Gates"
-            reqCtx={reqCtx.acceptanceGates} placeholders={placeholders} reviewed={!!reviewed.acceptanceGates} onMarkReviewed={markReviewed}>
-            {() => <InlineTable columns={GATES_COLS} rows={comp.acceptanceGates || []} onChange={setF('acceptanceGates')} />}
-          </ComponentCard>
-
-          <ComponentCard n={7} compKey="preWork" label="Pre-Work Required by Buyer"
-            reqCtx={reqCtx.preWork} placeholders={placeholders} reviewed={!!reviewed.preWork} onMarkReviewed={markReviewed}>
-            {() => <StringList items={comp.preWork || []} onChange={setF('preWork')} />}
-          </ComponentCard>
-
-          <ComponentCard n={8} compKey="assumptions" label="Assumptions, Limitations & Dependencies"
-            reqCtx={reqCtx.assumptions} placeholders={placeholders} reviewed={!!reviewed.assumptions} onMarkReviewed={markReviewed}>
-            {() => <StringList items={comp.assumptions || []} onChange={setF('assumptions')} />}
-          </ComponentCard>
-
-          <ComponentCard n={9} compKey="configCustomisationThirdParty" label="Configuration / Customisation / Third-Party"
-            reqCtx={reqCtx.configCustomisationThirdParty || briefFallback.configCustomisationThirdParty}
-            placeholders={placeholders} reviewed={!!reviewed.configCustomisationThirdParty} onMarkReviewed={markReviewed}>
-            {({ mode }) => mode === 'edit'
-              ? <TA value={comp.configCustomisationThirdParty} onChange={v => set('configCustomisationThirdParty', v)} rows={5} />
-              : <InlineAnswer text={comp.configCustomisationThirdParty} placeholders={placeholders} onFillPH={fillPH} activePhId={activePhId} />}
-          </ComponentCard>
-
-          <ComponentCard n={10} compKey="costs" label="Costs & Fit-Gaps"
-            reqCtx={reqCtx.costs || briefFallback.costs}
-            placeholders={placeholders} reviewed={!!reviewed.costs} onMarkReviewed={markReviewed}>
-            {({ mode }) => mode === 'edit'
-              ? <TA value={comp.costs} onChange={v => set('costs', v)} rows={4} yellow />
-              : <InlineAnswer text={comp.costs} placeholders={placeholders} onFillPH={fillPH} activePhId={activePhId} />}
-          </ComponentCard>
-
-          <ComponentCard n={11} compKey="risks" label="Risks & Mitigations"
-            reqCtx={reqCtx.risks} placeholders={placeholders} reviewed={!!reviewed.risks} onMarkReviewed={markReviewed}>
-            {() => <InlineTable columns={RISKS_COLS} rows={comp.risks || []} onChange={setF('risks')} />}
-          </ComponentCard>
-
-          {openDeps.length > 0 && (
-            <Block label="Open Dependencies / Clarification Questions">
-              <StringList items={openDeps} onChange={setOpenDeps} />
-            </Block>
           )}
-        </div>
-
-        {/* Sidebar */}
-        <div style={{ width: 286, flexShrink: 0, padding: '20px 16px 20px 0' }}>
-          <div style={{ position: 'sticky', top: 20, display: 'flex', flexDirection: 'column', gap: 10, maxHeight: 'calc(100vh - 100px)', overflowY: 'auto' }}>
-            {/* Gaps navigator */}
-            <div style={{ background: WHITE, border: `1px solid ${BORDER}`, borderRadius: 8, overflow: 'hidden', flexShrink: 0 }}>
-              <div style={{ padding: '8px 12px', borderBottom: `1px solid ${BORDER}`, background: '#FAFBFC' }}>
-                <div style={{ fontSize: 10, fontWeight: 700, color: NAVY, textTransform: 'uppercase', letterSpacing: '0.04em' }}>Gaps to fill</div>
-                <div style={{ fontSize: 11, color: unfilledCount > 0 ? AMBER : GREEN, marginTop: 2, fontWeight: 600 }}>{unfilledCount > 0 ? `${unfilledCount} need input` : '✓ All filled'}</div>
-              </div>
-              <div style={{ padding: '10px 12px', maxHeight: 270, overflowY: 'auto' }}>
-                {placeholders.length === 0
-                  ? <div style={{ fontSize: 12, color: GREEN, fontStyle: 'italic' }}>No gaps — ready to review</div>
-                  : placeholders.map(ph => (
-                    <div key={ph.id} style={{ marginBottom: 8, display: 'flex', alignItems: 'flex-start', gap: 6 }}>
-                      <span style={{ fontSize: 13, color: ph.filled ? GREEN : AMBER, flexShrink: 0, lineHeight: 1.2, marginTop: 1 }}>{ph.filled ? '✓' : '○'}</span>
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ fontSize: 11, color: ph.filled ? MUTED : '#92400E', fontWeight: ph.filled ? 400 : 600, lineHeight: 1.3 }}>{ph.description}</div>
-                        {ph.filled && <div style={{ fontSize: 10, color: MUTED, marginTop: 1, wordBreak: 'break-word' }}>{ph.value}</div>}
-                        {!ph.filled && (
-                          <button type="button" onClick={() => scrollToChip(ph.id)}
-                            style={{ marginTop: 3, fontSize: 10, color: BLUE, background: 'none', border: 'none', padding: 0, cursor: 'pointer', textDecoration: 'underline' }}>
-                            ↗ Jump to gap
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                  ))}
-              </div>
+          {generating && (
+            <div style={{ background: WHITE, border: `1px solid ${BORDER}`, borderRadius: 8, padding: 24, textAlign: 'center', marginBottom: 16, display: 'flex', gap: 10, justifyContent: 'center', alignItems: 'center', color: MUTED }}>
+              <Spinner /> Generating minimum-first response… (30–90 s)
             </div>
+          )}
 
-            {/* Review progress */}
-            <div style={{ background: WHITE, border: `1px solid ${BORDER}`, borderRadius: 8, padding: '10px 12px', flexShrink: 0 }}>
-              <div style={{ fontSize: 10, fontWeight: 700, color: NAVY, textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: 8 }}>Review progress</div>
-              {COMP_NAMES.map(k => (
-                <div key={k} style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
-                  <span style={{ fontSize: 11, color: reviewed[k] ? GREEN : '#CBD5E1' }}>{reviewed[k] ? '✓' : '○'}</span>
-                  <span style={{ fontSize: 11, color: reviewed[k] ? NAVY : MUTED, fontWeight: reviewed[k] ? 600 : 400, flex: 1 }}>{COMP_LABELS[k]}</span>
-                </div>
+          {minBlocks.length > 0 && (
+            <>
+              <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', color: MUTED, marginBottom: 10, letterSpacing: '0.04em' }}>Minimum requirements ({minBlocks.length} blocks)</div>
+              {minBlocks.map((block, i) => (
+                <BlockCard key={block.key} n={i + 1} block={block}
+                  onFillPH={handleFillPH} onMarkReviewed={handleMarkReviewed} onSaveAnswer={handleSaveAnswer} activePhId={activePhId} />
               ))}
-              <div style={{ marginTop: 8, paddingTop: 8, borderTop: `1px solid ${BORDER}`, fontSize: 11, color: allReviewed ? GREEN : MUTED, fontWeight: 600 }}>
-                {COMP_NAMES.filter(k => reviewed[k]).length} / {COMP_NAMES.length} reviewed
-              </div>
-            </div>
+            </>
+          )}
+          {enrBlocks.length > 0 && (
+            <>
+              <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', color: MUTED, marginBottom: 10, marginTop: 20, letterSpacing: '0.04em' }}>Enrichment blocks ({enrBlocks.length})</div>
+              {enrBlocks.map((block, i) => (
+                <BlockCard key={block.key} n={i + 1} block={block}
+                  onFillPH={handleFillPH} onMarkReviewed={handleMarkReviewed} onSaveAnswer={handleSaveAnswer} activePhId={activePhId} />
+              ))}
+            </>
+          )}
 
-            {/* Status flow */}
-            <div style={{ background: WHITE, border: `1px solid ${BORDER}`, borderRadius: 8, padding: '12px', flexShrink: 0 }}>
-              <div style={{ marginBottom: 8 }}>
-                <div style={{ fontSize: 10, fontWeight: 700, color: MUTED, textTransform: 'uppercase', marginBottom: 4 }}>Status</div>
-                <StatusBadge status={sectionStatus} />
-              </div>
-              <div style={{ fontSize: 11, color: MUTED, lineHeight: 1.5, marginBottom: 10 }}>
-                {sectionStatus === 'drafted'   && 'Fill gaps and mark each component reviewed. Then send for review.'}
-                {sectionStatus === 'in_review' && 'Under review. Approve once all components are reviewed and all gaps are filled.'}
-                {sectionStatus === 'approved'  && 'Approved and export-ready.'}
-                {sectionStatus === 'reopened'  && 'Reopened for further editing.'}
-              </div>
-              {advErr && <div style={{ marginBottom: 8, fontSize: 11, color: RED, background: '#FEE2E2', padding: '5px 8px', borderRadius: 6 }}>{advErr}</div>}
-              {status === 'in_review' && !canAdvanceToApprove && (
-                <div style={{ marginBottom: 8, fontSize: 11, color: AMBER, background: '#FEF9C3', padding: '5px 8px', borderRadius: 6 }}>
-                  {unfilledCount > 0 && <div>⚠ {unfilledCount} gap{unfilledCount !== 1 ? 's' : ''} still to fill.</div>}
-                  {!allReviewed && <div>⚠ {COMP_NAMES.filter(k => !reviewed[k]).length} component{COMP_NAMES.filter(k => !reviewed[k]).length !== 1 ? 's' : ''} not reviewed.</div>}
-                </div>
-              )}
-              {sectionStatus !== 'approved' && (
-                <button type="button" onClick={advance}
-                  disabled={advancing || (status === 'in_review' && !canAdvanceToApprove)}
-                  style={{ width: '100%', background: advancing || (status === 'in_review' && !canAdvanceToApprove) ? '#CBD5E1' : (sectionStatus === 'in_review' ? GREEN : BLUE), color: WHITE, border: 'none', borderRadius: 6, padding: '9px 0', fontSize: 12, fontWeight: 700, cursor: advancing || (status === 'in_review' && !canAdvanceToApprove) ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, marginBottom: 6 }}>
-                  {advancing ? <><Spinner /> Updating…</> : sectionStatus === 'in_review' ? '✓ Approve Response' : 'Mark for Review'}
-                </button>
-              )}
-              {sectionStatus === 'approved' && (
+          {resp.openDependencies?.length > 0 && (
+            <div style={{ background: '#FFFBEB', border: `1px solid ${AMBER}`, borderRadius: 8, padding: 14, marginTop: 16 }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: AMBER, textTransform: 'uppercase', marginBottom: 6 }}>Open dependencies</div>
+              <ul style={{ margin: 0, paddingLeft: 18 }}>
+                {resp.openDependencies.map((d, i) => <li key={i} style={{ fontSize: 12, color: '#92400E', lineHeight: 1.5 }}>{d}</li>)}
+              </ul>
+            </div>
+          )}
+
+          {resp.blocks.length > 0 && (
+            <div style={{ background: WHITE, border: `1px solid ${BORDER}`, borderRadius: 8, padding: '14px 18px', marginTop: 20, display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap' }}>
+              {resp.status !== 'approved' && (
                 <>
-                  <button type="button" onClick={doExport} disabled={exporting}
-                    style={{ width: '100%', background: exporting ? '#CBD5E1' : NAVY, color: WHITE, border: 'none', borderRadius: 6, padding: '9px 0', fontSize: 12, fontWeight: 700, cursor: exporting ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, marginBottom: 6 }}>
-                    {exporting ? <><Spinner /> Generating…</> : '⬇ Export to .docx'}
+                  <button onClick={handleAdvance} disabled={!canApprove || advancing}
+                    style={{ background: canApprove && !advancing ? GREEN : '#CBD5E1', color: WHITE, border: 'none', borderRadius: 6, padding: '9px 20px', fontSize: 13, fontWeight: 700, cursor: canApprove && !advancing ? 'pointer' : 'not-allowed' }}>
+                    {advancing ? 'Advancing…' : resp.status === 'in_review' ? 'Approve response ✓' : 'Submit for review →'}
                   </button>
-                  <button type="button" onClick={reopen} disabled={reopening}
-                    style={{ width: '100%', background: 'none', border: `1px solid ${AMBER}`, color: AMBER, borderRadius: 6, padding: '7px 0', fontSize: 11, fontWeight: 600, cursor: reopening ? 'not-allowed' : 'pointer' }}>
-                    {reopening ? 'Reopening…' : '↩ Reopen for editing'}
+                  {advError && <span style={{ fontSize: 12, color: RED }}>{advError}</span>}
+                  {!canApprove && !advError && (
+                    <span style={{ fontSize: 12, color: MUTED }}>
+                      {unfilledPH.length > 0 ? `${unfilledPH.length} gap${unfilledPH.length !== 1 ? 's' : ''} to fill` : ''}
+                      {unfilledPH.length > 0 && unreviewedMin.length > 0 ? ' · ' : ''}
+                      {unreviewedMin.length > 0 ? `${unreviewedMin.length} block${unreviewedMin.length !== 1 ? 's' : ''} to review` : ''}
+                    </span>
+                  )}
+                </>
+              )}
+              {resp.status === 'approved' && (
+                <>
+                  <span style={{ fontSize: 13, fontWeight: 700, color: GREEN }}>✓ Response approved</span>
+                  <button onClick={handleReopen} style={{ background: 'none', border: `1px solid ${MUTED}`, color: MUTED, borderRadius: 6, padding: '6px 14px', fontSize: 12, cursor: 'pointer' }}>↩ Reopen</button>
+                  <button onClick={() => exportResponseDocx({ req, resp, buyer })}
+                    style={{ background: NAVY, color: WHITE, border: 'none', borderRadius: 6, padding: '8px 18px', fontSize: 12, fontWeight: 700, cursor: 'pointer', marginLeft: 'auto' }}>
+                    ⬇ Export .docx
                   </button>
-                  {exportErr && <div style={{ marginTop: 6, color: RED, fontSize: 11 }}>{exportErr}</div>}
                 </>
               )}
             </div>
+          )}
+        </div>
 
-            {/* History */}
-            {history.length > 0 && (
-              <div style={{ background: WHITE, border: `1px solid ${BORDER}`, borderRadius: 8, overflow: 'hidden', flexShrink: 0 }}>
-                <div style={{ padding: '8px 12px', borderBottom: `1px solid ${BORDER}`, background: '#FAFBFC', fontSize: 10, fontWeight: 700, color: NAVY, textTransform: 'uppercase', letterSpacing: '0.04em' }}>History</div>
-                <div style={{ padding: '8px 12px', maxHeight: 260, overflowY: 'auto' }}>
-                  {history.slice(0, 25).map((ev, i) => {
-                    const m = EVENT_META[ev.type] || { icon: '·', label: ev.type }
-                    return (
-                      <div key={ev.id || i} style={{ display: 'flex', gap: 7, marginBottom: 10, alignItems: 'flex-start' }}>
-                        <span style={{ fontSize: 14, flexShrink: 0, lineHeight: 1.3 }}>{m.icon}</span>
-                        <div>
-                          <div style={{ fontSize: 11, fontWeight: 600, color: NAVY }}>{ev.summary}</div>
-                          <div style={{ fontSize: 10, color: MUTED }}>{timeAgo(ev.createdAt)} · {ev.actor}</div>
-                        </div>
-                      </div>
-                    )
-                  })}
-                </div>
+        <div style={{ width: 260, borderLeft: `1px solid ${BORDER}`, background: WHITE, overflowY: 'auto', padding: 16, flexShrink: 0 }}>
+          <div style={{ marginBottom: 16 }}>
+            <div style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', color: MUTED, marginBottom: 6 }}>Status</div>
+            <StatusBadge status={resp.status || 'draft'} />
+          </div>
+          <div style={{ marginBottom: 16 }}>
+            <div style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', color: MUTED, marginBottom: 8 }}>
+              Gaps to fill {gapList.length > 0 && <span style={{ background: AMBER, color: WHITE, borderRadius: 8, padding: '1px 6px', fontSize: 9, marginLeft: 4 }}>{gapList.length}</span>}
+            </div>
+            {gapList.length === 0
+              ? <div style={{ fontSize: 12, color: GREEN }}>✓ No gaps remaining</div>
+              : gapList.map(ph => (
+                  <div key={ph.id} style={{ marginBottom: 8, padding: '6px 10px', background: '#FFFBEB', border: `1px solid #FDE68A`, borderRadius: 6 }}>
+                    <div style={{ fontSize: 11, fontWeight: 600, color: '#92400E', marginBottom: 3 }}>{ph.description}</div>
+                    <button onClick={() => {
+                        setActivePH(ph.id)
+                        document.getElementById(`block-${ph.blockKey}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+                      }}
+                      style={{ fontSize: 10, color: BLUE, background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}>↗ Jump to block</button>
+                  </div>
+                ))
+            }
+          </div>
+          <div>
+            <div style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', color: MUTED, marginBottom: 8 }}>
+              Block review {unreviewedMin.length === 0 && minBlocks.length > 0 && <span style={{ color: GREEN }}>✓</span>}
+            </div>
+            {minBlocks.map((b, i) => (
+              <div key={b.key} style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 5 }}>
+                <span style={{ fontSize: 13, color: b.reviewed ? GREEN : BORDER }}>●</span>
+                <span style={{ fontSize: 12, color: b.reviewed ? GREEN : MUTED, fontWeight: b.reviewed ? 600 : 400 }}>Block {i + 1}</span>
               </div>
-            )}
+            ))}
           </div>
         </div>
       </div>
@@ -990,78 +1166,85 @@ function DraftScreen({ section, sections, currentIdx, buyer, onBack, onNavigate,
 const SESSION_KEY = 'rfp_pack_id'
 
 export default function RFPModule({ onBack }) {
-  const [screen, setScreen]           = useState('setup')
-  const [pack, setPack]               = useState(null)
-  const [sections, setSections]       = useState([])
-  const [currentSection, setCurrent]  = useState(null)
-  const [currentIdx, setCurrentIdx]   = useState(0)
-  const [recovering, setRecovering]   = useState(false)
+  const [screen, setScreen]             = useState('setup')
+  const [pack, setPack]                 = useState(null)
+  const [profile, setProfile]           = useState(null)
+  const [requirements, setRequirements] = useState([])
+  const [currentReq, setCurrentReq]     = useState(null)
+  const [currentIdx, setCurrentIdx]     = useState(0)
+  const [recovering, setRecovering]     = useState(false)
 
-  // On mount: if a packId was stored (e.g. after refresh or navigating to RAI Home),
-  // re-fetch the pack from the server and restore the dashboard without losing work.
   useEffect(() => {
     const storedId = sessionStorage.getItem(SESSION_KEY)
     if (!storedId) return
     setRecovering(true)
-    rfpGetPack(storedId)
-      .then(p => { setPack(p); setSections(p.sections || []); setScreen('dashboard') })
-      .catch(() => sessionStorage.removeItem(SESSION_KEY))
-      .finally(() => setRecovering(false))
+    Promise.all([
+      rfpGetPack(storedId),
+      rfpGetProfile(storedId).catch(() => null),
+      rfpGetRequirements(storedId).catch(() => ({ requirements: [] })),
+    ]).then(([packData, profileData, reqData]) => {
+      setPack(packData)
+      if (profileData?.profile) setProfile(profileData.profile)
+      else if (profileData && !profileData.error) setProfile(profileData)
+      const reqs = reqData?.requirements ?? []
+      setRequirements(reqs)
+      if (reqs.length > 0) {
+        setScreen(reqs.every(r => r.ownerConfirmed) ? 'dashboard' : 'mapping')
+      } else {
+        setScreen('profile')
+      }
+    })
+    .catch(() => sessionStorage.removeItem(SESSION_KEY))
+    .finally(() => setRecovering(false))
   }, [])
 
-  function handlePack(p) {
-    sessionStorage.setItem(SESSION_KEY, p.id)
-    setPack(p); setSections(p.sections || []); setScreen('dashboard')
-  }
-
+  function handlePack(p)         { sessionStorage.setItem(SESSION_KEY, p.id); setPack(p); setScreen('profile') }
+  function handleProfile(p)      { setProfile(p); setScreen('decompose') }
+  function handleRequirements(r) { setRequirements(r); setScreen('mapping') }
+  function handleMappingDone(r)  { setRequirements(r); setScreen('dashboard') }
   function handleReset() {
     sessionStorage.removeItem(SESSION_KEY)
-    setPack(null); setSections([]); setScreen('setup')
+    setPack(null); setProfile(null); setRequirements([]); setCurrentReq(null); setScreen('setup')
   }
 
-  function updateSection(changed) {
-    // changed: { sectionId, draft?, sectionStatus? }
-    setSections(prev => prev.map(s => s.id === changed.sectionId ? {
-      ...s,
-      ...(changed.draft ? { draft: changed.draft } : {}),
-      ...(changed.sectionStatus ? { status: changed.sectionStatus } : {}),
-    } : s))
-    setCurrent(prev => prev && prev.id === changed.sectionId ? {
-      ...prev,
-      ...(changed.draft ? { draft: changed.draft } : {}),
-      ...(changed.sectionStatus ? { status: changed.sectionStatus } : {}),
-    } : prev)
+  function openReq(req) {
+    const latest = requirements.find(r => r.id === req.id) || req
+    const idx    = requirements.findIndex(r => r.id === latest.id)
+    setCurrentReq(latest); setCurrentIdx(idx >= 0 ? idx : 0); setScreen('respond')
   }
 
-  function openSection(section) {
-    const latestSections = sections.length ? sections : [section]
-    const latest  = latestSections.find(s => s.id === section.id) || section
-    const idx     = latestSections.findIndex(s => s.id === latest.id)
-    setCurrent(latest)
-    setCurrentIdx(idx >= 0 ? idx : 0)
-    setScreen('draft')
-  }
-
-  function handleNavigate(targetSection) {
-    const latest = sections.find(s => s.id === targetSection.id) || targetSection
-    const idx    = sections.findIndex(s => s.id === latest.id)
-    if (latest.draft) {
-      setCurrent(latest)
-      setCurrentIdx(idx >= 0 ? idx : 0)
-      // screen stays 'draft' — key on currentSection.id forces remount
+  function handleNavigate(targetReq) {
+    const latest = requirements.find(r => r.id === targetReq.id) || targetReq
+    const idx    = requirements.findIndex(r => r.id === latest.id)
+    if (latest.response) {
+      setCurrentReq(latest); setCurrentIdx(idx >= 0 ? idx : 0)
     } else {
       setScreen('dashboard')
     }
   }
 
+  function handleReqChanged(updated) {
+    setRequirements(prev => prev.map(r => r.id === updated.id ? updated : r))
+    setCurrentReq(updated)
+  }
+
+  const STEPS = [['profile','Profile'],['decompose','Decompose'],['mapping','Mapping'],['dashboard','Dashboard']]
+
   return (
     <div style={{ fontFamily: 'Inter, Arial, sans-serif', background: BG, minHeight: '100vh' }}>
-      {screen !== 'draft' && (
+      {screen !== 'respond' && (
         <div style={{ background: NAVY, padding: '0 24px', display: 'flex', alignItems: 'center', gap: 14, height: 52, borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
           <button onClick={onBack} style={{ background: 'rgba(255,255,255,0.1)', border: '1px solid rgba(255,255,255,0.18)', borderRadius: 6, color: WHITE, padding: '4px 12px', fontSize: 11, fontWeight: 600, cursor: 'pointer' }}>← RAI Home</button>
           <span style={{ fontSize: 15, fontWeight: 700, color: WHITE }}>RFP Response Drafter</span>
           <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.4)' }}>Commercial lens</span>
-          {pack && screen === 'dashboard' && <span style={{ fontSize: 12, color: 'rgba(255,255,255,0.5)' }}>/ {pack.buyer}</span>}
+          {pack && (screen === 'dashboard' || screen === 'mapping') && <span style={{ fontSize: 12, color: 'rgba(255,255,255,0.5)' }}>/ {pack.buyer}</span>}
+          {pack && (
+            <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center' }}>
+              {STEPS.map(([s, label]) => (
+                <span key={s} style={{ fontSize: 11, fontWeight: 600, color: screen === s ? WHITE : 'rgba(255,255,255,0.3)' }}>{label}</span>
+              ))}
+            </div>
+          )}
         </div>
       )}
       {recovering && (
@@ -1069,28 +1252,33 @@ export default function RFPModule({ onBack }) {
           <Spinner /> Restoring your session…
         </div>
       )}
-      {!recovering && screen === 'setup' && (
-        <SetupScreen onPack={handlePack} />
+      {!recovering && screen === 'setup'     && <SetupScreen onPack={handlePack} />}
+      {!recovering && screen === 'profile'   && pack && <ProfileScreen pack={pack} onProfile={handleProfile} />}
+      {!recovering && screen === 'decompose' && pack && <DecomposeScreen pack={pack} onRequirements={handleRequirements} />}
+      {!recovering && screen === 'mapping'   && pack && requirements.length > 0 && (
+        <MappingScreen pack={pack} requirements={requirements} onDone={handleMappingDone} />
       )}
       {!recovering && screen === 'dashboard' && pack && (
         <DashboardScreen
           pack={pack}
-          sections={sections}
-          onSectionsChange={setSections}
-          onOpenSection={openSection}
+          profile={profile}
+          requirements={requirements}
+          onRequirementsChange={setRequirements}
+          onOpenReq={openReq}
           onReset={handleReset}
         />
       )}
-      {screen === 'draft' && currentSection && (
-        <DraftScreen
-          key={currentSection.id}
-          section={currentSection}
-          sections={sections}
-          currentIdx={currentIdx}
+      {screen === 'respond' && currentReq && (
+        <ResponseScreen
+          key={currentReq.id}
+          req={currentReq}
+          requirements={requirements}
+          reqIdx={currentIdx}
           buyer={pack?.buyer}
+          profile={profile}
           onBack={() => setScreen('dashboard')}
           onNavigate={handleNavigate}
-          onSectionChanged={updateSection}
+          onReqChanged={handleReqChanged}
         />
       )}
     </div>

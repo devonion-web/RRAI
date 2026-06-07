@@ -11,7 +11,12 @@ import {
   saveDraft, updateDraft, advanceDraftStatus, reopenDraft,
   fillPlaceholder, markComponentReviewed,
   appendAuditEvent, getAuditEvents, getRevisions, saveRevision,
-  type DraftComponents, type Placeholder,
+  saveProfile, getProfile,
+  saveRequirements, getRequirements, getRequirement, updateRequirementOwnership,
+  saveResponse, getResponse, updateBlockAnswer, fillBlockPlaceholder, setBlockReviewed,
+  advanceResponseStatus, reopenResponse,
+  type DraftComponents, type Placeholder, type RequirementOwner, type ResponseBlock,
+  type CrossCuttingConstraint,
 } from "../lib/bidPackStore";
 import { parseExcelForRequirements } from "../lib/xlsxParser";
 
@@ -497,6 +502,328 @@ router.get("/rfp/sections/:id/audit", (req, res): void => {
 
 router.get("/rfp/sections/:id/revisions", (req, res): void => {
   res.json({ revisions: getRevisions(req.params.id) });
+});
+
+// ── Engagement profile ────────────────────────────────────────────────────────
+
+router.get("/rfp/packs/:id/profile", (req, res): void => {
+  const profile = getProfile(req.params.id);
+  if (!profile) { res.status(404).json({ error: "Profile not found" }); return; }
+  res.json({ profile });
+});
+
+router.post("/rfp/packs/:id/profile", (req, res): void => {
+  const { ourRole, primePartner, ourRemit, otherParties } = req.body as {
+    ourRole?: string; primePartner?: string; ourRemit?: string[]; otherParties?: string[];
+  };
+  if (!ourRole || !primePartner || !Array.isArray(ourRemit)) {
+    res.status(400).json({ error: "ourRole, primePartner, and ourRemit are required" }); return;
+  }
+  const profile = saveProfile(req.params.id, {
+    ourRole, primePartner, ourRemit, otherParties: otherParties ?? [],
+  });
+  if (!profile) { res.status(404).json({ error: "Pack not found" }); return; }
+  appendAuditEvent(req.params.id, null, "profile_saved",
+    `Engagement profile saved: RR as ${ourRole}, prime = ${primePartner}`, "user");
+  res.json({ profile });
+});
+
+// ── Decompose (SSE) ───────────────────────────────────────────────────────────
+
+router.post("/rfp/packs/:id/decompose", async (req, res): Promise<void> => {
+  const pack    = getPack(req.params.id);
+  if (!pack) { res.status(404).json({ error: "Pack not found" }); return; }
+  const profile = getProfile(req.params.id);
+  if (!profile) { res.status(400).json({ error: "Save an engagement profile first" }); return; }
+
+  res.setHeader("Content-Type",      "text/event-stream");
+  res.setHeader("Cache-Control",     "no-cache");
+  res.setHeader("Connection",        "keep-alive");
+  res.setHeader("X-Accel-Buffering", "no");
+  res.flushHeaders();
+
+  const keepAlive = setInterval(() => res.write(": keepalive\n\n"), 15_000);
+  const finish    = (payload: Record<string, unknown>) => {
+    clearInterval(keepAlive);
+    res.write(`data: ${JSON.stringify(payload)}\n\n`);
+    res.end();
+  };
+
+  req.log.info({ packId: pack.id }, "rfp: decomposing bid document");
+
+  try {
+    const { system: rawSystem, userTemplate } = parsePromptFile(readPrompt("decompose.md"));
+    const userContent = rawSystem   // decompose.md has no SYSTEM/USER split — entire file is context
+      ? userTemplate
+        .replace("{{BUYER_NAME}}",          pack.buyer)
+        .replace("{{ENGAGEMENT_PROFILE}}",  JSON.stringify({ ourRole: profile.ourRole, primePartner: profile.primePartner, ourRemit: profile.ourRemit, otherParties: profile.otherParties }, null, 2))
+        .replace("{{DOCUMENT_TEXT}}",       pack.parsedContent)
+      : "";
+
+    const system = rawSystem ||
+      `You are RRAI, Risk Rising's bid intelligence platform. Decompose the RFP document into structured requirements. Output JSON only.`;
+    const user   = userContent ||
+      `Buyer: ${pack.buyer}\nEngagement profile: ${JSON.stringify({ ourRole: profile.ourRole, primePartner: profile.primePartner, ourRemit: profile.ourRemit }, null, 2)}\n\nDocument:\n${pack.parsedContent}`;
+
+    type RawReq = {
+      code: string; order: number; title: string; sourceText: string;
+      scoringWeight: string | null; minimumExpectations: string[];
+      considerations: string[]; mandatedStructure: string | null;
+      owner: string; ownerRationale: string; parentId: string | null;
+    };
+    type DecomposeResult = {
+      crossCuttingConstraints: Array<{ type: string; text: string }>;
+      requirements: RawReq[];
+    };
+
+    let result: DecomposeResult | null = null;
+    for (const maxTokens of [16_000, 32_000, 64_000]) {
+      try {
+        result = await callClaudeJSON<DecomposeResult>(system, user, { maxTokens });
+        break;
+      } catch (err) {
+        const msg = (err as Error).message;
+        if (msg.includes("truncated") && maxTokens < 64_000) { continue; }
+        throw err;
+      }
+    }
+    if (!result) throw new Error("Decompose: no output after retry");
+
+    const VALID_OWNERS = new Set(["RR", "LogicGate", "shared", "M&S"]);
+    const crossCuttingConstraints: CrossCuttingConstraint[] = (Array.isArray(result.crossCuttingConstraints) ? result.crossCuttingConstraints : []).map((c) => ({
+      type: (["timeline","module","integration","commercial","other"].includes(c.type) ? c.type : "other") as CrossCuttingConstraint["type"],
+      text: String(c.text ?? ""),
+    }));
+
+    const rawReqs = Array.isArray(result.requirements) ? result.requirements : [];
+    const requirements = saveRequirements(req.params.id, rawReqs.map((r, i) => ({
+      code:                  r.code    ?? `REQ${i + 1}`,
+      order:                 r.order   ?? (i + 1),
+      title:                 r.title   ?? "",
+      sourceText:            r.sourceText ?? "",
+      scoringWeight:         r.scoringWeight ?? null,
+      minimumExpectations:   Array.isArray(r.minimumExpectations) ? r.minimumExpectations : [],
+      considerations:        Array.isArray(r.considerations) ? r.considerations : [],
+      mandatedStructure:     r.mandatedStructure ?? null,
+      owner:                 (VALID_OWNERS.has(r.owner) ? r.owner : "shared") as RequirementOwner,
+      ownerRationale:        r.ownerRationale ?? "",
+      ownerConfirmed:        false,
+      parentId:              r.parentId ?? null,
+      crossCuttingConstraints,
+    })));
+
+    appendAuditEvent(pack.id, null, "decomposed",
+      `Decomposed ${requirements.length} requirements from ${pack.buyer} bid`, "RRAI");
+    req.log.info({ packId: pack.id, count: requirements.length }, "rfp: decompose complete");
+    finish({ requirements, crossCuttingConstraints });
+  } catch (err) {
+    req.log.error({ err }, "rfp: decompose failed");
+    finish({ error: (err as Error).message });
+  }
+});
+
+// ── Requirements ──────────────────────────────────────────────────────────────
+
+router.get("/rfp/packs/:id/requirements", (req, res): void => {
+  const pack = getPack(req.params.id);
+  if (!pack) { res.status(404).json({ error: "Pack not found" }); return; }
+  const reqs = getRequirements(req.params.id);
+  const withResponse = reqs.map((r) => ({ ...r, response: getResponse(r.id) ?? null }));
+  res.json({ requirements: withResponse });
+});
+
+router.patch("/rfp/requirements/:id/ownership", (req, res): void => {
+  const { owner, ownerRationale, ownerConfirmed } = req.body as {
+    owner?: string; ownerRationale?: string; ownerConfirmed?: boolean;
+  };
+  const req_ = getRequirement(req.params.id);
+  if (!req_) { res.status(404).json({ error: "Requirement not found" }); return; }
+
+  const VALID_OWNERS = ["RR", "LogicGate", "shared", "M&S"];
+  if (owner && !VALID_OWNERS.includes(owner)) {
+    res.status(400).json({ error: `owner must be one of ${VALID_OWNERS.join(", ")}` }); return;
+  }
+  const finalOwner    = (owner ?? req_.owner) as RequirementOwner;
+  const finalRationale = ownerRationale ?? req_.ownerRationale;
+  const finalConfirmed = ownerConfirmed ?? req_.ownerConfirmed;
+  const updated = updateRequirementOwnership(req.params.id, finalOwner, finalRationale, finalConfirmed);
+  if (!updated) { res.status(404).json({ error: "Requirement not found" }); return; }
+
+  const wasOverride = owner && owner !== req_.owner;
+  appendAuditEvent(req_.bidPackId, null,
+    wasOverride ? "ownership_overridden" : "ownership_confirmed",
+    `${req_.code}: ownership ${finalConfirmed ? "confirmed" : "set"} as ${finalOwner}`, "user",
+    { reqId: req.params.id, owner: finalOwner, rationale: finalRationale });
+  res.json({ requirement: updated });
+});
+
+// ── Respond (SSE) ─────────────────────────────────────────────────────────────
+
+router.post("/rfp/requirements/:id/respond", async (req, res): Promise<void> => {
+  const requirement = getRequirement(req.params.id);
+  if (!requirement) { res.status(404).json({ error: "Requirement not found" }); return; }
+  const pack    = getPack(requirement.bidPackId);
+  if (!pack)    { res.status(404).json({ error: "Pack not found" }); return; }
+  const profile = getProfile(requirement.bidPackId);
+
+  res.setHeader("Content-Type",      "text/event-stream");
+  res.setHeader("Cache-Control",     "no-cache");
+  res.setHeader("Connection",        "keep-alive");
+  res.setHeader("X-Accel-Buffering", "no");
+  res.flushHeaders();
+
+  const keepAlive = setInterval(() => res.write(": keepalive\n\n"), 15_000);
+  const finish    = (payload: Record<string, unknown>) => {
+    clearInterval(keepAlive);
+    res.write(`data: ${JSON.stringify(payload)}\n\n`);
+    res.end();
+  };
+
+  req.log.info({ reqId: requirement.id, code: requirement.code }, "rfp: generating response");
+
+  try {
+    const bidderCtx = profile
+      ? `${profile.primePartner} (platform provider, prime contractor); Risk Rising (${profile.ourRemit.join(", ")})`
+      : BIDDER_CONTEXT;
+
+    const reqJson = JSON.stringify({
+      code:                 requirement.code,
+      title:                requirement.title,
+      sourceText:           requirement.sourceText,
+      scoringWeight:        requirement.scoringWeight,
+      minimumExpectations:  requirement.minimumExpectations,
+      considerations:       requirement.considerations,
+      mandatedStructure:    requirement.mandatedStructure,
+      owner:                requirement.owner,
+    }, null, 2);
+
+    const { system: rawSystem, userTemplate } = parsePromptFile(readPrompt("respond.md"));
+    const system = rawSystem.replace("{{HOUSE_VOICE}}", HOUSE_VOICE);
+    const userContent = userTemplate
+      .replace("{{BUYER_NAME}}",       pack.buyer)
+      .replace("{{BIDDER_CONTEXT}}",   bidderCtx)
+      .replace("{{REQUIREMENT_JSON}}", reqJson)
+      .replace("{{CROSS_CUTTING}}",    JSON.stringify(requirement.crossCuttingConstraints, null, 2))
+      .replace("{{KNOWLEDGE}}",        RR_KNOWLEDGE)
+      .replace("{{HOUSE_VOICE}}",      HOUSE_VOICE);
+
+    type RawBlock = {
+      key: string; type: string; prompt: string; answer: string;
+      placeholders: Array<{ id: string; description: string; blockKey: string }>;
+    };
+    type RespondResult = {
+      lens?: string;
+      blocks: RawBlock[];
+      enrichmentBlocks?: RawBlock[];
+      openDependencies?: string[];
+    };
+
+    let result: RespondResult | null = null;
+    for (const maxTokens of [16_000, 32_000]) {
+      try {
+        result = await callClaudeJSON<RespondResult>(system, userContent, { maxTokens });
+        break;
+      } catch (err) {
+        const msg = (err as Error).message;
+        if (msg.includes("truncated") && maxTokens === 16_000) { continue; }
+        throw err;
+      }
+    }
+    if (!result) throw new Error("Respond: no output after retry");
+
+    const minBlocks   = Array.isArray(result.blocks)          ? result.blocks          : [];
+    const enrichBlocks = Array.isArray(result.enrichmentBlocks) ? result.enrichmentBlocks : [];
+    const allRaw      = [...minBlocks, ...enrichBlocks];
+
+    const blocks: ResponseBlock[] = allRaw.map((b) => ({
+      key:      b.key  ?? `block_${Math.random().toString(36).slice(2, 7)}`,
+      type:     (b.type === "minimum" ? "minimum" : "enrichment") as "minimum" | "enrichment",
+      prompt:   b.prompt  ?? "",
+      answer:   b.answer  ?? "",
+      placeholders: (Array.isArray(b.placeholders) ? b.placeholders : []).map((p) => ({
+        id:          p.id || "ph_000",
+        description: p.description ?? "",
+        group:       b.key,
+        value:       null,
+        filled:      false,
+      })),
+      reviewed: false,
+    }));
+
+    const response = saveResponse(requirement.id, {
+      lens:             result.lens ?? "Commercial",
+      blocks,
+      openDependencies: Array.isArray(result.openDependencies) ? result.openDependencies : [],
+    });
+
+    appendAuditEvent(pack.id, null, "response_generated",
+      `Response generated for ${requirement.code}: ${requirement.title}`, "RRAI",
+      { reqId: requirement.id });
+    req.log.info({ reqId: requirement.id, blocks: blocks.length }, "rfp: response generated");
+    finish({ response });
+  } catch (err) {
+    req.log.error({ err }, "rfp: respond failed");
+    finish({ error: (err as Error).message });
+  }
+});
+
+// ── Response block CRUD ───────────────────────────────────────────────────────
+
+router.get("/rfp/requirements/:id/response", (req, res): void => {
+  const response = getResponse(req.params.id);
+  if (!response) { res.status(404).json({ error: "Response not found" }); return; }
+  res.json({ response });
+});
+
+router.patch("/rfp/requirements/:id/response/blocks/:blockKey", (req, res): void => {
+  const { answer } = req.body as { answer?: string };
+  if (typeof answer !== "string") { res.status(400).json({ error: "answer is required" }); return; }
+  const block = updateBlockAnswer(req.params.id, req.params.blockKey, answer);
+  if (!block) { res.status(404).json({ error: "Block not found" }); return; }
+  const req_ = getRequirement(req.params.id);
+  if (req_) appendAuditEvent(req_.bidPackId, null, "block_edited",
+    `Block ${req.params.blockKey} edited`, "user", { reqId: req.params.id });
+  res.json({ block });
+});
+
+router.post("/rfp/requirements/:id/response/blocks/:blockKey/placeholders/:phId/fill", (req, res): void => {
+  const { value } = req.body as { value?: string };
+  if (typeof value !== "string" || !value.trim()) {
+    res.status(400).json({ error: "value is required" }); return;
+  }
+  const ph = fillBlockPlaceholder(req.params.id, req.params.blockKey, req.params.phId, value.trim());
+  if (!ph) { res.status(404).json({ error: "Placeholder not found" }); return; }
+  res.json({ placeholder: ph });
+});
+
+router.patch("/rfp/requirements/:id/response/blocks/:blockKey/reviewed", (req, res): void => {
+  const { reviewed } = req.body as { reviewed?: boolean };
+  if (typeof reviewed !== "boolean") { res.status(400).json({ error: "reviewed must be boolean" }); return; }
+  const ok = setBlockReviewed(req.params.id, req.params.blockKey, reviewed);
+  if (!ok) { res.status(404).json({ error: "Block not found" }); return; }
+  const req_ = getRequirement(req.params.id);
+  if (req_) appendAuditEvent(req_.bidPackId, null, "block_reviewed",
+    `Block ${req.params.blockKey} ${reviewed ? "reviewed" : "un-reviewed"}`, "user", { reqId: req.params.id });
+  res.json({ ok: true });
+});
+
+router.post("/rfp/requirements/:id/response/advance", (req, res): void => {
+  const result = advanceResponseStatus(req.params.id);
+  if (!result.ok) { res.status(400).json({ error: result.error }); return; }
+  const req_ = getRequirement(req.params.id);
+  if (req_) appendAuditEvent(req_.bidPackId, null,
+    result.response.status === "approved" ? "response_approved" : "response_advanced",
+    `Response for ${req_?.code} advanced to ${result.response.status}`, "user");
+  res.json({ response: result.response });
+});
+
+router.post("/rfp/requirements/:id/response/reopen", (req, res): void => {
+  const response = reopenResponse(req.params.id);
+  if (!response) { res.status(404).json({ error: "Response not found" }); return; }
+  const req_ = getRequirement(req.params.id);
+  if (req_) appendAuditEvent(req_.bidPackId, null, "response_advanced",
+    `Response for ${req_?.code} reopened`, "user");
+  res.json({ response });
 });
 
 export default router;

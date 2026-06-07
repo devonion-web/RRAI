@@ -120,3 +120,107 @@ export async function rfpFillPlaceholder(sectionId, phId, value) {
 export async function rfpMarkComponentReviewed(sectionId, compName, reviewed) {
   return req('PATCH', `/sections/${sectionId}/components/${encodeURIComponent(compName)}/reviewed`, { reviewed })
 }
+
+// ── Engagement profile ────────────────────────────────────────────────────────
+
+export async function rfpSaveProfile(packId, data) {
+  return req('POST', `/packs/${packId}/profile`, data)
+}
+
+export async function rfpGetProfile(packId) {
+  return req('GET', `/packs/${packId}/profile`)
+}
+
+// ── Decompose (SSE) ───────────────────────────────────────────────────────────
+
+export async function rfpDecompose(packId) {
+  const res = await fetch(`${BASE}/packs/${packId}/decompose`, { method: 'POST' })
+  if (!res.ok) {
+    let msg = `Decompose failed: ${res.status}`
+    try { const j = await res.json(); msg = j.error || msg } catch {}
+    throw new Error(msg)
+  }
+  const reader  = res.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer    = ''
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+    const events = buffer.split('\n\n')
+    buffer = events.pop() ?? ''
+    for (const block of events) {
+      for (const line of block.split('\n')) {
+        if (!line.startsWith('data: ')) continue
+        const payload = JSON.parse(line.slice(6))
+        if (payload.error) throw new Error(payload.error)
+        return payload   // { requirements, crossCuttingConstraints }
+      }
+    }
+  }
+  throw new Error('Decompose stream ended without a data event — please retry.')
+}
+
+// ── Requirements ──────────────────────────────────────────────────────────────
+
+export async function rfpGetRequirements(packId) {
+  return req('GET', `/packs/${packId}/requirements`)
+}
+
+export async function rfpConfirmOwnership(reqId, data) {
+  return req('PATCH', `/requirements/${reqId}/ownership`, data)
+}
+
+// ── Respond (SSE) ─────────────────────────────────────────────────────────────
+
+export async function rfpRespond(reqId) {
+  const res = await fetch(`${BASE}/requirements/${reqId}/respond`, { method: 'POST' })
+  if (!res.ok) {
+    let msg = `Respond failed: ${res.status}`
+    try { const j = await res.json(); msg = j.error || msg } catch {}
+    throw new Error(msg)
+  }
+  const reader  = res.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer    = ''
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+    const events = buffer.split('\n\n')
+    buffer = events.pop() ?? ''
+    for (const block of events) {
+      for (const line of block.split('\n')) {
+        if (!line.startsWith('data: ')) continue
+        const payload = JSON.parse(line.slice(6))
+        if (payload.error) throw new Error(payload.error)
+        return payload   // { response }
+      }
+    }
+  }
+  throw new Error('Respond stream ended without a data event — please retry.')
+}
+
+export async function rfpGetResponse(reqId) {
+  return req('GET', `/requirements/${reqId}/response`)
+}
+
+export async function rfpUpdateBlock(reqId, blockKey, answer) {
+  return req('PATCH', `/requirements/${reqId}/response/blocks/${encodeURIComponent(blockKey)}`, { answer })
+}
+
+export async function rfpFillBlockPH(reqId, blockKey, phId, value) {
+  return req('POST', `/requirements/${reqId}/response/blocks/${encodeURIComponent(blockKey)}/placeholders/${encodeURIComponent(phId)}/fill`, { value })
+}
+
+export async function rfpMarkBlockReviewed(reqId, blockKey, reviewed) {
+  return req('PATCH', `/requirements/${reqId}/response/blocks/${encodeURIComponent(blockKey)}/reviewed`, { reviewed })
+}
+
+export async function rfpAdvanceResponse(reqId) {
+  return req('POST', `/requirements/${reqId}/response/advance`)
+}
+
+export async function rfpReopenResponse(reqId) {
+  return req('POST', `/requirements/${reqId}/response/reopen`)
+}

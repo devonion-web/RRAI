@@ -3,7 +3,7 @@ export const MODULES = [
     id: 'rfp',
     title: 'RFP Response Drafter',
     description:
-      'Upload a bid pack, detect scored sections, extract a structured brief per section, generate a 12-part draft response, fill placeholders, approve, and export a branded .docx.',
+      'Upload a bid pack, set an engagement profile, decompose the document into requirements, map ownership (RR / LogicGate / shared), generate minimum-first block responses, fill gaps, approve, and export per-requirement .docx files.',
     status: 'active',
     icon: '📋',
     category: 'Sales',

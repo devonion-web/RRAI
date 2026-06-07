@@ -1,0 +1,64 @@
+Refactor the RRAI RFP Response Drafter around a new model: the bid document already
+contains the structure, the order, and how to respond. The tool decomposes the document,
+maps each requirement to an owner based on RR's engagement role, focuses on RR's elements,
+and responds starting from each requirement's stated minimum expectation. This REPLACES the
+current "extract a brief -> generate a fixed 12-part draft" flow. Reuse the robust parts you
+already have: structured outputs, the SSE/keepalive long-call handling, DB persistence, the
+audit log, and the inline-placeholder/review UI.
+
+=== 1. ENGAGEMENT PROFILE (new — drives everything) ===
+- New model EngagementProfile { id, bidPackId, ourRole, primePartner, ourRemit, otherParties }.
+- On a new pack, capture/confirm it. Default for this bid: ourRole = "delivery & consulting
+  partner"; primePartner = "LogicGate"; ourRemit = implementation, delivery, data migration,
+  training, change, support, consulting. Make it editable (other bids may have RR as prime,
+  or RR + Panorays).
+
+=== 2. DECOMPOSE THE DOCUMENT (replaces per-section brief extraction) ===
+- New model Requirement { id, bidPackId, code, order, title, sourceText (verbatim),
+  scoringWeight, minimumExpectations (string[] from the "Your Response (at a minimum)" list),
+  considerations (string[] of the section's guidance), mandatedStructure, owner,
+  ownerRationale, ownerConfirmed (bool), parentId }.
+- Capture cross-cutting constraints once per pack (priority modules, timeline, mandatory
+  integrations) and surface them on every requirement.
+- Extract with structured outputs, preserving DOCUMENT ORDER. Decompose narrative sections to
+  the sub-requirement level; keep the System Requirements List as its own layer.
+
+=== 3. MAP OWNERSHIP AGAINST THE ROLE (replaces guessing) ===
+- For each Requirement, classify owner as RR | LogicGate | shared | M&S using the
+  EngagementProfile's role + remit as the basis. Emit a one-line ownerRationale; set
+  ownerConfirmed = false.
+- Mapping screen: requirements in document order, each with proposed owner + rationale; the
+  user CONFIRMS or OVERRIDES (especially shared/ambiguous ones like integrations and data
+  migration). Write an AuditEvent on each confirm/override.
+
+=== 4. FOCUS ===
+- Dashboard lists all requirements in document order, owner-tagged, with status and scoring
+  weight. RR's set (owned + shared) is highlighted as the working set; the rest stay visible
+  but greyed.
+
+=== 5. RESPOND, MINIMUM-FIRST (replaces the fixed 12-part template) ===
+- New model RequirementResponse { id, requirementId, blocks: [ { key, answer, placeholders[],
+  reviewed } ], status }.
+- The response skeleton is DERIVED FROM THE REQUIREMENT'S minimumExpectations, not a fixed
+  template: one block per minimum-expectation item (each MUST be addressed), then optional
+  enrichment blocks built from the considerations. Different requirements get different
+  structures, straight from the document.
+- Generate each block with structured outputs, inserting inline {{PH:id}} placeholders for
+  anything only RR/LogicGate can supply (costs, dates, names).
+- Reuse the responder UI: requirement sourceText read-only at top ("What M&S asks for"); each
+  block an editable answer with inline amber placeholder chips; a per-block "reviewed" tick;
+  the sidebar as a gap navigator.
+
+=== 6. REVIEW / ASSEMBLE / EXPORT ===
+- A requirement is complete when every block is reviewed with zero unfilled placeholders. The
+  pack is ready when all RR requirements are complete. Export RR's assembled responses for
+  handing to LogicGate.
+
+=== GUARDRAILS (unchanged) ===
+- Commercial-lens label; human-confirmed ownership; human sign-off before export; no
+  fabricated figures (placeholders only); structured outputs for all JSON; keep the
+  SSE/keepalive for long generations; persist everything; log AuditEvents throughout.
+
+Build order: EngagementProfile + Requirement models and decomposition first; then the
+ownership mapping screen; then the dashboard; then the minimum-first responder (reusing the
+inline-placeholder UI); then export. Retire the old fixed-template SectionDraft path.
