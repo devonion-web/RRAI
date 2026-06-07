@@ -275,12 +275,30 @@ router.post("/rfp/sections/:id/extract-brief", async (req, res): Promise<void> =
 });
 
 // ── Generate draft ────────────────────────────────────────────────────────────
+// Uses SSE so the Replit proxy (120 s hard timeout) sees keepalive traffic while
+// the model call runs (often 90–180 s). Final payload arrives as a `data:` event.
 
 router.post("/rfp/sections/:id/draft", async (req, res): Promise<void> => {
   const section = getSection(req.params.id);
   if (!section) { res.status(404).json({ error: "Section not found" }); return; }
   const pack = getPack(section.packId);
   if (!pack)    { res.status(404).json({ error: "Pack not found" }); return; }
+
+  // Switch to SSE before any async work
+  res.setHeader("Content-Type",      "text/event-stream");
+  res.setHeader("Cache-Control",     "no-cache");
+  res.setHeader("Connection",        "keep-alive");
+  res.setHeader("X-Accel-Buffering", "no");   // Disable nginx buffering
+  res.flushHeaders();
+
+  // Send a keepalive comment every 15 s — invisible to the client but enough to
+  // prevent the proxy from treating the connection as idle and closing it.
+  const keepAlive = setInterval(() => res.write(": keepalive\n\n"), 15_000);
+  const finish    = (payload: Record<string, unknown>) => {
+    clearInterval(keepAlive);
+    res.write(`data: ${JSON.stringify(payload)}\n\n`);
+    res.end();
+  };
 
   req.log.info({ sectionId: section.id, code: section.code }, "rfp: generating draft");
 
@@ -357,10 +375,10 @@ router.post("/rfp/sections/:id/draft", async (req, res): Promise<void> => {
     });
     appendAuditEvent(pack.id, section.id, "draft_generated", `Draft generated for ${section.code}: ${section.title}`, "RRAI");
     req.log.info({ sectionId: section.id }, "rfp: draft generated");
-    res.json({ draft, sectionStatus: "drafted" });
+    finish({ draft, sectionStatus: "drafted" });
   } catch (err) {
     req.log.error({ err }, "rfp: draft generation failed");
-    res.status(500).json({ error: (err as Error).message });
+    finish({ error: (err as Error).message });
   }
 });
 

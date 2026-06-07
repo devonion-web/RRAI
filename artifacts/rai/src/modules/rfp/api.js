@@ -60,7 +60,37 @@ export async function rfpExtractBrief(sectionId) {
 }
 
 export async function rfpGenerateDraft(sectionId) {
-  return req('POST', `/sections/${sectionId}/draft`)
+  // The draft route uses SSE to send keepalive pings while the model runs (90–180 s),
+  // then delivers the final payload as a `data:` event. We read the stream manually
+  // because EventSource doesn't support POST.
+  const res = await fetch(`${BASE}/sections/${sectionId}/draft`, { method: 'POST' })
+  if (!res.ok) {
+    let msg = `Request failed: ${res.status}`
+    try { const j = await res.json(); msg = j.error || j.message || msg } catch {}
+    throw new Error(msg)
+  }
+
+  const reader  = res.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer    = ''
+
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+    // SSE lines end with \n\n — scan for complete events
+    const events = buffer.split('\n\n')
+    buffer = events.pop() ?? ''               // last chunk may be incomplete
+    for (const block of events) {
+      for (const line of block.split('\n')) {
+        if (!line.startsWith('data: ')) continue
+        const payload = JSON.parse(line.slice(6))
+        if (payload.error) throw new Error(payload.error)
+        return payload                         // { draft, sectionStatus }
+      }
+    }
+  }
+  throw new Error('Draft stream ended without a data event — please retry.')
 }
 
 export async function rfpUpdateDraft(sectionId, body) {
