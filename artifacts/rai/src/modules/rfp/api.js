@@ -15,7 +15,8 @@ async function req(method, path, body) {
   return res.json()
 }
 
-// Upload files (multipart) — returns { files: [{id, name, fileType, charCount?, rowCount?, error?}] }
+// ── Document storage (unchanged) ──────────────────────────────────────────────
+
 export async function rfpUploadFiles(formData) {
   const res = await fetch(`${BASE}/upload-files`, { method: 'POST', body: formData })
   if (!res.ok) {
@@ -26,38 +27,55 @@ export async function rfpUploadFiles(formData) {
   return res.json()
 }
 
-// Store pasted text — returns { id, name, charCount, fileType }
 export async function rfpStoreText({ name, text }) {
   return req('POST', '/store-text', { name, text })
 }
 
-// Remove a stored document
 export async function rfpRemoveDocument(id) {
   await fetch(`${BASE}/documents/${id}`, { method: 'DELETE' })
 }
 
-// Fire the workbench analysis job — returns { jobId }
-export async function rfpAnalyse({ documentIds, vendorContext, company }) {
-  return req('POST', '/analyse', { documentIds, vendorContext, company })
+// ── Bid pack ──────────────────────────────────────────────────────────────────
+
+// Create a pack from already-uploaded document IDs
+export async function rfpCreatePack({ name, buyer, documentIds }) {
+  return req('POST', '/packs', { name, buyer, documentIds })
 }
 
-// Poll job — returns { jobId, status, progress, intelligenceSummary, responseSections, documentClassifications, error }
-export async function rfpGetJob(jobId) {
-  const res = await fetch(`${BASE}/jobs/${jobId}`)
+// Fetch a pack (with all sections and drafts)
+export async function rfpGetPack(packId) {
+  const res = await fetch(`${BASE}/packs/${packId}`)
   if (!res.ok) {
-    let msg = `Poll failed: ${res.status}`
+    let msg = `Failed: ${res.status}`
     try { const j = await res.json(); msg = j.error || msg } catch {}
     throw new Error(msg)
   }
   return res.json()
 }
 
-// Generate a brief for a response section — sync, returns { brief }
-export async function rfpSectionBrief({ section, intelligenceSummary, company, vendorContext }) {
-  return req('POST', '/section-brief', { section, intelligenceSummary, company, vendorContext })
+// Detect scored response sections in the pack
+export async function rfpDetectSections(packId) {
+  return req('POST', `/packs/${packId}/detect-sections`)
 }
 
-// Draft a response section — sync, returns { draft, assumptions, vendor_inputs_needed }
-export async function rfpDraftSection({ section, brief, company, vendorContext }) {
-  return req('POST', '/draft-section', { section, brief, company, vendorContext })
+// ── Sections ──────────────────────────────────────────────────────────────────
+
+// Extract brief for a section (synchronous, ~5–10 s)
+export async function rfpExtractBrief(sectionId) {
+  return req('POST', `/sections/${sectionId}/extract-brief`)
+}
+
+// Generate 12-part draft for a section (synchronous, ~15–20 s)
+export async function rfpGenerateDraft(sectionId) {
+  return req('POST', `/sections/${sectionId}/draft`)
+}
+
+// Save edited components / placeholders
+export async function rfpUpdateDraft(sectionId, { components, placeholders }) {
+  return req('PATCH', `/sections/${sectionId}/draft`, { components, placeholders })
+}
+
+// Advance status: draft → in_review → approved
+export async function rfpAdvanceDraftStatus(sectionId) {
+  return req('POST', `/sections/${sectionId}/draft/advance`)
 }

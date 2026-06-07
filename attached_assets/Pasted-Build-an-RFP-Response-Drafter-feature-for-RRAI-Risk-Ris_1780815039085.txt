@@ -1,0 +1,84 @@
+Build an "RFP Response Drafter" feature for RRAI, Risk Rising's internal AI platform.
+Add it to the existing app if present (Next.js App Router + TypeScript + Tailwind +
+Prisma + SQLite + the Anthropic TypeScript SDK); scaffold it if starting fresh.
+
+CONTEXT
+RRAI works through lenses over one shared knowledge base. This feature is the
+COMMERCIAL lens: it ingests a buyer's RFP/bid pack and produces structured, on-brand
+draft responses to individual scored sections, leaving anything only a human can
+supply as explicit placeholders. It drafts and structures; people decide and commit.
+
+STACK
+- Next.js (App Router) + TypeScript + Tailwind; Prisma + SQLite.
+- Anthropic SDK (@anthropic-ai/sdk). Read ANTHROPIC_API_KEY from env. Model via env,
+  defaulting to a current Claude Opus model (e.g. "claude-opus-4-8"); do not hardcode.
+- Parsing: pdf-parse (PDF -> text), xlsx/SheetJS (spreadsheet -> rows).
+- Word generation: docx (docx-js).
+
+DATA MODEL (Prisma)
+- BidPack: id, name, buyer, createdAt; relation to files; parsedText; parsedTables(JSON).
+- BidPackFile: id, bidPackId, filename, type(pdf|xlsx), parsedContent.
+- BidSection: id, bidPackId, code(e.g. "2.1"), title, scoringWeight,
+  mandatedStructure(JSON), requirements(JSON), constraints(JSON), namedOwners(JSON).
+- SectionDraft: id, bidSectionId, components(JSON, the 12-part template),
+  placeholders(JSON[]), status(draft|in_review|approved), createdAt, updatedAt.
+
+PIPELINE
+1. Ingest: upload one+ files; parse PDFs to text and spreadsheets to rows; store.
+2. Extract brief: ONE Anthropic call returning JSON only -> for a chosen section:
+   requirements, mandated response structure, scoring weight, key dates/constraints,
+   named owners. Parse defensively. Save to BidSection.
+3. Retrieve knowledge: load relevant markdown from a /knowledge folder (frameworks,
+   brand voice, vendor capability, GRC domain) by keyword/section match; pass as context.
+4. Draft: ONE streamed Anthropic call that writes the 12-part section template,
+   conditioned on the extracted brief + retrieved knowledge + house voice. The model
+   MUST insert typed placeholders like {{PLACEHOLDER: implementation cost - basis}} for
+   anything not in the inputs, and MUST NOT invent figures, day rates, dates or names.
+   Save components + collect the placeholder list.
+5. Review: UI lists placeholders to fill and lets the user edit any component; status
+   moves draft -> in_review -> approved. Nothing exports until approved.
+6. Render: generate a branded .docx with docx-js (brand tokens below) and download.
+
+12-PART SECTION TEMPLATE (the output schema for components)
+1 Compliance verdict (Complies/Partially/Does Not Comply)
+2 Understanding of the challenge
+3 Approach / recommended option
+4 Delivery plan (milestones, aligned to the buyer's own plan where present)
+5 Domain component (e.g. data-migration approach)
+6 Resourcing (delivery team + explicit buyer-side commitment)
+7 Acceptance & quality gates (entry/exit criteria)
+8 Pre-work required by the buyer
+9 Assumptions, limitations & dependencies
+10 Configuration / customisation / third-party confirmation
+11 Costs (cross-referenced to pricing) + fit-gaps
+12 Risks & mitigations (register: Risk / L×I / Mitigation / Owner)
+
+GUARDRAILS (enforce in BOTH the prompts and the code)
+- No fabricated figures, dates or names -> unknowns become placeholders.
+- Human sign-off required before export (hard status gate at "approved").
+- Honest confidence: surface assumptions/dependencies; never overstate delivery confidence.
+- Lens integrity: label all output "Commercial lens"; it must never be reused as, or
+  feed, independent/Analyst content (white papers, public thought leadership).
+
+BRAND & RENDERING (docx-js)
+- A4 (11906 x 16838 dxa), 1in margins, content width 9026 dxa, Arial throughout.
+- navy #06095A (H1/labels), purple #3205B3 (H2/accents), cyan #13D4DB (rules, bullet
+  glyphs, callout left-border), light cyan #E7FAFB (callout fill).
+- Navy-header data tables with zebra body rows; single-cell cyan-accent callout boxes;
+  footer with a top rule and right-aligned page number.
+- Validate the generated .docx before offering download.
+
+UI (Tailwind, clean and simple)
+Upload pack -> see detected sections -> pick a section -> "Extract brief" -> review
+extracted requirements -> "Generate draft" (streamed) -> review screen showing the 12
+components + a placeholder checklist -> fill/edit -> "Approve" -> "Export .docx".
+
+PROMPTS
+Keep the extraction prompt and the drafting prompt as editable files in a /prompts
+folder. The extraction prompt returns JSON only. The drafting prompt receives the
+brief + knowledge + the 12-part template + the guardrail rules and returns components
+as JSON.
+
+BUILD ORDER
+Scaffold the data model, then upload+parse, then extraction; then drafting; then the
+docx export and review UI. Keep prompts editable, not hardcoded inline.

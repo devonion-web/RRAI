@@ -1,9 +1,9 @@
 export const MODULES = [
   {
     id: 'rfp',
-    title: 'RFP / RFI Workbench',
+    title: 'RFP Response Drafter',
     description:
-      'Understand, assess and respond to RFPs. Generate an intelligence summary, identify response sections, draft each response, and export to a branded Word document.',
+      'Upload a bid pack, detect scored sections, extract a structured brief per section, generate a 12-part draft response, fill placeholders, approve, and export a branded .docx.',
     status: 'active',
     icon: '📋',
     category: 'Sales',

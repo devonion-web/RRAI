@@ -2,249 +2,82 @@ import { Router, type Request } from "express";
 import multer from "multer";
 import mammoth from "mammoth";
 import pdfParse from "pdf-parse";
+import { readFileSync } from "fs";
+import { join } from "path";
 import { callClaudeJSON } from "../lib/anthropic";
 import { storeTextDoc, storeExcelDoc, getDocs, removeDoc, storeSize } from "../lib/docStore";
-import { createJob, getJob, updateJob, updateProgress } from "../lib/jobStore";
-import { parseExcelForRequirements, chunkText } from "../lib/xlsxParser";
+import {
+  createPack, getPack, setSections, getSection,
+  updateSection, saveDraft, updateDraft, advanceDraftStatus,
+  COMPONENT_LABELS,
+  type DraftComponent, type Placeholder,
+} from "../lib/bidPackStore";
+import { parseExcelForRequirements } from "../lib/xlsxParser";
 import type { Logger } from "pino";
 
-const MAX_CHARS_PER_CHUNK = 18_000;
-const MAX_SUMMARY_CHARS  = 120_000;
-// Each doc gets an equal share of the limit so no single large PDF crowds others out
-const maxDocChars = (docs: { length: number }) =>
-  Math.floor(MAX_SUMMARY_CHARS / Math.max(docs.length, 1));
-
-const upload = multer({
-  storage: multer.memoryStorage(),
-  limits: { fileSize: 50 * 1024 * 1024, files: 20 },
-});
-
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024, files: 20 } });
 const router = Router();
+const PROMPTS_DIR = join(process.cwd(), "prompts");
 
-// ── Shared context ────────────────────────────────────────────────────────────
+// ── Context ───────────────────────────────────────────────────────────────────
 
-const RR_CONTEXT = `Risk Rising is a specialist GRC implementation and advisory consultancy partnering with LogicGate (Risk Cloud) and Panorays (third-party cyber / supply chain risk). Risk Rising owns all implementation, configuration, project delivery, training, UAT, hypercare, support, managed service and commercial aspects. Software vendors own functional platform capability, technical architecture, security, hosting, product roadmap and platform SLAs.
+const RR_CONTEXT = `Risk Rising is a specialist GRC implementation and advisory consultancy partnering with LogicGate (Risk Cloud) and Panorays (third-party cyber risk). Risk Rising owns: all implementation, configuration, project delivery, training, UAT, hypercare, support, managed service and commercial aspects. Software vendors own: functional platform capability, technical architecture, security, hosting, product roadmap and platform SLAs.
 
-Risk Rising delivery capabilities: GRC programme design and advisory; LogicGate Risk Cloud implementation and configuration; Panorays implementation; agile and waterfall project delivery; stakeholder workshops; app configuration and workflow design; system integration and data migration support; user training and train-the-trainer; UAT support and go-live hypercare; post-go-live managed service and ongoing optimisation; commercial negotiation support.
+Risk Rising delivery capabilities: GRC programme design; LogicGate Risk Cloud and Panorays implementation; agile and waterfall delivery; requirements workshops; app configuration and workflow design; system integration support; user training and train-the-trainer; UAT and go-live hypercare; post-go-live managed service; commercial negotiation.`;
 
-Risk Rising does NOT own: LogicGate platform features, Panorays platform features, vendor SLAs, vendor security certifications, product roadmap commitments, or technical platform architecture.`;
+// ── Prompt helpers ────────────────────────────────────────────────────────────
 
-const OWNERSHIP_GUIDE = `Ownership categories:
-- RR: implementation, project delivery, configuration, training, UAT, hypercare, support model, managed service, commercials, advisory, delivery governance.
-- LogicGate: functional product capabilities, platform features, workflow engine, dashboards, reporting, integrations, technical architecture, security, hosting, product roadmap, platform SLAs.
-- Panorays: third-party cyber monitoring, vendor assessment, external attack surface, questionnaire automation.
-- Joint: RR provides implementation/service context AND vendor provides functional/platform detail.`;
-
-const DOC_TYPES = [
-  "Requirements Matrix", "RFP Overview", "Scope Document", "Evaluation Criteria",
-  "Procurement Instructions", "Commercial Requirements", "Security Requirements", "Supporting Material",
-] as const;
-
-// ── Document classification ───────────────────────────────────────────────────
-
-async function claudeClassifyDocuments(
-  docs: ReturnType<typeof getDocs>,
-  log: Logger,
-): Promise<Record<string, string>[]> {
-  const docList = docs.map((d) => ({
-    id: d.id, name: d.name, fileType: d.fileType,
-    preview: d.text ? d.text.slice(0, 500) : `[Excel spreadsheet: ${(d.structuredRows ?? []).length} rows]`,
-  }));
-
-  const system = `Classify each document.
-Types: ${DOC_TYPES.join(", ")}.
-Rules: Excel with requirement rows → "Requirements Matrix". PDFs/Word with RFP background → "RFP Overview". Scope/deliverables → "Scope Document". Scoring methodology → "Evaluation Criteria". Bidder instructions → "Procurement Instructions". Pricing/contract → "Commercial Requirements". Security standards → "Security Requirements". Otherwise → "Supporting Material".
-Output ONLY valid JSON: { "classifications": [ { "id": "<id>", "name": "<name>", "docType": "<type>" } ] }`;
-
-  try {
-    const result = await callClaudeJSON<{ classifications: Record<string, string>[] }>(
-      system, `Documents:\n${JSON.stringify(docList, null, 2)}`, { maxTokens: 800 },
-    );
-    return Array.isArray(result?.classifications) ? result.classifications : [];
-  } catch (err) {
-    log.warn({ err }, "claudeClassifyDocuments failed — using defaults");
-    return docs.map((d) => ({ id: d.id, name: d.name, docType: d.fileType === "excel" ? "Requirements Matrix" : "RFP Overview" }));
-  }
+function readPrompt(name: string): string {
+  try { return readFileSync(join(PROMPTS_DIR, name), "utf-8"); }
+  catch (err) { return ""; }
 }
 
-// ── Intelligence Summary ──────────────────────────────────────────────────────
-
-async function claudeIntelligenceSummary(
-  allContent: string,
-  company: string,
-  vendorContext: string,
-  log: Logger,
-): Promise<Record<string, unknown>> {
-  const system = `You are a senior bid analyst at Risk Rising conducting a first-pass read of a procurement pack.
-
-Your task is to extract EIGHT panels of actionable intelligence from the documents below. The documents may be PDFs, Word files, spreadsheets, or pasted text — read all of them carefully.
-
-${RR_CONTEXT}
-
-INSTRUCTIONS FOR EACH PANEL — be thorough, never leave a panel empty if relevant content exists:
-
-KEY_DATES — Find every date anywhere in any document related to the bid process. Scan headers, timelines, cover letters, appendices, Q&A sections, and procurement schedules. Include: submission deadlines, clarification cutoff dates, award dates, contract start dates, mobilisation windows, evaluation periods, demonstration dates, pricing freeze dates. Approximate dates ("approximately Q3 2026", "within 4 weeks of award") count — include them. If genuinely no dates anywhere, return [].
-
-EVALUATION_CRITERIA — How will the buyer score responses? Look for: scoring matrices, weighting percentages, quality/price ratios, MEAT criteria, pass/fail gates, technical assessment frameworks, reference requirements, demonstration criteria. Quote weightings exactly as stated.
-
-SUBMISSION_REQUIREMENTS — What format/structure must the response follow? Page limits, font size, file format (.docx/.pdf), portal submission, mandatory section order, word counts, appendix rules, number of copies, signatures required.
-
-KEY_CONSTRAINTS — What restricts this engagement? UK-only delivery, incumbent supplier, mandatory accreditations (ISO 27001, Cyber Essentials, G-Cloud), IR35, geographic coverage, security clearance, timeline mandated by buyer, integration with specific systems.
-
-RR_RESPONSE_AREAS — Topics Risk Rising must write and own the response to: implementation approach, project delivery methodology, training, change management, UAT, hypercare, support model, managed service, account management, commercials, project governance, resource model. Give a one-sentence reason for each.
-
-LOGICGATE_RESPONSE_AREAS — Topics requiring LogicGate platform input: platform features, technical architecture, security posture, hosting/cloud, SLAs, API capabilities, integrations, product roadmap, certifications, performance benchmarks. Give a one-sentence reason for each.
-
-OPEN_QUESTIONS — Gaps or ambiguities that must be clarified before submitting a strong response. What is unclear, contradictory, or missing?
-
-KEY_RISKS — Specific risks to this bid or engagement. Be concrete. Include: timeline risk, data migration uncertainty, integration complexity, incumbent advantage, resource availability, LogicGate capability gaps. Rate each High/Medium/Low and give a concrete action.
-
-Output ONLY valid JSON — no prose, no markdown, no code fences:
-{
-  "key_dates": [{"label": "string", "date": "string", "note": "string|null"}],
-  "evaluation_criteria": [{"criterion": "string", "weight": "string|null", "note": "string|null"}],
-  "submission_requirements": ["string"],
-  "key_constraints": ["string"],
-  "rr_response_areas": [{"topic": "string", "why": "string"}],
-  "logicgate_response_areas": [{"topic": "string", "why": "string"}],
-  "open_questions": ["string"],
-  "key_risks": [{"risk": "string", "impact": "High|Medium|Low", "action": "string"}]
-}`;
-
-  const user = `Company: ${company}\nVendor context: ${vendorContext}\n\nDocument content:\n${allContent}`;
-
-  try {
-    const result = await callClaudeJSON<Record<string, unknown>>(system, user, { maxTokens: 4000 });
-    return result ?? {};
-  } catch (err) {
-    log.warn({ err }, "claudeIntelligenceSummary failed — returning empty summary");
-    return {};
+function buildContent(docs: ReturnType<typeof getDocs>, charLimitPerDoc: number): string {
+  let content = "";
+  for (const doc of docs) {
+    if (doc.text) {
+      const slice = doc.text.length > charLimitPerDoc
+        ? doc.text.slice(0, charLimitPerDoc) + "\n[...truncated]"
+        : doc.text;
+      content += `\n\n=== ${doc.name} ===\n${slice}`;
+    } else if (doc.structuredRows?.length) {
+      const reqs = doc.structuredRows.slice(0, 200).map((r) => r.requirement).filter(Boolean).join("\n");
+      content += `\n\n=== ${doc.name} (spreadsheet) ===\n${reqs.slice(0, charLimitPerDoc)}`;
+    }
   }
+  return content;
 }
 
-// ── Section Identification ────────────────────────────────────────────────────
+// ── Section detection ─────────────────────────────────────────────────────────
 
-async function claudeIdentifySections(
-  allContent: string,
-  company: string,
-  vendorContext: string,
-  log: Logger,
-): Promise<Record<string, unknown>[]> {
-  const system = `You are a senior bid consultant at Risk Rising. Read the RFP and identify every section requiring a written prose response.
+const DETECT_SECTIONS_SYSTEM = `You are an expert bid analyst. Read the provided procurement documents and identify all scored response sections.
 
-A "response section" is a part of the RFP asking for a narrative written answer of 100+ words — such as describing an implementation approach, training methodology, support model, migration strategy, or company capabilities.
+A scored response section requires a detailed written response (100+ words) that will be evaluated by the buyer. These are typically numbered (e.g. "Section 2.1", "Q4", "Lot 2 — Technical") and include specific questions or requirements the bidder must address in prose.
 
-NOT response sections: pricing tables, tick-box matrices, simple yes/no questions, company registration details, contract terms, or administrative instructions.
+NOT scored sections: pricing matrices, administrative forms, declarations, company information templates, tick-box compliance matrices, yes/no questions, or standard terms and conditions.
 
-${RR_CONTEXT}
-${OWNERSHIP_GUIDE}
-
-For each section:
-- id: "S001", "S002", etc.
-- section_ref: section number or identifier from the document (e.g. "2.1", "Section 4", "Q12", "Lot 2")
-- title: concise title (e.g. "Implementation Approach", "Training Methodology", "Support Model")
-- owner: "RR" | "LogicGate" | "Joint"
-- question_text: verbatim question text or close paraphrase if too long (max 200 words)
-- priority: "High" | "Medium" | "Low" — based on evaluation weighting or strategic importance
-- notes: one-line note, or null
-
-If the RFP has an evaluation criteria section, use weightings to set priority.
-If no explicit sections are found (e.g. only a requirements matrix), identify the top-level response areas instead.
+For each scored section, provide:
+- code: section reference exactly as in the document (e.g. "2.1", "Section 4")
+- title: concise title
+- scoringWeight: stated weighting or null
+- summary: one sentence describing what must be addressed
 
 Output ONLY valid JSON — no prose, no code fences:
-{ "sections": [ { "id": "S001", "section_ref": "string", "title": "string", "owner": "RR|LogicGate|Joint", "question_text": "string", "priority": "High|Medium|Low", "notes": "string|null" } ] }`;
+{ "sections": [{ "code": "string", "title": "string", "scoringWeight": "string|null", "summary": "string" }] }`;
 
-  const user = `Company: ${company}\nVendor context: ${vendorContext}\n\nDocument content:\n${allContent.slice(0, 60_000)}`;
-
-  try {
-    const result = await callClaudeJSON<{ sections: Record<string, unknown>[] }>(system, user, { maxTokens: 4000 });
-    return Array.isArray(result?.sections) ? result.sections : [];
-  } catch (err) {
-    log.warn({ err }, "claudeIdentifySections failed — returning empty sections");
-    return [];
-  }
-}
-
-// ── Workbench job orchestrator ────────────────────────────────────────────────
-
-async function runWorkbenchJob(
-  jobId: string,
-  documentIds: string[],
-  vendorContext: string,
-  company: string,
-  log: Logger,
-): Promise<void> {
-  try {
-    updateJob(jobId, { status: "running" });
-
-    const docs = getDocs(documentIds);
-    if (docs.length === 0) {
-      updateJob(jobId, { status: "error", error: "Documents not found or expired. Please re-upload." });
-      return;
-    }
-
-    // Step 1: Classify documents
-    updateProgress(jobId, 0, 3, "Classifying documents…");
-    const classifications = await claudeClassifyDocuments(docs, log);
-    updateJob(jobId, { documentClassifications: classifications });
-
-    // Build combined content — each doc gets an equal slice so no single large PDF starves others
-    const charLimit = maxDocChars(docs);
-    let content = "";
-    for (const doc of docs) {
-      if (doc.text) {
-        // Take up to charLimit chars from this doc; if the doc is short, use all of it
-        const slice = doc.text.length > charLimit ? doc.text.slice(0, charLimit) + "\n[...truncated]" : doc.text;
-        content += `\n\n=== ${doc.name} ===\n${slice}`;
-      } else if (doc.structuredRows && doc.structuredRows.length > 0) {
-        const reqs = doc.structuredRows.slice(0, 200).map((r) => r.requirement).filter(Boolean).join("\n");
-        const slice = reqs.length > charLimit ? reqs.slice(0, charLimit) + "\n[...truncated]" : reqs;
-        content += `\n\n=== ${doc.name} (requirements spreadsheet) ===\n${slice}`;
-      }
-    }
-    log.info({ jobId, totalContentChars: content.length, docCount: docs.length, charLimitPerDoc: charLimit }, "rfp: content assembled");
-
-    if (!content.trim()) {
-      updateJob(jobId, { status: "error", error: "No readable content found in uploaded documents." });
-      return;
-    }
-
-    // Step 2: Generate intelligence summary
-    updateProgress(jobId, 1, 3, "Generating RFP Intelligence Summary…");
-    const intelligenceSummary = await claudeIntelligenceSummary(content, company, vendorContext, log);
-    updateJob(jobId, { intelligenceSummary });
-    log.info({ jobId }, "intelligence summary complete");
-
-    // Step 3: Identify response sections
-    updateProgress(jobId, 2, 3, "Identifying response sections…");
-    const responseSections = await claudeIdentifySections(content, company, vendorContext, log);
-    updateJob(jobId, { responseSections });
-    log.info({ jobId, sectionCount: responseSections.length }, "sections identified");
-
-    updateJob(jobId, {
-      status: "done",
-      progress: { done: 3, total: 3, stage: `Done — ${responseSections.length} response sections identified` },
-    });
-    log.info({ jobId }, "workbench job complete");
-  } catch (err) {
-    log.error({ jobId, err }, "workbench job crashed");
-    updateJob(jobId, { status: "error", error: (err as Error).message });
-  }
-}
-
-// ── Routes ────────────────────────────────────────────────────────────────────
+// ── Health ────────────────────────────────────────────────────────────────────
 
 router.get("/rfp/health", (_req, res) => {
   res.json({ status: "ok", module: "rfp", storedDocs: storeSize() });
 });
 
-// Upload files
+// ── Upload ────────────────────────────────────────────────────────────────────
+
 router.post("/rfp/upload-files", upload.array("files", 20), async (req, res): Promise<void> => {
   const files = req.files as Express.Multer.File[] | undefined;
-  if (!files || files.length === 0) { res.status(400).json({ error: "No files uploaded" }); return; }
+  if (!files?.length) { res.status(400).json({ error: "No files uploaded" }); return; }
 
-  req.log.info({ count: files.length }, "rfp upload-files: processing");
-
+  req.log.info({ count: files.length }, "rfp: upload-files");
   const results: Array<{ id?: string; name: string; fileType?: string; charCount?: number; rowCount?: number; error?: string }> = [];
 
   for (const file of files) {
@@ -253,168 +86,207 @@ router.post("/rfp/upload-files", upload.array("files", 20), async (req, res): Pr
     try {
       if (ext === "xlsx" || ext === "xls") {
         const parsed = parseExcelForRequirements(file.buffer);
-        if (parsed.rows.length === 0) { results.push({ name, error: "No requirement rows detected." }); continue; }
+        if (!parsed.rows.length) { results.push({ name, error: "No requirement rows detected." }); continue; }
         const entry = storeExcelDoc(name, parsed.rows);
         results.push({ id: entry.id, name, fileType: "excel", rowCount: entry.rowCount });
       } else {
         let text = "";
-        if (ext === "docx" || ext === "doc") {
-          const result = await mammoth.extractRawText({ buffer: file.buffer });
-          text = result.value;
-        } else if (ext === "pdf") {
-          const result = await pdfParse(file.buffer);
-          text = result.text;
-        } else {
-          text = file.buffer.toString("utf-8");
-        }
-        const trimmed = text.trim();
-        if (!trimmed) { results.push({ name, error: "No text could be extracted." }); continue; }
-        const entry = storeTextDoc(name, trimmed);
+        if (ext === "docx" || ext === "doc") { const r = await mammoth.extractRawText({ buffer: file.buffer }); text = r.value; }
+        else if (ext === "pdf")               { const r = await pdfParse(file.buffer); text = r.text; }
+        else                                  { text = file.buffer.toString("utf-8"); }
+        if (!text.trim()) { results.push({ name, error: "No text extracted." }); continue; }
+        const entry = storeTextDoc(name, text.trim());
         results.push({ id: entry.id, name, fileType: "text", charCount: entry.charCount });
       }
     } catch (err) {
-      req.log.warn({ name, err }, "rfp: failed to process file");
       results.push({ name, error: (err as Error).message });
     }
   }
-
   res.json({ files: results });
 });
 
-// Store pasted text
-router.post("/rfp/store-text", async (req, res): Promise<void> => {
+router.post("/rfp/store-text", (req, res): void => {
   const { name, text } = req.body as Record<string, unknown>;
   if (typeof text !== "string" || !text.trim()) { res.status(400).json({ error: "text is required" }); return; }
   const safeName = typeof name === "string" && name.trim() ? name.trim() : "Pasted document";
   const entry = storeTextDoc(safeName, text.trim());
-  req.log.info({ id: entry.id, name: safeName, charCount: entry.charCount }, "rfp: stored pasted text");
   res.json({ id: entry.id, name: entry.name, charCount: entry.charCount, fileType: "text" });
 });
 
-// Delete document
-router.delete("/rfp/documents/:id", (req, res) => {
-  removeDoc(req.params.id);
-  res.json({ ok: true });
+router.delete("/rfp/documents/:id", (req, res) => { removeDoc(req.params.id); res.json({ ok: true }); });
+
+// ── Pack: create ──────────────────────────────────────────────────────────────
+
+router.post("/rfp/packs", (req, res): void => {
+  const { name, buyer, documentIds } = req.body as Record<string, unknown>;
+  if (!Array.isArray(documentIds) || !documentIds.length) { res.status(400).json({ error: "documentIds required" }); return; }
+
+  const docs = getDocs(documentIds as string[]);
+  if (!docs.length) { res.status(400).json({ error: "No documents found — they may have expired. Please re-upload." }); return; }
+
+  const limit = Math.floor(120_000 / Math.max(docs.length, 1));
+  const parsedContent = buildContent(docs, limit);
+
+  const pack = createPack(
+    typeof name === "string" && name.trim() ? name.trim() : "Bid Pack",
+    typeof buyer === "string" && buyer.trim() ? buyer.trim() : "Unknown Buyer",
+    parsedContent,
+  );
+  req.log.info({ packId: pack.id, buyer: pack.buyer, chars: parsedContent.length }, "rfp: pack created");
+  res.json(pack);
 });
 
-// Fire workbench analysis job
-router.post("/rfp/analyse", (req: Request, res): void => {
-  const { documentIds, vendorContext, company } = req.body as Record<string, unknown>;
-  if (!Array.isArray(documentIds) || documentIds.length === 0) {
-    res.status(400).json({ error: "documentIds array is required" }); return;
+// ── Pack: get ─────────────────────────────────────────────────────────────────
+
+router.get("/rfp/packs/:id", (req, res): void => {
+  const pack = getPack(req.params.id);
+  if (!pack) { res.status(404).json({ error: "Pack not found or expired" }); return; }
+  res.json(pack);
+});
+
+// ── Pack: detect sections ─────────────────────────────────────────────────────
+
+router.post("/rfp/packs/:id/detect-sections", async (req, res): Promise<void> => {
+  const pack = getPack(req.params.id);
+  if (!pack) { res.status(404).json({ error: "Pack not found" }); return; }
+
+  req.log.info({ packId: pack.id }, "rfp: detecting sections");
+  try {
+    const user = `Buyer: ${pack.buyer}\n\nDocument content:\n${pack.parsedContent.slice(0, 80_000)}`;
+    const result = await callClaudeJSON<{ sections: Array<{ code: string; title: string; scoringWeight: string | null; summary: string }> }>(
+      DETECT_SECTIONS_SYSTEM, user, { maxTokens: 2000 },
+    );
+    const raw = Array.isArray(result?.sections) ? result.sections : [];
+    const sections = setSections(pack.id, raw);
+    req.log.info({ packId: pack.id, count: sections.length }, "rfp: sections detected");
+    res.json({ sections });
+  } catch (err) {
+    req.log.error({ err }, "rfp: detect-sections failed");
+    res.status(500).json({ error: (err as Error).message });
   }
-  const job = createJob();
-  req.log.info({ jobId: job.id, documentIds, company }, "rfp: workbench job created");
-  void runWorkbenchJob(job.id, documentIds as string[], String(vendorContext ?? "LogicGate"), String(company ?? "Unknown"), req.log);
-  res.json({ jobId: job.id });
 });
 
-// Poll job status
-router.get("/rfp/jobs/:id", (req, res): void => {
-  const job = getJob(req.params.id);
-  if (!job) { res.status(404).json({ error: "Job not found or expired" }); return; }
-  res.json({
-    jobId: job.id,
-    status: job.status,
-    progress: job.progress,
-    intelligenceSummary: job.intelligenceSummary,
-    responseSections: job.responseSections,
-    documentClassifications: job.documentClassifications,
-    error: job.error,
+// ── Section: extract brief ────────────────────────────────────────────────────
+
+router.post("/rfp/sections/:id/extract-brief", async (req, res): Promise<void> => {
+  const section = getSection(req.params.id);
+  if (!section) { res.status(404).json({ error: "Section not found" }); return; }
+
+  const pack = getPack(section.packId);
+  if (!pack) { res.status(404).json({ error: "Pack not found" }); return; }
+
+  req.log.info({ sectionId: section.id, code: section.code }, "rfp: extracting brief");
+
+  const promptTemplate = readPrompt("extraction.md");
+  const system = promptTemplate
+    .replace("{{SECTION_CODE}}", section.code)
+    .replace("{{SECTION_TITLE}}", section.title);
+
+  const user = `Buyer: ${pack.buyer}\n\nDocument content:\n${pack.parsedContent.slice(0, 60_000)}`;
+
+  try {
+    const brief = await callClaudeJSON<{
+      requirements?: string[];
+      mandated_structure?: string[];
+      constraints?: string[];
+      key_dates?: string[];
+      named_owners?: string[];
+      evaluation_notes?: string | null;
+      scoring_weight?: string | null;
+    }>(system, user, { maxTokens: 2000 });
+
+    const updated = updateSection(section.id, {
+      requirements:      Array.isArray(brief?.requirements)      ? brief.requirements      : [],
+      mandatedStructure: Array.isArray(brief?.mandated_structure) ? brief.mandated_structure : [],
+      constraints:       Array.isArray(brief?.constraints)        ? brief.constraints        : [],
+      keyDates:          Array.isArray(brief?.key_dates)          ? brief.key_dates          : [],
+      namedOwners:       Array.isArray(brief?.named_owners)       ? brief.named_owners       : [],
+      evaluationNotes:   brief?.evaluation_notes ?? null,
+      scoringWeight:     brief?.scoring_weight   ?? section.scoringWeight,
+      briefStatus:       "extracted",
+      briefError:        null,
+    });
+
+    req.log.info({ sectionId: section.id }, "rfp: brief extracted");
+    res.json({ section: updated });
+  } catch (err) {
+    updateSection(section.id, { briefStatus: "error", briefError: (err as Error).message });
+    req.log.error({ err }, "rfp: extract-brief failed");
+    res.status(500).json({ error: (err as Error).message });
+  }
+});
+
+// ── Section: generate draft ───────────────────────────────────────────────────
+
+router.post("/rfp/sections/:id/draft", async (req, res): Promise<void> => {
+  const section = getSection(req.params.id);
+  if (!section) { res.status(404).json({ error: "Section not found" }); return; }
+
+  const pack = getPack(section.packId);
+  if (!pack) { res.status(404).json({ error: "Pack not found" }); return; }
+
+  req.log.info({ sectionId: section.id, code: section.code }, "rfp: generating draft");
+
+  const briefObj = {
+    code: section.code, title: section.title, scoringWeight: section.scoringWeight,
+    requirements: section.requirements, mandatedStructure: section.mandatedStructure,
+    constraints: section.constraints, keyDates: section.keyDates,
+    namedOwners: section.namedOwners, evaluationNotes: section.evaluationNotes,
+  };
+
+  const promptTemplate = readPrompt("drafting.md");
+  const system = promptTemplate
+    .replace("{{SECTION_CODE}}", section.code)
+    .replace("{{SECTION_TITLE}}", section.title)
+    .replace("{{KNOWLEDGE_CONTEXT}}", RR_CONTEXT)
+    .replace("{{SECTION_BRIEF}}", JSON.stringify(briefObj, null, 2))
+    .replace("{{RFP_CONTENT}}", pack.parsedContent.slice(0, 40_000));
+
+  try {
+    const result = await callClaudeJSON<{
+      components?: Array<{ id: number; label: string; content: string }>;
+      placeholders?: Array<{ id: string; placeholder: string; context: string; guidance: string }>;
+    }>(system, "Write the 12-part section response as specified.", { maxTokens: 7000 });
+
+    // Normalise components — ensure all 12 are present
+    const raw: DraftComponent[] = Array.isArray(result?.components) ? result.components as DraftComponent[] : [];
+    const components: DraftComponent[] = COMPONENT_LABELS.map((label, i) => {
+      const id = i + 1;
+      const found = raw.find((c) => c.id === id);
+      return { id, label, content: found?.content ?? `{{PLACEHOLDER: ${label} — not drafted}}` };
+    });
+
+    const placeholders: Placeholder[] = Array.isArray(result?.placeholders)
+      ? (result.placeholders as Placeholder[])
+      : [];
+
+    const draft = saveDraft(section.id, components, placeholders);
+    req.log.info({ sectionId: section.id, placeholderCount: placeholders.length }, "rfp: draft generated");
+    res.json({ draft });
+  } catch (err) {
+    req.log.error({ err }, "rfp: draft generation failed");
+    res.status(500).json({ error: (err as Error).message });
+  }
+});
+
+// ── Draft: update ─────────────────────────────────────────────────────────────
+
+router.patch("/rfp/sections/:id/draft", (req, res): void => {
+  const { components, placeholders } = req.body as Record<string, unknown>;
+  const draft = updateDraft(req.params.id, {
+    ...(Array.isArray(components)   ? { components: components as DraftComponent[] }   : {}),
+    ...(Array.isArray(placeholders) ? { placeholders: placeholders as Placeholder[] } : {}),
   });
+  if (!draft) { res.status(404).json({ error: "Draft not found" }); return; }
+  res.json({ draft });
 });
 
-// Generate section brief (synchronous)
-router.post("/rfp/section-brief", async (req, res): Promise<void> => {
-  const { section, intelligenceSummary, company, vendorContext } = req.body as Record<string, unknown>;
-  if (!section || typeof section !== "object") { res.status(400).json({ error: "section is required" }); return; }
+// ── Draft: advance status ─────────────────────────────────────────────────────
 
-  const s = section as Record<string, unknown>;
-
-  const system = `You are a senior bid consultant at Risk Rising preparing a response brief.
-Given the RFP intelligence summary and a specific response section, produce a brief to guide the person writing the response.
-DO NOT write the response itself — only the brief.
-
-${RR_CONTEXT}
-
-The brief should be opinionated and specific — not generic. If you recognise the type of question (e.g. implementation approach, support model), use your knowledge of what RR does well.
-
-Output ONLY valid JSON — no prose, no code fences:
-{
-  "what_they_want": "One sentence: the core intent of this section",
-  "what_good_looks_like": "One sentence: what an excellent response demonstrates",
-  "key_points_to_cover": ["2-5 specific points to address"],
-  "evidence_and_examples": ["1-3 specific things to reference from RR's experience or capabilities"],
-  "pitfalls_to_avoid": ["1-3 things to avoid in this response"],
-  "suggested_word_count": 400
-}`;
-
-  const summaryStr = intelligenceSummary ? `\nRFP Intelligence Summary:\n${JSON.stringify(intelligenceSummary, null, 2)}` : "";
-  const user = `Company: ${company}\nVendor context: ${vendorContext}\nSection: ${s.section_ref} — ${s.title}\n\nQuestion:\n${s.question_text}${summaryStr}`;
-
-  try {
-    const brief = await callClaudeJSON<Record<string, unknown>>(system, user, { maxTokens: 1200 });
-    req.log.info({ section: s.id }, "rfp: section brief generated");
-    res.json({ brief });
-  } catch (err) {
-    req.log.error({ err }, "rfp: section-brief failed");
-    res.status(500).json({ error: (err as Error).message });
-  }
-});
-
-// Draft a response section (synchronous)
-router.post("/rfp/draft-section", async (req, res): Promise<void> => {
-  const { section, brief, company, vendorContext } = req.body as Record<string, unknown>;
-  if (!section || typeof section !== "object") { res.status(400).json({ error: "section is required" }); return; }
-  if (!brief || typeof brief !== "object") { res.status(400).json({ error: "brief is required" }); return; }
-
-  const s = section as Record<string, unknown>;
-  const b = brief as Record<string, unknown>;
-
-  const system = `You are a senior bid consultant at Risk Rising writing an RFP response section.
-
-${RR_CONTEXT}
-
-Writing rules:
-- UK English throughout
-- Professional but confident and direct tone  
-- Write in the third person ("Risk Rising will..." or "Our approach...") — avoid "I"
-- Address the question directly and specifically — demonstrate you understand the customer's context
-- Be concrete — reference specific methodologies, tools, and approaches
-- Do NOT use generic marketing language or filler phrases
-- Do NOT make up capabilities Risk Rising does not have
-- Do NOT include pricing or commercial terms
-- Do NOT make platform capability commitments on behalf of LogicGate
-- Structure the response as 2-4 well-structured paragraphs
-- Length: approximately ${b.suggested_word_count ?? 400} words
-
-Output ONLY valid JSON — no prose, no code fences:
-{
-  "draft": "The full response text. 2-4 paragraphs. Professional prose.",
-  "assumptions": ["Key assumption that underpins this response — e.g. about scope, data, or access"],
-  "vendor_inputs_needed": ["Specific input needed from LogicGate or Panorays before finalising — or empty array if none"]
-}`;
-
-  const user = `Company: ${String(company)}\nVendor context: ${String(vendorContext)}\nSection: ${s.section_ref} — ${s.title}
-
-Question:
-${s.question_text}
-
-Response Brief:
-What they want: ${b.what_they_want}
-What good looks like: ${b.what_good_looks_like}
-Key points to cover: ${JSON.stringify(b.key_points_to_cover)}
-Evidence and examples: ${JSON.stringify(b.evidence_and_examples)}
-Pitfalls to avoid: ${JSON.stringify(b.pitfalls_to_avoid)}`;
-
-  try {
-    const result = await callClaudeJSON<Record<string, unknown>>(system, user, { maxTokens: 1500 });
-    req.log.info({ section: s.id }, "rfp: section draft generated");
-    res.json(result ?? {});
-  } catch (err) {
-    req.log.error({ err }, "rfp: draft-section failed");
-    res.status(500).json({ error: (err as Error).message });
-  }
+router.post("/rfp/sections/:id/draft/advance", (req, res): void => {
+  const draft = advanceDraftStatus(req.params.id);
+  if (!draft) { res.status(404).json({ error: "Draft not found or already approved" }); return; }
+  res.json({ draft });
 });
 
 export default router;

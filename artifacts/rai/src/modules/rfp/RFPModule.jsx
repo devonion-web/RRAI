@@ -1,85 +1,59 @@
 import React, { useState, useRef, useCallback, useEffect } from 'react'
 import {
   Document, Packer, Paragraph, TextRun, AlignmentType,
-  Table, TableRow, TableCell, WidthType, BorderStyle, HeadingLevel, ShadingType,
+  Table, TableRow, TableCell, WidthType, BorderStyle,
+  ShadingType, Footer, PageNumber,
 } from 'docx'
 import { saveAs } from 'file-saver'
 import {
   rfpUploadFiles, rfpStoreText, rfpRemoveDocument,
-  rfpAnalyse, rfpGetJob, rfpSectionBrief, rfpDraftSection,
+  rfpCreatePack, rfpGetPack, rfpDetectSections,
+  rfpExtractBrief, rfpGenerateDraft, rfpUpdateDraft, rfpAdvanceDraftStatus,
 } from './api.js'
 
-// ── Palette ───────────────────────────────────────────────────────────────────
+// ── Brand palette (UI) ────────────────────────────────────────────────────────
 const NAVY   = '#0B1F3A'
 const BLUE   = '#1D4ED8'
 const GREEN  = '#16A34A'
 const AMBER  = '#D97706'
 const RED    = '#DC2626'
 const PURPLE = '#7C3AED'
-const TEAL   = '#0D9488'
 const MUTED  = '#64748B'
 const BORDER = '#E2E8F0'
 const WHITE  = '#FFFFFF'
 const BG     = '#F8FAFC'
 
+// Brand palette for docx export (per spec)
+const DOC_NAVY   = '06095A'
+const DOC_PURPLE = '3205B3'
+const DOC_CYAN   = '13D4DB'
+const DOC_LCYAN  = 'E7FAFB'
+const DOC_GRAY   = '64748B'
+
 // ── Atoms ─────────────────────────────────────────────────────────────────────
-function Badge({ label, color }) {
-  return <span style={{ display: 'inline-block', padding: '2px 8px', borderRadius: 12, fontSize: 10, fontWeight: 700, background: color.bg, color: color.text, whiteSpace: 'nowrap' }}>{label}</span>
-}
-
-function BulletList({ items, color = '#1E293B', emptyText = '—' }) {
-  if (!items?.length) return <span style={{ fontSize: 12, color: MUTED, fontStyle: 'italic' }}>{emptyText}</span>
+function Badge({ label, color = { bg: '#F1F5F9', text: MUTED } }) {
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-      {items.map((item, i) => (
-        <div key={i} style={{ display: 'flex', gap: 7, alignItems: 'flex-start', fontSize: 12, color: '#1E293B', lineHeight: 1.5 }}>
-          <span style={{ color, flexShrink: 0, fontSize: 9, marginTop: 4 }}>▸</span>
-          <span>{typeof item === 'string' ? item : JSON.stringify(item)}</span>
-        </div>
-      ))}
-    </div>
+    <span style={{ display: 'inline-block', padding: '2px 8px', borderRadius: 12, fontSize: 10, fontWeight: 700, background: color.bg, color: color.text }}>
+      {label}
+    </span>
   )
 }
 
-function SectionLabel({ children, color = MUTED }) {
-  return <div style={{ fontSize: 10, fontWeight: 700, color, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 6 }}>{children}</div>
+function StatusBadge({ status }) {
+  const map = {
+    draft:     { label: 'DRAFT',     bg: '#FEF9C3', text: AMBER },
+    in_review: { label: 'IN REVIEW', bg: '#DBEAFE', text: BLUE },
+    approved:  { label: 'APPROVED',  bg: '#D1FAE5', text: GREEN },
+  }
+  const c = map[status] || map.draft
+  return <Badge label={c.label} color={{ bg: c.bg, text: c.text }} />
 }
 
-function ProgressBar({ progress }) {
-  if (!progress) return null
-  const pct = progress.total > 0 ? Math.round((progress.done / progress.total) * 100) : 5
-  return (
-    <div style={{ marginTop: 10 }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
-        <span style={{ fontSize: 12, color: MUTED }}>{progress.stage}</span>
-        <span style={{ fontSize: 11, color: MUTED }}>{progress.done}/{progress.total}</span>
-      </div>
-      <div style={{ height: 4, background: BORDER, borderRadius: 2, overflow: 'hidden' }}>
-        <div style={{ height: '100%', background: NAVY, borderRadius: 2, width: `${Math.max(pct, 3)}%`, transition: 'width 0.4s ease' }} />
-      </div>
-    </div>
-  )
+function Spinner() {
+  return <span style={{ display: 'inline-block', width: 14, height: 14, border: '2px solid rgba(255,255,255,0.3)', borderTopColor: WHITE, borderRadius: '50%', animation: 'spin 0.7s linear infinite' }} />
 }
 
-// ── Owner + priority badges ───────────────────────────────────────────────────
-function ownerBadge(owner) {
-  if (owner === 'RR')        return { bg: '#DBEAFE', text: BLUE }
-  if (owner === 'LogicGate') return { bg: '#F3E8FF', text: PURPLE }
-  if (owner === 'Joint')     return { bg: '#D1FAE5', text: '#065F46' }
-  return { bg: '#F1F5F9', text: MUTED }
-}
-function priorityBadge(p) {
-  if (p === 'High')   return { bg: '#FEE2E2', text: RED }
-  if (p === 'Medium') return { bg: '#FEF9C3', text: AMBER }
-  return { bg: '#F1F5F9', text: MUTED }
-}
-function impactBadge(p) {
-  if (p === 'High')   return { bg: '#FEE2E2', text: RED }
-  if (p === 'Medium') return { bg: '#FEF9C3', text: AMBER }
-  return { bg: '#F1F5F9', text: MUTED }
-}
-
-// ── DOCX export ───────────────────────────────────────────────────────────────
+// ── Word export ───────────────────────────────────────────────────────────────
 const TBORDERS = {
   top:    { style: BorderStyle.SINGLE, size: 1, color: 'E2E8F0' },
   bottom: { style: BorderStyle.SINGLE, size: 1, color: 'E2E8F0' },
@@ -88,505 +62,196 @@ const TBORDERS = {
   insideH:{ style: BorderStyle.SINGLE, size: 1, color: 'E2E8F0' },
   insideV:{ style: BorderStyle.SINGLE, size: 1, color: 'E2E8F0' },
 }
-function clean(t) { return t ? String(t).replace(/\n/g, ' ').trim() : '' }
-function dH(text) {
+function clean(t) { return t ? String(t).replace(/\n{3,}/g, '\n\n').trim() : '' }
+function dPara(text, options = {}) {
+  const { bold = false, color = '1F2937', size = 22, spacing = 80 } = options
   return new Paragraph({
-    spacing: { before: 280, after: 100 },
-    shading: { type: ShadingType.CLEAR, fill: '0B1F3A' },
-    children: [new TextRun({ text: `  ${clean(text)}`, bold: true, color: 'FFFFFF', font: 'Calibri', size: 24 })],
-  })
-}
-function dPara(text) {
-  return new Paragraph({
-    spacing: { before: 80, after: 80, line: 276 },
-    children: [new TextRun({ text: clean(text), font: 'Calibri', size: 22, color: '1E293B' })],
+    spacing: { after: spacing, line: 276 },
+    children: [new TextRun({ text: clean(text), font: 'Arial', size, bold, color })]
   })
 }
 function dBullet(text) {
   return new Paragraph({
     bullet: { level: 0 }, spacing: { after: 60, line: 260 },
-    children: [new TextRun({ text: clean(text), font: 'Calibri', size: 22, color: '1E293B' })],
+    children: [new TextRun({ text: clean(text), font: 'Arial', size: 22, color: '1F2937' })]
   })
 }
-function dSpacer() { return new Paragraph({ children: [new TextRun('')], spacing: { before: 60, after: 60 } }) }
-function tblH(text) {
-  return new TableCell({
-    shading: { type: ShadingType.CLEAR, fill: '0B1F3A' },
-    margins: { top: 80, bottom: 80, left: 120, right: 120 },
-    children: [new Paragraph({ children: [new TextRun({ text: clean(String(text ?? '')), font: 'Calibri', size: 20, bold: true, color: 'FFFFFF' })] })],
+function dSpacer() { return new Paragraph({ children: [new TextRun('')], spacing: { before: 80, after: 80 } }) }
+function dCompHeader(id, label) {
+  return new Paragraph({
+    spacing: { before: 240, after: 100 },
+    shading: { type: ShadingType.CLEAR, fill: DOC_NAVY },
+    children: [new TextRun({ text: `  ${id}. ${label}`, font: 'Arial', size: 24, bold: true, color: 'FFFFFF' })]
   })
 }
-function tblC(text) {
-  return new TableCell({
-    margins: { top: 80, bottom: 80, left: 120, right: 120 },
-    children: [new Paragraph({ children: [new TextRun({ text: clean(String(text ?? '')), font: 'Calibri', size: 20, color: '1E293B' })] })],
-  })
-}
-
-async function exportSectionDocx({ company, section, draftText, assumptions, vendorInputs }) {
-  const today = new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'long', year: 'numeric' })
-  const children = []
-
-  children.push(new Paragraph({
-    heading: HeadingLevel.TITLE, spacing: { after: 160 },
-    children: [new TextRun({ text: 'RFP Response Draft', font: 'Calibri', size: 48, bold: true, color: '0B1F3A' })],
-  }))
-  children.push(new Paragraph({
-    spacing: { after: 100 },
-    children: [new TextRun({ text: company || 'Unknown', font: 'Calibri', size: 32, bold: true, color: '0B1F3A' })],
-  }))
-  children.push(new Paragraph({
-    spacing: { after: 60 },
-    children: [new TextRun({ text: `Prepared by Risk Rising  ·  ${today}`, font: 'Calibri', size: 22, color: '64748B' })],
-  }))
-  children.push(new Paragraph({
-    spacing: { after: 60 },
-    children: [new TextRun({ text: 'DRAFT — FOR INTERNAL REVIEW ONLY', font: 'Calibri', size: 20, bold: true, color: 'DC2626' })],
-  }))
-  children.push(dSpacer())
-
-  children.push(dH(`${section.section_ref ? section.section_ref + ' — ' : ''}${section.title}`))
-  children.push(dSpacer())
-
-  // Question
-  if (section.question_text) {
-    children.push(new Paragraph({
-      spacing: { before: 80, after: 80 },
-      shading: { type: ShadingType.CLEAR, fill: 'F8FAFC' },
-      children: [new TextRun({ text: `Question: ${clean(section.question_text)}`, font: 'Calibri', size: 20, color: '64748B', italics: true })],
-    }))
-    children.push(dSpacer())
-  }
-
-  // Draft response — split by newlines into paragraphs
-  const paras = (draftText || '').split(/\n+/).filter(p => p.trim())
-  for (const p of paras) {
-    children.push(dPara(p))
-  }
-  children.push(dSpacer())
-
-  // Assumptions
-  if (assumptions?.length) {
-    children.push(dH('Assumptions'))
-    assumptions.forEach(a => children.push(dBullet(a)))
-    children.push(dSpacer())
-  }
-
-  // Vendor inputs
-  if (vendorInputs?.length) {
-    children.push(dH('Vendor Inputs Required'))
-    vendorInputs.forEach(v => children.push(dBullet(v)))
-  }
-
-  const doc = new Document({ sections: [{ children }] })
-  const blob = await Packer.toBlob(doc)
-  const slug = (company || 'RR').replace(/\s+/g, '-')
-  const sectionSlug = (section.section_ref || section.title || 'Section').replace(/[\s.]+/g, '-')
-  saveAs(blob, `RR-Response-${slug}-${sectionSlug}-${new Date().toISOString().slice(0, 10)}.docx`)
-}
-
-async function exportAllDocx({ company, sections, sectionData }) {
-  const today = new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'long', year: 'numeric' })
-  const drafted = sections.filter(s => sectionData[s.id]?.draftText?.trim())
-  if (!drafted.length) return
-
-  const children = []
-  children.push(new Paragraph({
-    heading: HeadingLevel.TITLE, spacing: { after: 160 },
-    children: [new TextRun({ text: 'RFP Response Draft', font: 'Calibri', size: 48, bold: true, color: '0B1F3A' })],
-  }))
-  children.push(new Paragraph({
-    spacing: { after: 100 },
-    children: [new TextRun({ text: company || 'Unknown', font: 'Calibri', size: 32, bold: true, color: '0B1F3A' })],
-  }))
-  children.push(new Paragraph({
-    spacing: { after: 60 },
-    children: [new TextRun({ text: `Prepared by Risk Rising  ·  ${today}`, font: 'Calibri', size: 22, color: '64748B' })],
-  }))
-  children.push(new Paragraph({
-    spacing: { after: 60 },
-    children: [new TextRun({ text: 'DRAFT — FOR INTERNAL REVIEW ONLY', font: 'Calibri', size: 20, bold: true, color: 'DC2626' })],
-  }))
-
-  for (const section of drafted) {
-    const sd = sectionData[section.id]
-    children.push(dSpacer())
-    children.push(dH(`${section.section_ref ? section.section_ref + ' — ' : ''}${section.title}`))
-    children.push(dSpacer())
-    const paras = (sd.draftText || '').split(/\n+/).filter(p => p.trim())
-    for (const p of paras) children.push(dPara(p))
-    if (sd.assumptions?.length) {
-      children.push(dSpacer())
-      children.push(new Paragraph({ children: [new TextRun({ text: 'Assumptions', bold: true, font: 'Calibri', size: 22, color: '0B1F3A' })] }))
-      sd.assumptions.forEach(a => children.push(dBullet(a)))
-    }
-    if (sd.vendorInputs?.length) {
-      children.push(dSpacer())
-      children.push(new Paragraph({ children: [new TextRun({ text: 'Vendor Inputs Required', bold: true, font: 'Calibri', size: 22, color: '0B1F3A' })] }))
-      sd.vendorInputs.forEach(v => children.push(dBullet(v)))
-    }
-  }
-
-  const doc = new Document({ sections: [{ children }] })
-  const blob = await Packer.toBlob(doc)
-  saveAs(blob, `RR-Response-Full-${(company || 'RR').replace(/\s+/g, '-')}-${new Date().toISOString().slice(0, 10)}.docx`)
-}
-
-// ── Intelligence Summary panels ───────────────────────────────────────────────
-function SummaryPanel({ title, icon, accent, children }) {
-  return (
-    <div style={{ background: WHITE, border: `1px solid ${BORDER}`, borderRadius: 8, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-      <div style={{ padding: '8px 14px', borderBottom: `1px solid ${BORDER}`, background: '#FAFBFC', display: 'flex', alignItems: 'center', gap: 8 }}>
-        <span style={{ fontSize: 14 }}>{icon}</span>
-        <span style={{ fontSize: 11, fontWeight: 700, color: accent || NAVY, textTransform: 'uppercase', letterSpacing: '0.04em' }}>{title}</span>
-      </div>
-      <div style={{ padding: '12px 14px', flex: 1 }}>{children}</div>
-    </div>
-  )
-}
-
-function IntelligenceSummary({ summary, company }) {
-  if (!summary) return null
-  const dates    = summary.key_dates            || []
-  const criteria = summary.evaluation_criteria  || []
-  const subReqs  = summary.submission_requirements || []
-  const consts   = summary.key_constraints      || []
-  const rrAreas  = summary.rr_response_areas    || []
-  const lgAreas  = summary.logicgate_response_areas || []
-  const openQs   = summary.open_questions       || []
-  const risks    = summary.key_risks            || []
-
-  return (
-    <div style={{ marginBottom: 24 }}>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
-        <div style={{ fontSize: 13, fontWeight: 700, color: NAVY }}>RFP Intelligence Summary</div>
-        {company && <span style={{ fontSize: 11, color: MUTED }}>{company}</span>}
-      </div>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-
-        {/* Key Dates */}
-        <SummaryPanel title="Key Dates" icon="📅" accent={RED}>
-          {dates.length === 0 ? <span style={{ fontSize: 12, color: MUTED, fontStyle: 'italic' }}>No dates identified</span> : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-              {dates.map((d, i) => (
-                <div key={i} style={{ display: 'flex', gap: 10, alignItems: 'flex-start', fontSize: 12 }}>
-                  <span style={{ fontWeight: 700, color: RED, minWidth: 120, flexShrink: 0 }}>{d.label}</span>
-                  <span style={{ color: NAVY, fontWeight: 600 }}>{d.date}</span>
-                  {d.note && <span style={{ color: MUTED, fontSize: 11 }}>· {d.note}</span>}
-                </div>
-              ))}
-            </div>
-          )}
-        </SummaryPanel>
-
-        {/* Evaluation Criteria */}
-        <SummaryPanel title="Evaluation Criteria" icon="⚖️" accent={AMBER}>
-          {criteria.length === 0 ? <span style={{ fontSize: 12, color: MUTED, fontStyle: 'italic' }}>Not specified</span> : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-              {criteria.map((c, i) => (
-                <div key={i} style={{ display: 'flex', gap: 8, alignItems: 'flex-start', fontSize: 12 }}>
-                  <span style={{ flex: 1, color: '#1E293B' }}>{c.criterion}</span>
-                  {c.weight && <span style={{ fontWeight: 700, color: AMBER, fontSize: 11, whiteSpace: 'nowrap' }}>{c.weight}</span>}
-                </div>
-              ))}
-            </div>
-          )}
-        </SummaryPanel>
-
-        {/* Submission Requirements */}
-        <SummaryPanel title="Submission Requirements" icon="📐" accent={TEAL}>
-          <BulletList items={subReqs} color={TEAL} emptyText="Not specified" />
-        </SummaryPanel>
-
-        {/* Key Constraints */}
-        <SummaryPanel title="Key Constraints" icon="⛔" accent={PURPLE}>
-          <BulletList items={consts} color={PURPLE} emptyText="None identified" />
-        </SummaryPanel>
-
-        {/* RR Response Areas */}
-        <SummaryPanel title="RR Response Areas" icon="🏗️" accent={BLUE}>
-          {rrAreas.length === 0 ? <span style={{ fontSize: 12, color: MUTED, fontStyle: 'italic' }}>None identified</span> : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-              {rrAreas.map((r, i) => (
-                <div key={i} style={{ fontSize: 12 }}>
-                  <span style={{ fontWeight: 600, color: BLUE }}>{r.topic}</span>
-                  {r.why && <span style={{ color: MUTED }}> — {r.why}</span>}
-                </div>
-              ))}
-            </div>
-          )}
-        </SummaryPanel>
-
-        {/* LogicGate Response Areas */}
-        <SummaryPanel title="LogicGate Response Areas" icon="🔷" accent={PURPLE}>
-          {lgAreas.length === 0 ? <span style={{ fontSize: 12, color: MUTED, fontStyle: 'italic' }}>None identified</span> : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-              {lgAreas.map((r, i) => (
-                <div key={i} style={{ fontSize: 12 }}>
-                  <span style={{ fontWeight: 600, color: PURPLE }}>{r.topic}</span>
-                  {r.why && <span style={{ color: MUTED }}> — {r.why}</span>}
-                </div>
-              ))}
-            </div>
-          )}
-        </SummaryPanel>
-
-        {/* Open Questions */}
-        <SummaryPanel title="Open Questions" icon="❓" accent={AMBER}>
-          {openQs.length === 0 ? <span style={{ fontSize: 12, color: MUTED, fontStyle: 'italic' }}>None identified</span> : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-              {openQs.map((q, i) => (
-                <div key={i} style={{ display: 'flex', gap: 7, alignItems: 'flex-start', fontSize: 12 }}>
-                  <span style={{ color: AMBER, fontWeight: 700, flexShrink: 0 }}>{i + 1}.</span>
-                  <span style={{ color: '#1E293B' }}>{q}</span>
-                </div>
-              ))}
-            </div>
-          )}
-        </SummaryPanel>
-
-        {/* Key Risks */}
-        <SummaryPanel title="Key Risks" icon="⚠️" accent={RED}>
-          {risks.length === 0 ? <span style={{ fontSize: 12, color: MUTED, fontStyle: 'italic' }}>None identified</span> : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-              {risks.map((r, i) => (
-                <div key={i} style={{ fontSize: 12 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 2 }}>
-                    <span style={{ fontWeight: 600, color: '#1E293B', flex: 1 }}>{r.risk}</span>
-                    <Badge label={r.impact || 'Medium'} color={impactBadge(r.impact)} />
-                  </div>
-                  {r.action && <div style={{ color: MUTED, fontSize: 11 }}>→ {r.action}</div>}
-                </div>
-              ))}
-            </div>
-          )}
-        </SummaryPanel>
-
-      </div>
-    </div>
-  )
-}
-
-// ── Section Card ──────────────────────────────────────────────────────────────
-function SectionCard({ section, sd, company, vendorContext, intelligenceSummary, onUpdate }) {
-  const [expanded, setExpanded] = useState(false)
-  const [exporting, setExporting] = useState(false)
-
-  const hasBrief = !!sd?.brief
-  const hasDraft = !!sd?.draftText
-
-  async function generateBrief() {
-    onUpdate(section.id, { briefLoading: true })
-    try {
-      const { brief } = await rfpSectionBrief({ section, intelligenceSummary, company, vendorContext })
-      onUpdate(section.id, { brief, briefLoading: false })
-    } catch (e) {
-      onUpdate(section.id, { briefError: e.message, briefLoading: false })
-    }
-  }
-
-  async function generateDraft() {
-    onUpdate(section.id, { draftLoading: true })
-    try {
-      const result = await rfpDraftSection({ section, brief: sd.brief, company, vendorContext })
-      onUpdate(section.id, {
-        draftText: result.draft || '',
-        assumptions: result.assumptions || [],
-        vendorInputs: result.vendor_inputs_needed || [],
-        draftLoading: false,
+function dCallout(text) {
+  return new Table({
+    width: { size: 100, type: WidthType.PERCENTAGE },
+    rows: [new TableRow({ children: [
+      new TableCell({
+        shading: { type: ShadingType.CLEAR, fill: DOC_LCYAN },
+        margins: { top: 120, bottom: 120, left: 180, right: 180 },
+        borders: {
+          left: { style: BorderStyle.THICK, size: 12, color: DOC_CYAN },
+          top: { style: BorderStyle.NIL }, bottom: { style: BorderStyle.NIL }, right: { style: BorderStyle.NIL },
+        },
+        children: [new Paragraph({ children: [new TextRun({ text: clean(text), font: 'Arial', size: 20, color: DOC_NAVY, italics: true })] })]
       })
-    } catch (e) {
-      onUpdate(section.id, { draftError: e.message, draftLoading: false })
+    ]})]
+  })
+}
+
+// Parse risks content into structured rows for table rendering
+function parseRisksForTable(content) {
+  const lines = content.split(/\n+/).map(l => l.trim()).filter(Boolean)
+  const rows = []
+  for (const line of lines) {
+    if (line.toLowerCase().startsWith('risk:') || line.includes('|')) {
+      // Try to parse "Risk: ... | L×I: ... | Mitigation: ... | Owner: ..."
+      const parts = line.split('|').map(p => p.trim())
+      if (parts.length >= 2) {
+        rows.push(parts)
+      }
+    }
+  }
+  return rows
+}
+
+function dRisksTable(content) {
+  const rows = parseRisksForTable(content)
+  if (!rows.length) {
+    return content.split(/\n+/).filter(l => l.trim()).map(l => dBullet(l))
+  }
+  const tableRows = [
+    new TableRow({
+      tableHeader: true,
+      children: ['Risk', 'L×I', 'Mitigation', 'Owner'].map(h => new TableCell({
+        shading: { type: ShadingType.CLEAR, fill: DOC_NAVY },
+        margins: { top: 80, bottom: 80, left: 120, right: 120 },
+        children: [new Paragraph({ children: [new TextRun({ text: h, font: 'Arial', size: 20, bold: true, color: 'FFFFFF' })] })]
+      }))
+    }),
+    ...rows.map((parts, i) => new TableRow({
+      children: Array.from({ length: 4 }, (_, j) => new TableCell({
+        shading: { type: ShadingType.CLEAR, fill: i % 2 === 0 ? 'FFFFFF' : 'F8FAFC' },
+        margins: { top: 80, bottom: 80, left: 120, right: 120 },
+        children: [new Paragraph({ children: [new TextRun({ text: clean(parts[j] ?? ''), font: 'Arial', size: 20, color: '1F2937' })] })]
+      }))
+    }))
+  ]
+  return new Table({ width: { size: 100, type: WidthType.PERCENTAGE }, rows: tableRows })
+}
+
+function dPlaceholderBanner(count) {
+  return dCallout(`⚠ ${count} placeholder${count !== 1 ? 's' : ''} still require human input before this section is ready for release.`)
+}
+
+async function exportSectionDocx({ buyer, sectionCode, sectionTitle, status, components }) {
+  const today = new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'long', year: 'numeric' })
+  const children = []
+
+  // Unfilled placeholder count
+  const unfilledCount = components.reduce((n, c) => {
+    return n + (c.content.match(/\{\{PLACEHOLDER:/g) || []).length
+  }, 0)
+
+  // Cover
+  children.push(new Paragraph({
+    spacing: { after: 120 },
+    children: [new TextRun({ text: 'RFP Response — Commercial Lens', font: 'Arial', size: 44, bold: true, color: DOC_NAVY })]
+  }))
+  children.push(dPara(buyer, { size: 32, bold: true, color: DOC_NAVY, spacing: 80 }))
+  children.push(dPara(`Section ${sectionCode}: ${sectionTitle}`, { size: 26, color: DOC_PURPLE, spacing: 60 }))
+  children.push(dPara(`Prepared by Risk Rising · ${today}`, { size: 20, color: DOC_GRAY, spacing: 40 }))
+  children.push(dPara('DRAFT — FOR INTERNAL REVIEW ONLY. NOT APPROVED FOR RELEASE.', { size: 20, bold: true, color: 'DC2626', spacing: 120 }))
+  children.push(dPara('Commercial lens — this output is for internal bid preparation only. It must not be used as, or feed, independent analyst content, white papers, or public thought leadership.', { size: 18, color: DOC_GRAY, spacing: 40 }))
+
+  if (unfilledCount > 0) {
+    children.push(dSpacer())
+    children.push(dPlaceholderBanner(unfilledCount))
+  }
+
+  // 12 components
+  for (const comp of components) {
+    children.push(dSpacer())
+    children.push(dCompHeader(comp.id, comp.label))
+    if (comp.id === 12) {
+      // Risks — special table
+      const el = dRisksTable(comp.content)
+      if (Array.isArray(el)) { for (const p of el) children.push(p) }
+      else children.push(el)
+    } else if ([9, 8].includes(comp.id)) {
+      // Assumptions, Pre-work — callout box
+      children.push(dCallout(comp.content))
+    } else {
+      // Regular paragraphs
+      const paras = comp.content.split(/\n+/).filter(p => p.trim())
+      for (const p of paras) children.push(dPara(p))
     }
   }
 
-  async function handleExport() {
-    setExporting(true)
-    try {
-      await exportSectionDocx({ company, section, draftText: sd.draftText, assumptions: sd.assumptions, vendorInputs: sd.vendorInputs })
-    } catch {}
-    setExporting(false)
+  const footer = new Footer({
+    children: [new Paragraph({
+      alignment: AlignmentType.RIGHT,
+      children: [
+        new TextRun({ text: 'Commercial lens — Risk Rising internal draft   ', font: 'Arial', size: 18, color: DOC_GRAY }),
+        new TextRun({ children: [PageNumber.CURRENT], font: 'Arial', size: 18, color: DOC_GRAY }),
+      ]
+    })]
+  })
+
+  const doc = new Document({
+    sections: [{
+      properties: {
+        page: {
+          size: { width: 11906, height: 16838 },
+          margin: { top: 1440, bottom: 1440, left: 1440, right: 1440 },
+        }
+      },
+      footers: { default: footer },
+      children,
+    }]
+  })
+
+  try {
+    const blob = await Packer.toBlob(doc)
+    const slug = `${buyer || 'RR'}-S${sectionCode}`.replace(/[\s.]+/g, '-')
+    saveAs(blob, `RR-${slug}-${new Date().toISOString().slice(0, 10)}.docx`)
+  } catch (err) {
+    throw new Error(`Word export failed: ${err.message}`)
   }
-
-  const oc = ownerBadge(section.owner)
-  const pc = priorityBadge(section.priority)
-
-  return (
-    <div style={{ background: WHITE, border: `1px solid ${BORDER}`, borderRadius: 8, overflow: 'hidden', marginBottom: 10 }}>
-      {/* Card header */}
-      <button onClick={() => setExpanded(p => !p)}
-        style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 10, padding: '12px 16px', background: 'none', border: 'none', cursor: 'pointer', textAlign: 'left' }}>
-        {section.section_ref && (
-          <span style={{ background: NAVY, color: WHITE, fontSize: 10, fontWeight: 700, padding: '2px 8px', borderRadius: 4, flexShrink: 0 }}>
-            {section.section_ref}
-          </span>
-        )}
-        <span style={{ fontSize: 13, fontWeight: 700, color: NAVY, flex: 1, lineHeight: 1.3 }}>{section.title}</span>
-        <div style={{ display: 'flex', gap: 6, flexShrink: 0, alignItems: 'center' }}>
-          <Badge label={section.owner || 'RR'} color={oc} />
-          <Badge label={section.priority || 'Medium'} color={pc} />
-          {hasDraft && <span style={{ fontSize: 10, color: GREEN, fontWeight: 700 }}>✓ Drafted</span>}
-          {hasBrief && !hasDraft && <span style={{ fontSize: 10, color: BLUE, fontWeight: 700 }}>· Briefed</span>}
-          <span style={{ fontSize: 11, color: MUTED }}>{expanded ? '▲' : '▼'}</span>
-        </div>
-      </button>
-
-      {expanded && (
-        <div style={{ borderTop: `1px solid ${BORDER}`, padding: '14px 16px' }}>
-
-          {/* Question text */}
-          {section.question_text && (
-            <div style={{ background: '#FAFBFC', border: `1px solid ${BORDER}`, borderRadius: 6, padding: '10px 14px', marginBottom: 14, fontSize: 12, color: '#1E293B', lineHeight: 1.6, fontStyle: 'italic' }}>
-              {section.question_text}
-            </div>
-          )}
-          {section.notes && <div style={{ fontSize: 11, color: MUTED, marginBottom: 10 }}>Note: {section.notes}</div>}
-
-          {/* Brief section */}
-          {!hasBrief && (
-            <button onClick={generateBrief} disabled={sd?.briefLoading}
-              style={{ background: sd?.briefLoading ? '#CBD5E1' : NAVY, color: WHITE, border: 'none', borderRadius: 6, padding: '8px 16px', fontSize: 12, fontWeight: 600, cursor: sd?.briefLoading ? 'not-allowed' : 'pointer', marginBottom: 10 }}>
-              {sd?.briefLoading ? '⏳ Generating brief…' : '→ Generate Section Brief'}
-            </button>
-          )}
-          {sd?.briefError && <div style={{ color: RED, fontSize: 11, marginBottom: 8 }}>{sd.briefError}</div>}
-
-          {hasBrief && (
-            <div style={{ background: '#F0FDF4', border: `1px solid #BBF7D0`, borderRadius: 8, padding: '14px 16px', marginBottom: 14 }}>
-              <div style={{ fontSize: 11, fontWeight: 700, color: GREEN, marginBottom: 10, textTransform: 'uppercase', letterSpacing: '0.04em' }}>Response Brief</div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                <div>
-                  <div style={{ fontSize: 10, fontWeight: 700, color: MUTED, textTransform: 'uppercase', marginBottom: 3 }}>What they want</div>
-                  <div style={{ fontSize: 12, color: '#1E293B', lineHeight: 1.5 }}>{sd.brief.what_they_want}</div>
-                </div>
-                <div>
-                  <div style={{ fontSize: 10, fontWeight: 700, color: MUTED, textTransform: 'uppercase', marginBottom: 3 }}>What good looks like</div>
-                  <div style={{ fontSize: 12, color: '#1E293B', lineHeight: 1.5 }}>{sd.brief.what_good_looks_like}</div>
-                </div>
-                {sd.brief.key_points_to_cover?.length > 0 && (
-                  <div>
-                    <div style={{ fontSize: 10, fontWeight: 700, color: MUTED, textTransform: 'uppercase', marginBottom: 3 }}>Key points to cover</div>
-                    <BulletList items={sd.brief.key_points_to_cover} color={GREEN} />
-                  </div>
-                )}
-                {sd.brief.evidence_and_examples?.length > 0 && (
-                  <div>
-                    <div style={{ fontSize: 10, fontWeight: 700, color: MUTED, textTransform: 'uppercase', marginBottom: 3 }}>Evidence & examples</div>
-                    <BulletList items={sd.brief.evidence_and_examples} color={BLUE} />
-                  </div>
-                )}
-                {sd.brief.pitfalls_to_avoid?.length > 0 && (
-                  <div>
-                    <div style={{ fontSize: 10, fontWeight: 700, color: MUTED, textTransform: 'uppercase', marginBottom: 3 }}>Pitfalls to avoid</div>
-                    <BulletList items={sd.brief.pitfalls_to_avoid} color={RED} />
-                  </div>
-                )}
-                {sd.brief.suggested_word_count && (
-                  <div style={{ fontSize: 11, color: MUTED }}>Suggested word count: ~{sd.brief.suggested_word_count} words</div>
-                )}
-              </div>
-            </div>
-          )}
-
-          {/* Draft section */}
-          {hasBrief && !hasDraft && (
-            <button onClick={generateDraft} disabled={sd?.draftLoading}
-              style={{ background: sd?.draftLoading ? '#CBD5E1' : GREEN, color: WHITE, border: 'none', borderRadius: 6, padding: '8px 16px', fontSize: 12, fontWeight: 600, cursor: sd?.draftLoading ? 'not-allowed' : 'pointer', marginBottom: 10 }}>
-              {sd?.draftLoading ? '⏳ Drafting response…' : '✦ Generate Draft Response'}
-            </button>
-          )}
-          {sd?.draftError && <div style={{ color: RED, fontSize: 11, marginBottom: 8 }}>{sd.draftError}</div>}
-
-          {hasDraft && (
-            <div style={{ marginTop: 4 }}>
-              <div style={{ fontSize: 10, fontWeight: 700, color: MUTED, textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: 6 }}>Draft Response</div>
-              <textarea
-                value={sd.draftText}
-                onChange={e => onUpdate(section.id, { draftText: e.target.value })}
-                rows={Math.max(8, (sd.draftText?.split('\n').length || 0) + 2)}
-                style={{ width: '100%', padding: '10px 12px', border: `1px solid ${BORDER}`, borderRadius: 6, fontSize: 13, fontFamily: 'Georgia, serif', lineHeight: 1.7, resize: 'vertical', boxSizing: 'border-box', color: '#1E293B' }}
-              />
-
-              {sd.assumptions?.length > 0 && (
-                <div style={{ marginTop: 8 }}>
-                  <div style={{ fontSize: 10, fontWeight: 700, color: AMBER, textTransform: 'uppercase', marginBottom: 4 }}>Assumptions</div>
-                  <BulletList items={sd.assumptions} color={AMBER} />
-                </div>
-              )}
-              {sd.vendorInputs?.length > 0 && (
-                <div style={{ marginTop: 8 }}>
-                  <div style={{ fontSize: 10, fontWeight: 700, color: PURPLE, textTransform: 'uppercase', marginBottom: 4 }}>Vendor Inputs Required</div>
-                  <BulletList items={sd.vendorInputs} color={PURPLE} />
-                </div>
-              )}
-
-              <div style={{ display: 'flex', gap: 8, marginTop: 14 }}>
-                <button onClick={handleExport} disabled={exporting}
-                  style={{ background: exporting ? '#CBD5E1' : NAVY, color: WHITE, border: 'none', borderRadius: 6, padding: '8px 16px', fontSize: 12, fontWeight: 600, cursor: exporting ? 'not-allowed' : 'pointer' }}>
-                  {exporting ? 'Exporting…' : '⬇ Export Section to Word'}
-                </button>
-                <button onClick={generateDraft} disabled={sd?.draftLoading}
-                  style={{ background: 'none', border: `1px solid ${BORDER}`, borderRadius: 6, padding: '7px 14px', fontSize: 12, color: MUTED, cursor: 'pointer' }}>
-                  ↺ Regenerate
-                </button>
-              </div>
-            </div>
-          )}
-
-        </div>
-      )}
-    </div>
-  )
 }
 
-// ── Main component ────────────────────────────────────────────────────────────
-export default function RFPModule({ onBack }) {
-  const [company, setCompany]             = useState('')
-  const [vendorContext, setVendorContext]  = useState('LogicGate')
-  const [documents, setDocuments]         = useState([])
-  const [uploading, setUploading]         = useState(false)
-  const [pasteText, setPasteText]         = useState('')
-  const [pasteName, setPasteName]         = useState('')
+// ── Placeholder utilities ─────────────────────────────────────────────────────
+function detectPlaceholders(components) {
+  const seen = new Set()
+  const result = []
+  for (const comp of components) {
+    const matches = [...(comp.content || '').matchAll(/\{\{PLACEHOLDER:\s*([^}]+?)\}\}/g)]
+    for (const m of matches) {
+      const key = m[1].trim()
+      if (!seen.has(key)) {
+        seen.add(key)
+        result.push({ key, placeholder: m[0], context: comp.label, value: '' })
+      }
+    }
+  }
+  return result
+}
 
-  const [jobId, setJobId]                 = useState(null)
-  const [polling, setPolling]             = useState(false)
-  const [progress, setProgress]           = useState(null)
+// ── Sub-components ────────────────────────────────────────────────────────────
 
-  const [intelligenceSummary, setSummary] = useState(null)
-  const [responseSections, setSections]   = useState([])
-  const [sectionData, setSectionData]     = useState({})
-
-  const [setupCollapsed, setSetupCollapsed] = useState(false)
-  const [error, setError]                 = useState(null)
-  const [exporting, setExporting]         = useState(false)
-
+function SetupScreen({ onPack }) {
+  const [buyer, setBuyer]         = useState('')
+  const [packName, setPackName]   = useState('')
+  const [documents, setDocuments] = useState([])
+  const [pasteText, setPasteText] = useState('')
+  const [pasteName, setPasteName] = useState('')
+  const [uploading, setUploading] = useState(false)
+  const [creating, setCreating]   = useState(false)
+  const [error, setError]         = useState(null)
   const fileInputRef = useRef(null)
 
-  // ── Polling ──
-  useEffect(() => {
-    if (!jobId || !polling) return
-    const timer = setInterval(async () => {
-      try {
-        const job = await rfpGetJob(jobId)
-        if (job.progress) setProgress(job.progress)
-        if (job.status === 'done') {
-          setSummary(job.intelligenceSummary || null)
-          setSections(job.responseSections || [])
-          setPolling(false)
-          setSetupCollapsed(true)
-        } else if (job.status === 'error') {
-          setError(job.error || 'Analysis failed')
-          setPolling(false)
-        }
-      } catch (e) {
-        setError(e.message)
-        setPolling(false)
-      }
-    }, 2000)
-    return () => clearInterval(timer)
-  }, [jobId, polling])
-
-  // ── Upload ──
   async function handleFiles(files) {
     if (!files?.length) return
     setUploading(true); setError(null)
@@ -602,9 +267,6 @@ export default function RFPModule({ onBack }) {
     finally { setUploading(false) }
   }
 
-  function handleDrop(e) { e.preventDefault(); handleFiles(Array.from(e.dataTransfer.files)) }
-  function handleDragOver(e) { e.preventDefault() }
-
   async function addPasted() {
     if (!pasteText.trim()) return
     setUploading(true); setError(null)
@@ -616,209 +278,513 @@ export default function RFPModule({ onBack }) {
     finally { setUploading(false) }
   }
 
-  // ── Analysis ──
-  async function runAnalysis() {
-    if (!documents.length || polling) return
-    setError(null); setSummary(null); setSections([]); setSectionData({}); setProgress(null)
+  async function create() {
+    if (!documents.length || creating) return
+    setCreating(true); setError(null)
     try {
-      const { jobId: jid } = await rfpAnalyse({ documentIds: documents.map(d => d.id), vendorContext, company: company.trim() || 'Unknown' })
-      setJobId(jid); setPolling(true)
-      setProgress({ done: 0, total: 3, stage: 'Starting analysis…' })
+      const pack = await rfpCreatePack({ name: packName.trim() || 'Bid Pack', buyer: buyer.trim() || 'Unknown', documentIds: documents.map(d => d.id) })
+      onPack(pack)
+    } catch (e) { setError(e.message); setCreating(false) }
+  }
+
+  return (
+    <div style={{ maxWidth: 740, margin: '0 auto', padding: '32px 24px' }}>
+      <div style={{ marginBottom: 28 }}>
+        <div style={{ fontSize: 22, fontWeight: 700, color: NAVY, marginBottom: 6 }}>New Bid Pack</div>
+        <div style={{ fontSize: 13, color: MUTED }}>Upload the RFP files, then RRAI will identify the scored sections and help you draft each response.</div>
+      </div>
+
+      {/* Buyer + pack name */}
+      <div style={{ background: WHITE, border: `1px solid ${BORDER}`, borderRadius: 8, padding: '18px 22px', marginBottom: 16 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, marginBottom: 16 }}>
+          <div>
+            <label style={{ fontSize: 10, fontWeight: 700, color: NAVY, display: 'block', marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Buyer / Organisation</label>
+            <input value={buyer} onChange={e => setBuyer(e.target.value)} placeholder="e.g. Marks & Spencer"
+              style={{ width: '100%', padding: '9px 12px', border: `1px solid ${BORDER}`, borderRadius: 6, fontSize: 13, boxSizing: 'border-box' }} />
+          </div>
+          <div>
+            <label style={{ fontSize: 10, fontWeight: 700, color: NAVY, display: 'block', marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Pack Name</label>
+            <input value={packName} onChange={e => setPackName(e.target.value)} placeholder="e.g. M&S GRC RFP 2026"
+              style={{ width: '100%', padding: '9px 12px', border: `1px solid ${BORDER}`, borderRadius: 6, fontSize: 13, boxSizing: 'border-box' }} />
+          </div>
+        </div>
+
+        {/* Paste */}
+        <div style={{ marginBottom: 12 }}>
+          <label style={{ fontSize: 10, fontWeight: 700, color: NAVY, display: 'block', marginBottom: 5, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Paste document text</label>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', marginBottom: 5 }}>
+            <input value={pasteName} onChange={e => setPasteName(e.target.value)} placeholder="Document name"
+              style={{ flex: 1, padding: '7px 12px', border: `1px solid ${BORDER}`, borderRadius: 6, fontSize: 13 }} />
+            <button onClick={addPasted} disabled={!pasteText.trim() || uploading}
+              style={{ background: pasteText.trim() && !uploading ? NAVY : '#CBD5E1', color: WHITE, border: 'none', borderRadius: 6, padding: '8px 14px', fontSize: 12, fontWeight: 600, cursor: pasteText.trim() && !uploading ? 'pointer' : 'not-allowed', whiteSpace: 'nowrap' }}>
+              + Add
+            </button>
+          </div>
+          <textarea value={pasteText} onChange={e => setPasteText(e.target.value)} rows={3}
+            placeholder="Paste RFP content, evaluation framework, scope, or procurement instructions…"
+            style={{ width: '100%', padding: '8px 12px', border: `1px solid ${BORDER}`, borderRadius: 6, fontSize: 13, fontFamily: 'inherit', resize: 'vertical', boxSizing: 'border-box', lineHeight: 1.5 }} />
+        </div>
+
+        {/* Drop zone */}
+        <div onDrop={e => { e.preventDefault(); handleFiles(Array.from(e.dataTransfer.files)) }}
+          onDragOver={e => e.preventDefault()}
+          style={{ border: `1px dashed ${BORDER}`, borderRadius: 6, padding: '10px 16px', background: '#FAFBFC', display: 'flex', alignItems: 'center', gap: 10, marginBottom: documents.length ? 10 : 0 }}>
+          <span style={{ fontSize: 15 }}>{uploading ? '⏳' : '📎'}</span>
+          <span style={{ fontSize: 12, color: MUTED }}>{uploading ? 'Uploading…' : 'Drop files — PDF, Word, Excel, text'}</span>
+          <button onClick={() => fileInputRef.current?.click()} disabled={uploading}
+            style={{ marginLeft: 'auto', fontSize: 11, color: NAVY, background: 'none', border: `1px solid ${BORDER}`, borderRadius: 4, padding: '3px 10px', cursor: 'pointer' }}>Browse</button>
+          <input ref={fileInputRef} type="file" multiple accept=".docx,.doc,.pdf,.xlsx,.xls,.csv,.txt,.md"
+            style={{ display: 'none' }} onChange={e => { handleFiles(Array.from(e.target.files)); e.target.value = '' }} />
+        </div>
+
+        {/* Document chips */}
+        {documents.length > 0 && (
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 10 }}>
+            {documents.map(d => (
+              <div key={d.id} style={{ display: 'flex', alignItems: 'center', gap: 5, background: '#EAF1F8', borderRadius: 20, padding: '3px 10px', fontSize: 12 }}>
+                <span>{d.fileType === 'excel' ? '📊' : '📄'}</span>
+                <span>{d.name}</span>
+                {d.rowCount ? <span style={{ color: MUTED, fontSize: 10 }}>({d.rowCount} rows)</span>
+                  : d.charCount ? <span style={{ color: MUTED, fontSize: 10 }}>({Math.round(d.charCount / 1000)}k chars)</span> : null}
+                <button onClick={() => { rfpRemoveDocument(d.id); setDocuments(p => p.filter(x => x.id !== d.id)) }}
+                  style={{ background: 'none', border: 'none', cursor: 'pointer', color: MUTED, fontSize: 13, padding: 0, marginLeft: 2 }}>×</button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <button onClick={create} disabled={!documents.length || creating}
+        style={{ width: '100%', background: documents.length && !creating ? NAVY : '#CBD5E1', color: WHITE, border: 'none', borderRadius: 8, padding: '12px 0', fontSize: 14, fontWeight: 700, cursor: documents.length && !creating ? 'pointer' : 'not-allowed', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10 }}>
+        {creating ? <><Spinner /> Analysing pack…</> : '→ Analyse Bid Pack'}
+      </button>
+
+      {error && <div style={{ marginTop: 10, color: RED, fontSize: 12, background: '#FEE2E2', padding: '8px 12px', borderRadius: 6, whiteSpace: 'pre-wrap' }}>{error}</div>}
+    </div>
+  )
+}
+
+// ── Sections screen ───────────────────────────────────────────────────────────
+function SectionsScreen({ pack, onDraft, onReset }) {
+  const [sections, setSections]           = useState(pack.sections || [])
+  const [detecting, setDetecting]         = useState(false)
+  const [briefLoading, setBriefLoading]   = useState(null)  // sectionId
+  const [draftLoading, setDraftLoading]   = useState(null)  // sectionId
+  const [expanded, setExpanded]           = useState(null)  // sectionId
+  const [error, setError]                 = useState(null)
+
+  useEffect(() => {
+    // Auto-detect sections if none detected yet
+    if (!sections.length) detect()
+  }, [])
+
+  async function detect() {
+    setDetecting(true); setError(null)
+    try {
+      const { sections: s } = await rfpDetectSections(pack.id)
+      setSections(s || [])
     } catch (e) { setError(e.message) }
+    finally { setDetecting(false) }
   }
 
-  // ── Section data updates ──
-  function updateSection(id, patch) {
-    setSectionData(p => ({ ...p, [id]: { ...(p[id] || {}), ...patch } }))
+  async function extractBrief(section) {
+    setBriefLoading(section.id); setError(null)
+    try {
+      const { section: updated } = await rfpExtractBrief(section.id)
+      setSections(p => p.map(s => s.id === section.id ? updated : s))
+      setExpanded(section.id)
+    } catch (e) { setError(e.message) }
+    finally { setBriefLoading(null) }
   }
 
-  // ── Reset ──
-  function resetAll() {
-    documents.forEach(d => rfpRemoveDocument(d.id).catch(() => {}))
-    setDocuments([]); setSummary(null); setSections([]); setSectionData({})
-    setJobId(null); setPolling(false); setProgress(null); setError(null)
-    setSetupCollapsed(false)
+  async function startDraft(section) {
+    setDraftLoading(section.id); setError(null)
+    try {
+      const { draft } = await rfpGenerateDraft(section.id)
+      onDraft({ ...section, draft })
+    } catch (e) { setError(e.message); setDraftLoading(null) }
   }
 
-  const hasResults = !!intelligenceSummary
-  const draftedCount = Object.values(sectionData).filter(sd => sd?.draftText?.trim()).length
+  return (
+    <div style={{ maxWidth: 900, margin: '0 auto', padding: '24px 24px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 }}>
+        <div>
+          <div style={{ fontSize: 18, fontWeight: 700, color: NAVY }}>{pack.buyer}</div>
+          <div style={{ fontSize: 12, color: MUTED }}>{pack.name}</div>
+        </div>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button onClick={detect} disabled={detecting}
+            style={{ background: 'none', border: `1px solid ${BORDER}`, borderRadius: 6, padding: '6px 14px', fontSize: 12, color: MUTED, cursor: 'pointer' }}>
+            ↺ Re-detect
+          </button>
+          <button onClick={onReset}
+            style={{ background: 'none', border: `1px solid ${BORDER}`, borderRadius: 6, padding: '6px 14px', fontSize: 12, color: MUTED, cursor: 'pointer' }}>
+            + New pack
+          </button>
+        </div>
+      </div>
+
+      {detecting && (
+        <div style={{ background: WHITE, border: `1px solid ${BORDER}`, borderRadius: 8, padding: 24, textAlign: 'center', color: MUTED, fontSize: 13 }}>
+          <div style={{ marginBottom: 8 }}>🔍 Detecting scored response sections…</div>
+          <div style={{ fontSize: 11 }}>Reading the procurement documents to identify every section requiring a written response.</div>
+        </div>
+      )}
+
+      {error && <div style={{ marginBottom: 12, color: RED, fontSize: 12, background: '#FEE2E2', padding: '8px 12px', borderRadius: 6 }}>{error}</div>}
+
+      {!detecting && sections.length === 0 && (
+        <div style={{ background: WHITE, border: `1px solid ${BORDER}`, borderRadius: 8, padding: 24, textAlign: 'center', color: MUTED }}>
+          <div style={{ fontSize: 16, marginBottom: 8 }}>No scored sections detected.</div>
+          <div style={{ fontSize: 12, marginBottom: 16 }}>This can happen if the document contains mostly administrative content or tick-box requirements. Try re-detecting or paste the RFP's scored questions section directly.</div>
+          <button onClick={detect} style={{ background: NAVY, color: WHITE, border: 'none', borderRadius: 6, padding: '8px 18px', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>↺ Try again</button>
+        </div>
+      )}
+
+      {sections.length > 0 && (
+        <div>
+          <div style={{ fontSize: 12, color: MUTED, marginBottom: 12 }}>
+            {sections.length} scored section{sections.length !== 1 ? 's' : ''} detected — extract a brief for each section, then generate the draft response.
+          </div>
+          {sections.map(section => {
+            const isExpanded = expanded === section.id
+            const briefExtracted = section.briefStatus === 'extracted'
+            const isBriefLoading = briefLoading === section.id
+            const isDraftLoading = draftLoading === section.id
+            const hasDraft = !!section.draft
+
+            return (
+              <div key={section.id} style={{ background: WHITE, border: `1px solid ${BORDER}`, borderRadius: 8, marginBottom: 10, overflow: 'hidden' }}>
+                {/* Header row */}
+                <div style={{ padding: '13px 16px', display: 'flex', alignItems: 'center', gap: 10 }}>
+                  <span style={{ background: NAVY, color: WHITE, fontSize: 10, fontWeight: 700, padding: '2px 8px', borderRadius: 4, flexShrink: 0 }}>{section.code}</span>
+                  <span style={{ fontSize: 13, fontWeight: 600, color: NAVY, flex: 1 }}>{section.title}</span>
+                  {section.scoringWeight && <Badge label={section.scoringWeight} color={{ bg: '#FEF9C3', text: AMBER }} />}
+                  {hasDraft && <Badge label="Drafted" color={{ bg: '#D1FAE5', text: GREEN }} />}
+                  {briefExtracted && !hasDraft && <Badge label="Brief ready" color={{ bg: '#DBEAFE', text: BLUE }} />}
+
+                  {/* Actions */}
+                  <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+                    {!briefExtracted && !isBriefLoading && (
+                      <button onClick={() => extractBrief(section)}
+                        style={{ background: NAVY, color: WHITE, border: 'none', borderRadius: 6, padding: '6px 12px', fontSize: 11, fontWeight: 600, cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                        Extract brief
+                      </button>
+                    )}
+                    {isBriefLoading && (
+                      <button disabled style={{ background: '#CBD5E1', color: WHITE, border: 'none', borderRadius: 6, padding: '6px 12px', fontSize: 11, fontWeight: 600, display: 'flex', gap: 6, alignItems: 'center', whiteSpace: 'nowrap' }}>
+                        <Spinner /> Extracting…
+                      </button>
+                    )}
+                    {briefExtracted && !isDraftLoading && (
+                      <>
+                        <button onClick={() => setExpanded(isExpanded ? null : section.id)}
+                          style={{ background: 'none', border: `1px solid ${BORDER}`, borderRadius: 6, padding: '5px 10px', fontSize: 11, color: MUTED, cursor: 'pointer' }}>
+                          {isExpanded ? 'Hide brief' : 'View brief'}
+                        </button>
+                        <button onClick={() => startDraft(section)}
+                          style={{ background: GREEN, color: WHITE, border: 'none', borderRadius: 6, padding: '6px 12px', fontSize: 11, fontWeight: 600, cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                          {hasDraft ? 'Open draft →' : 'Generate draft →'}
+                        </button>
+                      </>
+                    )}
+                    {isDraftLoading && (
+                      <button disabled style={{ background: '#CBD5E1', color: WHITE, border: 'none', borderRadius: 6, padding: '6px 12px', fontSize: 11, fontWeight: 600, display: 'flex', gap: 6, alignItems: 'center', whiteSpace: 'nowrap' }}>
+                        <Spinner /> Drafting…
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                {/* Summary */}
+                {section.summary && !isExpanded && (
+                  <div style={{ padding: '0 16px 12px', fontSize: 12, color: MUTED }}>{section.summary}</div>
+                )}
+
+                {/* Expanded brief */}
+                {isExpanded && briefExtracted && (
+                  <div style={{ borderTop: `1px solid ${BORDER}`, padding: '14px 16px', background: '#FAFBFC' }}>
+                    {section.scoringWeight && (
+                      <div style={{ marginBottom: 10 }}>
+                        <div style={{ fontSize: 10, fontWeight: 700, color: AMBER, textTransform: 'uppercase', marginBottom: 3 }}>Scoring weight</div>
+                        <div style={{ fontSize: 13, fontWeight: 700, color: AMBER }}>{section.scoringWeight}</div>
+                      </div>
+                    )}
+                    {section.requirements?.length > 0 && (
+                      <div style={{ marginBottom: 10 }}>
+                        <div style={{ fontSize: 10, fontWeight: 700, color: NAVY, textTransform: 'uppercase', marginBottom: 4 }}>Requirements ({section.requirements.length})</div>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                          {section.requirements.map((r, i) => (
+                            <div key={i} style={{ fontSize: 12, color: '#1E293B', display: 'flex', gap: 8, lineHeight: 1.5 }}>
+                              <span style={{ color: BLUE, flexShrink: 0 }}>{i + 1}.</span><span>{r}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    {section.constraints?.length > 0 && (
+                      <div style={{ marginBottom: 10 }}>
+                        <div style={{ fontSize: 10, fontWeight: 700, color: RED, textTransform: 'uppercase', marginBottom: 4 }}>Constraints</div>
+                        {section.constraints.map((c, i) => <div key={i} style={{ fontSize: 12, color: '#1E293B', marginBottom: 2 }}>• {c}</div>)}
+                      </div>
+                    )}
+                    {section.mandatedStructure?.length > 0 && (
+                      <div style={{ marginBottom: 10 }}>
+                        <div style={{ fontSize: 10, fontWeight: 700, color: PURPLE, textTransform: 'uppercase', marginBottom: 4 }}>Mandated structure</div>
+                        {section.mandatedStructure.map((s, i) => <div key={i} style={{ fontSize: 12, color: '#1E293B', marginBottom: 2 }}>• {s}</div>)}
+                      </div>
+                    )}
+                    {section.evaluationNotes && (
+                      <div>
+                        <div style={{ fontSize: 10, fontWeight: 700, color: MUTED, textTransform: 'uppercase', marginBottom: 4 }}>Evaluation notes</div>
+                        <div style={{ fontSize: 12, color: '#1E293B', lineHeight: 1.5, fontStyle: 'italic' }}>{section.evaluationNotes}</div>
+                      </div>
+                    )}
+                    <div style={{ marginTop: 14 }}>
+                      <button onClick={() => startDraft(section)} disabled={isDraftLoading}
+                        style={{ background: isDraftLoading ? '#CBD5E1' : GREEN, color: WHITE, border: 'none', borderRadius: 6, padding: '8px 18px', fontSize: 12, fontWeight: 600, cursor: isDraftLoading ? 'not-allowed' : 'pointer', display: 'flex', gap: 8, alignItems: 'center' }}>
+                        {isDraftLoading ? <><Spinner /> Drafting…</> : '✦ Generate 12-Part Draft Response →'}
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )
+          })}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── Draft screen ──────────────────────────────────────────────────────────────
+function DraftScreen({ section, buyer, packId, onBack }) {
+  const [components, setComponents]         = useState(section.draft?.components || [])
+  const [placeholderValues, setPhValues]    = useState({})
+  const [status, setStatus]                 = useState(section.draft?.status || 'draft')
+  const [saving, setSaving]                 = useState(false)
+  const [advancing, setAdvancing]           = useState(false)
+  const [exporting, setExporting]           = useState(false)
+  const [exportError, setExportError]       = useState(null)
+  const [dirty, setDirty]                   = useState(false)
+
+  const placeholders = detectPlaceholders(components)
+  const unfilledCount = placeholders.filter(p => !placeholderValues[p.key]).length
+
+  function updateComponent(id, content) {
+    setComponents(prev => prev.map(c => c.id === id ? { ...c, content } : c))
+    setDirty(true)
+  }
+
+  async function save() {
+    setSaving(true)
+    try {
+      await rfpUpdateDraft(section.id, { components })
+      setDirty(false)
+    } catch (e) {
+      // Silent fail — content is still in local state
+    }
+    setSaving(false)
+  }
+
+  async function advance() {
+    if (dirty) await save()
+    setAdvancing(true)
+    try {
+      const { draft } = await rfpAdvanceDraftStatus(section.id)
+      setStatus(draft.status)
+    } catch (e) {}
+    setAdvancing(false)
+  }
+
+  function applyPlaceholder(key, placeholder, value) {
+    if (!value.trim()) return
+    setComponents(prev => prev.map(c => ({ ...c, content: c.content.split(placeholder).join(value) })))
+    setDirty(true)
+  }
+
+  async function doExport() {
+    if (dirty) await save()
+    setExporting(true); setExportError(null)
+    try {
+      await exportSectionDocx({ buyer, sectionCode: section.code, sectionTitle: section.title, status, components })
+    } catch (e) { setExportError(e.message) }
+    finally { setExporting(false) }
+  }
+
+  const statusLabel = { draft: 'Mark Ready for Review', in_review: 'Approve Response', approved: '' }
+  const canAdvance = status !== 'approved'
 
   return (
     <div style={{ fontFamily: 'Inter, Arial, sans-serif', background: BG, minHeight: '100vh' }}>
-
-      {/* Header */}
-      <div style={{ background: NAVY, padding: '0 28px', display: 'flex', alignItems: 'center', gap: 14, height: 52, borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
-        <button onClick={onBack} style={{ background: 'rgba(255,255,255,0.1)', border: '1px solid rgba(255,255,255,0.18)', borderRadius: 6, color: WHITE, padding: '4px 12px', fontSize: 11, fontWeight: 600, cursor: 'pointer' }}>
-          ← RAI Home
+      {/* Draft header */}
+      <div style={{ background: NAVY, padding: '10px 24px', display: 'flex', alignItems: 'center', gap: 12 }}>
+        <button onClick={onBack} style={{ background: 'rgba(255,255,255,0.1)', border: '1px solid rgba(255,255,255,0.2)', borderRadius: 6, color: WHITE, padding: '5px 12px', fontSize: 11, fontWeight: 600, cursor: 'pointer' }}>
+          ← Sections
         </button>
-        <span style={{ fontSize: 15, fontWeight: 700, color: WHITE }}>RFP / RFI Workbench</span>
-        <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.4)' }}>Understand · Assess · Respond</span>
-        <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
-          {draftedCount > 0 && (
-            <button onClick={async () => {
-              setExporting(true)
-              try { await exportAllDocx({ company: company || 'Unknown', sections: responseSections, sectionData }) } catch {}
-              setExporting(false)
-            }} style={{ background: 'rgba(255,255,255,0.12)', border: '1px solid rgba(255,255,255,0.22)', borderRadius: 6, color: WHITE, padding: '5px 14px', fontSize: 11, fontWeight: 600, cursor: 'pointer' }}>
-              {exporting ? 'Exporting…' : `⬇ Export All (${draftedCount} sections)`}
-            </button>
-          )}
-          {hasResults && (
-            <button onClick={resetAll} style={{ background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.15)', borderRadius: 6, color: 'rgba(255,255,255,0.6)', padding: '5px 12px', fontSize: 11, cursor: 'pointer' }}>
-              New analysis
+        <span style={{ color: WHITE, fontWeight: 700, fontSize: 14 }}>{section.code} — {section.title}</span>
+        {section.scoringWeight && <span style={{ color: 'rgba(255,255,255,0.5)', fontSize: 12 }}>{section.scoringWeight}</span>}
+        <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center' }}>
+          <StatusBadge status={status} />
+          {dirty && (
+            <button onClick={save} disabled={saving}
+              style={{ background: 'rgba(255,255,255,0.12)', border: '1px solid rgba(255,255,255,0.2)', borderRadius: 6, color: WHITE, padding: '5px 12px', fontSize: 11, cursor: 'pointer' }}>
+              {saving ? 'Saving…' : 'Save changes'}
             </button>
           )}
         </div>
       </div>
 
-      <div style={{ maxWidth: 1200, margin: '0 auto', padding: '20px 24px' }}>
+      {/* Disclaimer */}
+      <div style={{ background: '#FEF9C3', borderBottom: `1px solid ${AMBER}`, padding: '6px 24px', fontSize: 11, color: AMBER, fontWeight: 600 }}>
+        ⚠ Commercial lens — internal draft only. Not approved for release. Human sign-off required before export.
+      </div>
 
-        {/* ── Setup Card ── */}
-        <div style={{ background: WHITE, border: `1px solid ${BORDER}`, borderRadius: 8, marginBottom: 20, overflow: 'hidden' }}>
-          {setupCollapsed ? (
-            <div style={{ padding: '10px 16px', display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer' }} onClick={() => setSetupCollapsed(false)}>
-              <span style={{ fontSize: 11, color: MUTED }}>📁 {documents.length} document{documents.length !== 1 ? 's' : ''} · {company || 'No company'} · {vendorContext}</span>
-              <button style={{ marginLeft: 'auto', fontSize: 11, color: BLUE, background: 'none', border: 'none', cursor: 'pointer', fontWeight: 600 }}>Edit ▼</button>
+      <div style={{ display: 'flex', gap: 0, maxWidth: 1400, margin: '0 auto' }}>
+
+        {/* Left: 12 components */}
+        <div style={{ flex: 1, padding: '20px 24px', minWidth: 0 }}>
+          {components.map(comp => (
+            <div key={comp.id} style={{ marginBottom: 20 }}>
+              <div style={{ background: NAVY, color: WHITE, padding: '7px 14px', borderRadius: '6px 6px 0 0', fontSize: 12, fontWeight: 700 }}>
+                {comp.id}. {comp.label}
+              </div>
+              <textarea
+                value={comp.content}
+                onChange={e => updateComponent(comp.id, e.target.value)}
+                rows={Math.max(4, (comp.content?.split('\n').length || 0) + 1)}
+                style={{
+                  width: '100%', padding: '10px 14px',
+                  border: `1px solid ${BORDER}`, borderTop: 'none',
+                  borderRadius: '0 0 6px 6px', fontSize: 13,
+                  fontFamily: 'Georgia, serif', lineHeight: 1.7,
+                  resize: 'vertical', boxSizing: 'border-box', color: '#1E293B',
+                  background: comp.content?.includes('{{PLACEHOLDER:') ? '#FFFBEB' : WHITE,
+                }}
+              />
             </div>
-          ) : (
-            <div style={{ padding: '18px 22px' }}>
-              {/* Company + vendor */}
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, marginBottom: 14 }}>
-                <div>
-                  <label style={{ fontSize: 10, fontWeight: 700, color: NAVY, display: 'block', marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.04em' }}>Company / Prospect</label>
-                  <input value={company} onChange={e => setCompany(e.target.value)} placeholder="e.g. Marks & Spencer"
-                    style={{ width: '100%', padding: '8px 12px', border: `1px solid ${BORDER}`, borderRadius: 6, fontSize: 13, boxSizing: 'border-box' }} />
-                </div>
-                <div>
-                  <label style={{ fontSize: 10, fontWeight: 700, color: NAVY, display: 'block', marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.04em' }}>Vendor Context</label>
-                  <select value={vendorContext} onChange={e => setVendorContext(e.target.value)}
-                    style={{ width: '100%', padding: '8px 12px', border: `1px solid ${BORDER}`, borderRadius: 6, fontSize: 13, background: WHITE }}>
-                    <option>LogicGate</option><option>Panorays</option><option>Both</option><option>Unknown</option>
-                  </select>
-                </div>
-              </div>
-
-              {/* Paste */}
-              <div style={{ marginBottom: 12 }}>
-                <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', marginBottom: 5 }}>
-                  <div style={{ flex: 1 }}>
-                    <label style={{ fontSize: 10, fontWeight: 700, color: NAVY, display: 'block', marginBottom: 3, textTransform: 'uppercase', letterSpacing: '0.04em' }}>Document name</label>
-                    <input value={pasteName} onChange={e => setPasteName(e.target.value)} placeholder="e.g. M&S RFP"
-                      style={{ width: '100%', padding: '7px 12px', border: `1px solid ${BORDER}`, borderRadius: 6, fontSize: 13, boxSizing: 'border-box' }} />
-                  </div>
-                  <button onClick={addPasted} disabled={!pasteText.trim() || uploading}
-                    style={{ background: pasteText.trim() && !uploading ? NAVY : '#CBD5E1', color: WHITE, border: 'none', borderRadius: 6, padding: '8px 14px', fontSize: 12, fontWeight: 600, cursor: pasteText.trim() && !uploading ? 'pointer' : 'not-allowed', whiteSpace: 'nowrap' }}>
-                    + Add
-                  </button>
-                </div>
-                <textarea value={pasteText} onChange={e => setPasteText(e.target.value)}
-                  placeholder="Paste RFP content, scope documents, procurement instructions, requirements…" rows={3}
-                  style={{ width: '100%', padding: '8px 12px', border: `1px solid ${BORDER}`, borderRadius: 6, fontSize: 13, fontFamily: 'inherit', resize: 'vertical', boxSizing: 'border-box', lineHeight: 1.5 }} />
-              </div>
-
-              {/* Drop zone */}
-              <div onDrop={handleDrop} onDragOver={handleDragOver}
-                style={{ border: `1px dashed ${BORDER}`, borderRadius: 6, padding: '10px 16px', marginBottom: documents.length ? 10 : 0, background: '#FAFBFC', display: 'flex', alignItems: 'center', gap: 10 }}>
-                <span style={{ fontSize: 15 }}>{uploading ? '⏳' : '📎'}</span>
-                <span style={{ fontSize: 12, color: MUTED }}>{uploading ? 'Uploading…' : 'Drop files here — Word, PDF, Excel, text'}</span>
-                <button onClick={() => fileInputRef.current?.click()} disabled={uploading}
-                  style={{ marginLeft: 'auto', fontSize: 11, color: NAVY, background: 'none', border: `1px solid ${BORDER}`, borderRadius: 4, padding: '3px 10px', cursor: 'pointer' }}>Browse</button>
-                <input ref={fileInputRef} type="file" multiple accept=".docx,.doc,.pdf,.xlsx,.xls,.csv,.txt,.md,.html,.rtf"
-                  style={{ display: 'none' }} onChange={e => { handleFiles(Array.from(e.target.files)); e.target.value = '' }} />
-              </div>
-
-              {/* Document chips */}
-              {documents.length > 0 && (
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 10, marginBottom: 14 }}>
-                  {documents.map(d => (
-                    <div key={d.id} style={{ display: 'flex', alignItems: 'center', gap: 5, background: '#EAF1F8', borderRadius: 20, padding: '3px 10px', fontSize: 12 }}>
-                      <span>{d.fileType === 'excel' ? '📊' : '📄'}</span>
-                      <span>{d.name}</span>
-                      {d.rowCount ? <span style={{ color: MUTED, fontSize: 10 }}>({d.rowCount} rows)</span>
-                        : d.charCount ? <span style={{ color: MUTED, fontSize: 10 }}>({Math.round(d.charCount / 1000)}k chars)</span> : null}
-                      <button onClick={() => { rfpRemoveDocument(d.id); setDocuments(p => p.filter(x => x.id !== d.id)) }}
-                        style={{ background: 'none', border: 'none', cursor: 'pointer', color: MUTED, fontSize: 13, padding: 0, marginLeft: 2 }}>×</button>
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              {/* Progress */}
-              {polling && progress && <ProgressBar progress={progress} />}
-
-              {/* CTA */}
-              <div style={{ display: 'flex', gap: 8, marginTop: 14, alignItems: 'center' }}>
-                <button onClick={runAnalysis} disabled={!documents.length || polling}
-                  style={{ background: documents.length && !polling ? NAVY : '#CBD5E1', color: WHITE, border: 'none', borderRadius: 6, padding: '10px 22px', fontSize: 13, fontWeight: 700, cursor: documents.length && !polling ? 'pointer' : 'not-allowed' }}>
-                  {polling ? 'Analysing…' : '→ Generate Intelligence Summary'}
-                </button>
-                {!documents.length && <span style={{ fontSize: 12, color: MUTED }}>Upload or paste RFP documents first</span>}
-              </div>
-
-              {error && (
-                <div style={{ marginTop: 10, color: RED, fontSize: 12, background: '#FEE2E2', padding: '8px 12px', borderRadius: 6, whiteSpace: 'pre-wrap' }}>{error}</div>
-              )}
-            </div>
-          )}
+          ))}
         </div>
 
-        {/* ── Intelligence Summary ── */}
-        {hasResults && (
-          <IntelligenceSummary summary={intelligenceSummary} company={company} />
-        )}
-
-        {/* ── Response Sections ── */}
-        {responseSections.length > 0 && (
-          <div>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
-              <div style={{ fontSize: 13, fontWeight: 700, color: NAVY }}>
-                Response Sections
-                <span style={{ marginLeft: 8, fontSize: 11, fontWeight: 500, color: MUTED }}>
-                  {responseSections.length} sections · {draftedCount} drafted
-                </span>
+        {/* Right: placeholder checklist + actions */}
+        <div style={{ width: 300, flexShrink: 0, padding: '20px 20px 20px 0' }}>
+          <div style={{ position: 'sticky', top: 20 }}>
+            {/* Placeholder checklist */}
+            <div style={{ background: WHITE, border: `1px solid ${BORDER}`, borderRadius: 8, marginBottom: 16, overflow: 'hidden' }}>
+              <div style={{ padding: '10px 14px', borderBottom: `1px solid ${BORDER}`, background: '#FAFBFC' }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: NAVY, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                  Placeholders
+                </div>
+                <div style={{ fontSize: 11, color: unfilledCount > 0 ? AMBER : GREEN, marginTop: 2, fontWeight: 600 }}>
+                  {unfilledCount > 0 ? `${unfilledCount} require input` : '✓ All filled'}
+                </div>
               </div>
-              <div style={{ display: 'flex', gap: 6 }}>
-                {['RR', 'LogicGate', 'Joint'].map(owner => {
-                  const count = responseSections.filter(s => s.owner === owner).length
-                  if (!count) return null
-                  return <Badge key={owner} label={`${owner}: ${count}`} color={ownerBadge(owner)} />
+              <div style={{ padding: '10px 14px', maxHeight: 420, overflowY: 'auto' }}>
+                {placeholders.length === 0 && (
+                  <div style={{ fontSize: 12, color: GREEN, fontStyle: 'italic' }}>No placeholders found</div>
+                )}
+                {placeholders.map(ph => {
+                  const filled = !!placeholderValues[ph.key]?.trim()
+                  return (
+                    <div key={ph.key} style={{ marginBottom: 14 }}>
+                      <div style={{ fontSize: 10, fontWeight: 700, color: filled ? GREEN : AMBER, textTransform: 'uppercase', marginBottom: 2 }}>
+                        {filled ? '✓' : '○'} {ph.key}
+                      </div>
+                      <div style={{ fontSize: 10, color: MUTED, marginBottom: 4 }}>in {ph.context}</div>
+                      <div style={{ display: 'flex', gap: 4 }}>
+                        <input
+                          value={placeholderValues[ph.key] || ''}
+                          onChange={e => setPhValues(p => ({ ...p, [ph.key]: e.target.value }))}
+                          placeholder="Enter value…"
+                          style={{ flex: 1, padding: '5px 8px', border: `1px solid ${BORDER}`, borderRadius: 4, fontSize: 11, minWidth: 0 }}
+                        />
+                        <button onClick={() => applyPlaceholder(ph.key, ph.placeholder, placeholderValues[ph.key] || '')}
+                          disabled={!placeholderValues[ph.key]?.trim()}
+                          style={{ background: placeholderValues[ph.key]?.trim() ? BLUE : '#CBD5E1', color: WHITE, border: 'none', borderRadius: 4, padding: '5px 8px', fontSize: 10, fontWeight: 700, cursor: placeholderValues[ph.key]?.trim() ? 'pointer' : 'not-allowed', whiteSpace: 'nowrap' }}>
+                          Apply
+                        </button>
+                      </div>
+                    </div>
+                  )
                 })}
               </div>
             </div>
 
-            {/* Sort: High first */}
-            {[...responseSections]
-              .sort((a, b) => {
-                const order = { High: 0, Medium: 1, Low: 2 }
-                return (order[a.priority] ?? 1) - (order[b.priority] ?? 1)
-              })
-              .map(section => (
-                <SectionCard
-                  key={section.id}
-                  section={section}
-                  sd={sectionData[section.id] || {}}
-                  company={company}
-                  vendorContext={vendorContext}
-                  intelligenceSummary={intelligenceSummary}
-                  onUpdate={updateSection}
-                />
-              ))
-            }
-          </div>
-        )}
-
-        {/* Empty state */}
-        {!hasResults && !polling && !documents.length && (
-          <div style={{ textAlign: 'center', padding: '60px 40px', color: MUTED }}>
-            <div style={{ fontSize: 40, marginBottom: 16 }}>📋</div>
-            <div style={{ fontSize: 16, fontWeight: 600, color: NAVY, marginBottom: 8 }}>RFP / RFI Workbench</div>
-            <div style={{ fontSize: 13, lineHeight: 1.6, maxWidth: 420, margin: '0 auto' }}>
-              Upload your RFP documents, generate an intelligence summary, then draft responses section by section.
+            {/* Status flow */}
+            <div style={{ background: WHITE, border: `1px solid ${BORDER}`, borderRadius: 8, padding: '14px 16px' }}>
+              <div style={{ marginBottom: 10 }}>
+                <div style={{ fontSize: 10, fontWeight: 700, color: MUTED, textTransform: 'uppercase', marginBottom: 4 }}>Status</div>
+                <StatusBadge status={status} />
+              </div>
+              <div style={{ fontSize: 11, color: MUTED, marginBottom: 12, lineHeight: 1.5 }}>
+                {status === 'draft' && 'Fill all placeholders and edit components. When satisfied, mark ready for review.'}
+                {status === 'in_review' && 'Under review. Approve when all content has been confirmed by a human reviewer.'}
+                {status === 'approved' && 'Approved. Ready for export. The .docx will include all current content.'}
+              </div>
+              {canAdvance && (
+                <button onClick={advance} disabled={advancing}
+                  style={{ width: '100%', background: advancing ? '#CBD5E1' : (status === 'in_review' ? GREEN : BLUE), color: WHITE, border: 'none', borderRadius: 6, padding: '9px 0', fontSize: 12, fontWeight: 700, cursor: advancing ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, marginBottom: 8 }}>
+                  {advancing ? <><Spinner /> Updating…</> : statusLabel[status]}
+                </button>
+              )}
+              {status === 'approved' && (
+                <>
+                  <button onClick={doExport} disabled={exporting}
+                    style={{ width: '100%', background: exporting ? '#CBD5E1' : NAVY, color: WHITE, border: 'none', borderRadius: 6, padding: '9px 0', fontSize: 12, fontWeight: 700, cursor: exporting ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
+                    {exporting ? <><Spinner /> Generating…</> : '⬇ Export to .docx'}
+                  </button>
+                  {exportError && <div style={{ marginTop: 8, color: RED, fontSize: 11 }}>{exportError}</div>}
+                </>
+              )}
+              {status !== 'approved' && unfilledCount > 0 && (
+                <div style={{ marginTop: 8, fontSize: 11, color: AMBER, background: '#FEF9C3', padding: '6px 10px', borderRadius: 6 }}>
+                  {unfilledCount} placeholder{unfilledCount !== 1 ? 's' : ''} still unfilled. Fill before approving.
+                </div>
+              )}
             </div>
           </div>
-        )}
-
+        </div>
       </div>
+
+      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+    </div>
+  )
+}
+
+// ── Main module ───────────────────────────────────────────────────────────────
+export default function RFPModule({ onBack }) {
+  const [screen, setScreen]           = useState('setup')   // 'setup' | 'sections' | 'draft'
+  const [pack, setPack]               = useState(null)
+  const [activeSection, setSection]   = useState(null)
+
+  function handlePack(pack) { setPack(pack); setScreen('sections') }
+  function handleDraft(section) { setSection(section); setScreen('draft') }
+  function handleBackToSections() { setSection(null); setScreen('sections') }
+  function handleReset() { setPack(null); setSection(null); setScreen('setup') }
+
+  return (
+    <div style={{ fontFamily: 'Inter, Arial, sans-serif', background: BG, minHeight: '100vh' }}>
+      {/* Shared header (hidden in draft screen — draft has its own) */}
+      {screen !== 'draft' && (
+        <div style={{ background: NAVY, padding: '0 24px', display: 'flex', alignItems: 'center', gap: 14, height: 52, borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
+          <button onClick={onBack} style={{ background: 'rgba(255,255,255,0.1)', border: '1px solid rgba(255,255,255,0.18)', borderRadius: 6, color: WHITE, padding: '4px 12px', fontSize: 11, fontWeight: 600, cursor: 'pointer' }}>
+            ← RAI Home
+          </button>
+          <span style={{ fontSize: 15, fontWeight: 700, color: WHITE }}>RFP Response Drafter</span>
+          <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.4)' }}>Commercial lens</span>
+          {pack && screen === 'sections' && (
+            <span style={{ marginLeft: 8, fontSize: 12, color: 'rgba(255,255,255,0.55)' }}>/ {pack.buyer}</span>
+          )}
+        </div>
+      )}
+
+      {screen === 'setup' && <SetupScreen onPack={handlePack} />}
+      {screen === 'sections' && pack && (
+        <SectionsScreen pack={pack} onDraft={handleDraft} onReset={handleReset} />
+      )}
+      {screen === 'draft' && activeSection && pack && (
+        <DraftScreen section={activeSection} buyer={pack.buyer} packId={pack.id} onBack={handleBackToSections} />
+      )}
     </div>
   )
 }
