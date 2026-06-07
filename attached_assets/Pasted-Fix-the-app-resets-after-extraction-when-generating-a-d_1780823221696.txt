@@ -1,0 +1,39 @@
+Fix the "app resets after extraction when generating a draft" bug in the RRAI RFP
+Response Drafter (Next.js App Router + TypeScript + Prisma + SQLite + Anthropic SDK).
+Root cause: the extracted brief is held only in client React state, so any reload,
+navigation or error wipes it. Persist it to the DB and decouple the two steps.
+
+1. PERSIST ON EXTRACTION
+   - When extraction succeeds, write/update the brief on the BidSection row
+     (requirements, mandatedStructure, scoringWeight, constraints, namedOwners, gaps,
+     etc.) and return its id. The DB — not client state — is the source of truth.
+
+2. DECOUPLE DRAFTING VIA THE DB
+   - The "Generate draft" action sends ONLY { sectionId } to the draft API route.
+   - The route loads the brief from BidSection by id, retrieves the relevant knowledge,
+     calls the model, and writes the result to a SectionDraft row (components,
+     placeholders, status = "drafted"). It must not depend on any client-passed data
+     beyond the id.
+   - Persist the brief BEFORE the model call, so a slow or failed draft never loses it.
+
+3. UI READS FROM THE DB
+   - The section view fetches BidSection (brief) and SectionDraft (draft) by sectionId.
+   - On load/refresh, hydrate from the DB, not from memory, so the user can reload or
+     return later and the brief and draft are still there.
+
+4. STOP THE RESET TRIGGER
+   - Ensure the "Generate draft" control is type="button" (or calls e.preventDefault());
+     a default form submit reloads the page and wipes state.
+   - Do not unmount the section component while drafting; show a non-blocking loading
+     state on the button/section instead.
+   - Wrap the draft call in try/catch: on error, keep the brief on screen, show the
+     error, and offer "Retry" — never reset to the start screen.
+
+5. SLOW-CALL ROBUSTNESS
+   - Draft generation can take 30s+. Confirm the draft route's timeout is long enough, or
+     stream the response. If it hits the platform timeout, return a clear error and keep
+     the persisted brief intact for retry.
+
+Use the existing BidSection and SectionDraft models (extend them if fields are missing).
+Keep them compatible with adding a status field and AuditEvent logging next, since this
+is the same persistence foundation the section-n

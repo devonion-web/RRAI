@@ -307,34 +307,44 @@ function DashboardScreen({ pack, sections, onSectionsChange, onOpenSection, onRe
   const [detecting, setDetecting] = useState(false)
   const [briefLoading, setBriefLoading] = useState(null)
   const [draftLoading, setDraftLoading] = useState(null)
-  const [error, setError] = useState(null)
+  const [detectError, setDetectError] = useState(null)
+  // Per-section errors so a failed card doesn't displace unrelated content
+  const [cardErrors, setCardErrors] = useState({})
+
+  function clearCardError(id) { setCardErrors(p => { const n = { ...p }; delete n[id]; return n }) }
+  function setCardError(id, msg) { setCardErrors(p => ({ ...p, [id]: msg })) }
 
   useEffect(() => { if (!sections.length) detect() }, [])
 
   async function detect() {
-    setDetecting(true); setError(null)
+    setDetecting(true); setDetectError(null)
     try { const { sections: s } = await rfpDetectSections(pack.id); onSectionsChange(s || []) }
-    catch (e) { setError(e.message) }
+    catch (e) { setDetectError(e.message) }
     finally { setDetecting(false) }
   }
 
   async function extractBrief(section) {
-    setBriefLoading(section.id); setError(null)
+    setBriefLoading(section.id); clearCardError(section.id)
     try {
       const { section: updated } = await rfpExtractBrief(section.id)
-      onSectionsChange(sections.map(s => s.id === section.id ? updated : s))
-    } catch (e) { setError(e.message) }
+      // Functional update avoids stale-closure overwrite from concurrent state changes
+      onSectionsChange(prev => prev.map(s => s.id === section.id ? updated : s))
+    } catch (e) { setCardError(section.id, e.message) }
     finally { setBriefLoading(null) }
   }
 
   async function generateDraft(section) {
-    setDraftLoading(section.id); setError(null)
+    setDraftLoading(section.id); clearCardError(section.id)
     try {
       const { draft, sectionStatus } = await rfpGenerateDraft(section.id)
       const updated = { ...section, draft, status: sectionStatus || 'drafted' }
-      onSectionsChange(sections.map(s => s.id === section.id ? updated : s))
+      onSectionsChange(prev => prev.map(s => s.id === section.id ? updated : s))
+      setDraftLoading(null)
       onOpenSection(updated)
-    } catch (e) { setError(e.message); setDraftLoading(null) }
+    } catch (e) {
+      setCardError(section.id, e.message)
+      setDraftLoading(null)
+    }
   }
 
   const approved    = sections.filter(s => s.status === 'approved').length
@@ -370,7 +380,7 @@ function DashboardScreen({ pack, sections, onSectionsChange, onOpenSection, onRe
         </div>
       )}
 
-      {error && <div style={{ marginBottom: 12, color: RED, fontSize: 12, background: '#FEE2E2', padding: '8px 12px', borderRadius: 6 }}>{error}</div>}
+      {detectError && <div style={{ marginBottom: 12, color: RED, fontSize: 12, background: '#FEE2E2', padding: '8px 12px', borderRadius: 6 }}>{detectError}</div>}
       {detecting && <div style={{ background: WHITE, border: `1px solid ${BORDER}`, borderRadius: 8, padding: 24, textAlign: 'center', color: MUTED, fontSize: 13 }}>🔍 Detecting scored response sections…</div>}
 
       {!detecting && sections.length === 0 && (
@@ -410,19 +420,29 @@ function DashboardScreen({ pack, sections, onSectionsChange, onOpenSection, onRe
                 )}
                 {/* Last updated */}
                 {s.draft && <div style={{ fontSize: 11, color: MUTED }}>Updated {timeAgo(s.draft.updatedAt)}</div>}
+                {/* Per-card error + Retry */}
+                {cardErrors[s.id] && (
+                  <div style={{ fontSize: 11, color: RED, background: '#FEE2E2', padding: '6px 10px', borderRadius: 6, lineHeight: 1.4 }}>
+                    ⚠ {cardErrors[s.id]}
+                  </div>
+                )}
                 {/* Action */}
                 <div style={{ marginTop: 4 }}>
-                  {s.status === 'not_started' && !isBL && (
-                    <button onClick={() => extractBrief(s)} style={{ width: '100%', background: NAVY, color: WHITE, border: 'none', borderRadius: 6, padding: '8px 0', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>Extract brief</button>
+                  {(s.status === 'not_started' || (s.status === 'not_started' && cardErrors[s.id])) && !isBL && (
+                    <button onClick={() => extractBrief(s)} style={{ width: '100%', background: NAVY, color: WHITE, border: 'none', borderRadius: 6, padding: '8px 0', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>
+                      {cardErrors[s.id] ? '↺ Retry extraction' : 'Extract brief'}
+                    </button>
                   )}
                   {s.status === 'not_started' && isBL && (
                     <button disabled style={{ width: '100%', background: '#CBD5E1', color: WHITE, border: 'none', borderRadius: 6, padding: '8px 0', fontSize: 12, display: 'flex', justifyContent: 'center', gap: 8, alignItems: 'center' }}><Spinner /> Extracting…</button>
                   )}
                   {s.status === 'extracted' && !isDL && (
-                    <button onClick={() => generateDraft(s)} style={{ width: '100%', background: GREEN, color: WHITE, border: 'none', borderRadius: 6, padding: '8px 0', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>✦ Generate draft</button>
+                    <button onClick={() => generateDraft(s)} style={{ width: '100%', background: cardErrors[s.id] ? AMBER : GREEN, color: WHITE, border: 'none', borderRadius: 6, padding: '8px 0', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>
+                      {cardErrors[s.id] ? '↺ Retry draft' : '✦ Generate draft'}
+                    </button>
                   )}
                   {s.status === 'extracted' && isDL && (
-                    <button disabled style={{ width: '100%', background: '#CBD5E1', color: WHITE, border: 'none', borderRadius: 6, padding: '8px 0', fontSize: 12, display: 'flex', justifyContent: 'center', gap: 8, alignItems: 'center' }}><Spinner /> Drafting…</button>
+                    <button disabled style={{ width: '100%', background: '#CBD5E1', color: WHITE, border: 'none', borderRadius: 6, padding: '8px 0', fontSize: 12, display: 'flex', justifyContent: 'center', gap: 8, alignItems: 'center' }}><Spinner /> Drafting… (this can take ~30 s)</button>
                   )}
                   {['drafted', 'in_review', 'approved', 'reopened'].includes(s.status) && (
                     <button onClick={() => onOpenSection(s)} style={{ width: '100%', background: s.status === 'approved' ? '#D1FAE5' : BLUE, color: s.status === 'approved' ? GREEN : WHITE, border: s.status === 'approved' ? `1px solid ${GREEN}` : 'none', borderRadius: 6, padding: '8px 0', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>
@@ -709,12 +729,39 @@ function DraftScreen({ section, sections, currentIdx, buyer, onBack, onNavigate,
 }
 
 // ── Shell ─────────────────────────────────────────────────────────────────────
+const SESSION_KEY = 'rfp_pack_id'
+
 export default function RFPModule({ onBack }) {
   const [screen, setScreen]           = useState('setup')
   const [pack, setPack]               = useState(null)
   const [sections, setSections]       = useState([])
   const [currentSection, setCurrent]  = useState(null)
   const [currentIdx, setCurrentIdx]   = useState(0)
+  const [recovering, setRecovering]   = useState(false)
+
+  // On mount: if a packId was stored (e.g. after refresh or navigating to RAI Home),
+  // re-fetch the pack from the server and restore the dashboard without losing work.
+  useEffect(() => {
+    const storedId = sessionStorage.getItem(SESSION_KEY)
+    if (!storedId) return
+    setRecovering(true)
+    import('./api.js').then(({ rfpGetPack }) =>
+      rfpGetPack(storedId)
+        .then(p => { setPack(p); setSections(p.sections || []); setScreen('dashboard') })
+        .catch(() => sessionStorage.removeItem(SESSION_KEY))
+        .finally(() => setRecovering(false))
+    )
+  }, [])
+
+  function handlePack(p) {
+    sessionStorage.setItem(SESSION_KEY, p.id)
+    setPack(p); setSections(p.sections || []); setScreen('dashboard')
+  }
+
+  function handleReset() {
+    sessionStorage.removeItem(SESSION_KEY)
+    setPack(null); setSections([]); setScreen('setup')
+  }
 
   function updateSection(changed) {
     // changed: { sectionId, draft?, sectionStatus? }
@@ -761,16 +808,21 @@ export default function RFPModule({ onBack }) {
           {pack && screen === 'dashboard' && <span style={{ fontSize: 12, color: 'rgba(255,255,255,0.5)' }}>/ {pack.buyer}</span>}
         </div>
       )}
-      {screen === 'setup' && (
-        <SetupScreen onPack={p => { setPack(p); setSections(p.sections || []); setScreen('dashboard') }} />
+      {recovering && (
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: 200, gap: 10, color: MUTED, fontSize: 13 }}>
+          <Spinner /> Restoring your session…
+        </div>
       )}
-      {screen === 'dashboard' && pack && (
+      {!recovering && screen === 'setup' && (
+        <SetupScreen onPack={handlePack} />
+      )}
+      {!recovering && screen === 'dashboard' && pack && (
         <DashboardScreen
           pack={pack}
           sections={sections}
           onSectionsChange={setSections}
           onOpenSection={openSection}
-          onReset={() => { setPack(null); setSections([]); setScreen('setup') }}
+          onReset={handleReset}
         />
       )}
       {screen === 'draft' && currentSection && (

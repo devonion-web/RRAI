@@ -312,10 +312,25 @@ router.post("/rfp/sections/:id/draft", async (req, res): Promise<void> => {
     .replace("{{HOUSE_VOICE}}",    HOUSE_VOICE);
 
   try {
-    const result = await callClaudeJSON<{
+    let result: {
       lens?: string; complianceVerdict?: string;
       components?: Partial<DraftComponents>; placeholders?: string[]; openDependencies?: string[];
-    }>(system, userContent, { maxTokens: 8192 });
+    } | null = null;
+    for (const maxTokens of [16_000, 32_000]) {
+      try {
+        result = await callClaudeJSON<typeof result>(system, userContent, { maxTokens });
+        break;
+      } catch (err) {
+        const msg = (err as Error).message;
+        if (msg.includes("truncated") && maxTokens === 16_000) {
+          req.log.warn({ sectionId: section.id, code: section.code },
+            "rfp: draft truncated at 16k — retrying at 32k");
+          continue;
+        }
+        throw err;
+      }
+    }
+    if (!result) throw new Error("draft: no output after retry");
 
     const def  = defaultComponents();
     const comp = (result?.components ?? {}) as Partial<DraftComponents>;
