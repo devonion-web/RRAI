@@ -1,0 +1,48 @@
+Fix decomposition speed and truncation in the RRAI RFP Response Drafter. Apply the standing
+build constraints. Root cause: the model is being asked to echo verbatim sourceText for
+every requirement, so output ≈ document size (40-50K tokens) → slow and truncation-prone.
+The model should RETURN STRUCTURE + ANCHORS ONLY; the app extracts the verbatim text in code.
+
+NEW STANDING CONSTRAINT (add to the list): never have the model echo back large source
+content — the model returns structure + anchors, the app slices the verbatim text from the
+parsed document.
+
+1. PRE-SPLIT THE DOCUMENT IN CODE (before any LLM call)
+   - In the decompose route, split pack.parsedContent into sections by the document's own
+     numbered headings (match the pack's section pattern, e.g. /^\s*\d+(\.\d+)*\s+/).
+     Produce [{ sectionCode, headingText, sectionText, startIndex }].
+   - This gives both the chunks to decompose and the source spans to extract from.
+
+2. DECOMPOSE EACH SECTION IN PARALLEL (LLM, structured outputs)
+   - For each section, one call returns the map for that section only:
+     requirements: [{ code, title, order, minimumExpectations[], considerations[],
+     ownerHint, startAnchor, endAnchor }] — NO verbatim sourceText.
+     startAnchor / endAnchor = the first ~8 and last ~8 words of each requirement's text.
+   - Run the section calls concurrently (Promise.all, concurrency cap ~5).
+   - Reassemble requirements in DOCUMENT ORDER afterwards (by section startIndex, then order
+     within section) so parallelism doesn't scramble the sequence.
+   - max_tokens ~8K per call is plenty; keep the stop_reason check.
+
+3. EXTRACT VERBATIM sourceText IN CODE
+   - For each requirement, resolve sourceText by locating startAnchor and endAnchor WITHIN
+     that section's text and slicing the span. Store on the Requirement.
+   - If a section maps to a single requirement, sourceText = the whole sectionText.
+   - Fallback: if an anchor isn't found or is ambiguous within its section, use the full
+     sectionText as sourceText and flag the requirement for human review.
+
+4. CROSS-CUTTING CONSTRAINTS
+   - Keep capturing the cross-cutting constraints (priority modules, timeline, mandatory
+     integrations) once per pack and surfacing them on each requirement (a small separate
+     pass over the Q&A section is fine).
+
+5. SIMPLIFY THE RETRY LOOP
+   - With small per-section outputs the 16K/32K/64K escalation is no longer needed. Use a
+     single modest max_tokens per section call plus the stop_reason check; only escalate if
+     one section is unusually large.
+
+RETAIN: structured outputs on every call; SSE/keepalive; DB persistence; audit log.
+UPDATE the decomposition gate to also check: sourceText resolved for every requirement
+(in addition to order preserved, no sections missed, every minimum item captured).
+
+Net effect: decomposition goes from one 40-50K-token generation to many small parallel calls
+plus in-code extraction — near-instant, and truncation becomes structurally impossible.

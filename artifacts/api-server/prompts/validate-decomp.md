@@ -32,7 +32,8 @@ Review the decomposition against the original RFP and return a JSON object with 
     "noSectionsMissed": <true if the section number sequence is complete with no gaps>,
     "minimumExpectationsCaptured": <true if every "your response (at a minimum)" or "at a minimum" list item in the source became a minimumExpectation>,
     "narrativeDecomposed": <true if narrative / prose sections were broken into meaningful discrete requirements rather than left as a single block>,
-    "constraintsCaptured": <true if timeline, commercial, module, integration and other cross-cutting constraints were captured in crossCuttingConstraints rather than buried in individual requirements>
+    "constraintsCaptured": <true if timeline, commercial, module, integration and other cross-cutting constraints were captured in crossCuttingConstraints rather than buried in individual requirements>,
+    "sourceTextResolved": <true if every requirement has a non-empty sourceText field>
   },
   "findings": [
     "<specific finding — e.g. 'Section 4.3 appears in the source but has no corresponding requirement'>"
@@ -52,7 +53,8 @@ Scoring guide:
 - Deduct 25 if noSectionsMissed is false.
 - Deduct 20 if minimumExpectationsCaptured is false.
 - Deduct 15 if narrativeDecomposed is false.
-- Deduct 15 if constraintsCaptured is false.
+- Deduct 10 if constraintsCaptured is false.
+- Deduct 10 if sourceTextResolved is false (requirements with empty sourceText cannot be responded to).
 - Additional deductions (up to 10 each) for specific missing items or serious misrepresentations.
 
-passed = true only when score >= 70 and noSectionsMissed is true and minimumExpectationsCaptured is true.
+passed = true only when score >= 70 and noSectionsMissed is true and minimumExpectationsCaptured is true and sourceTextResolved is true.

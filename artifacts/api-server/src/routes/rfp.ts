@@ -4,7 +4,7 @@ import mammoth from "mammoth";
 import pdfParse from "pdf-parse";
 import { readFileSync } from "fs";
 import { join } from "path";
-import { callClaudeJSON, callClaudeJSONStreamed } from "../lib/anthropic";
+import { callClaudeJSON } from "../lib/anthropic";
 import { storeTextDoc, storeExcelDoc, getDocs, removeDoc, storeSize } from "../lib/docStore";
 import {
   createPack, getPack, setSections, getSection, updateSection,
@@ -531,6 +531,77 @@ router.post("/rfp/packs/:id/profile", (req, res): void => {
   res.json({ profile });
 });
 
+// ── Decompose helpers ─────────────────────────────────────────────────────────
+
+interface DocSection {
+  sectionCode: string;
+  headingText: string;
+  sectionText: string;
+  startIndex: number;
+}
+
+/** Split parsedContent into sections by numbered headings (1, 1.2, 1.2.3 …). */
+function splitDocumentSections(text: string): DocSection[] {
+  const headingRe = /^(\d+(?:\.\d+)*\.?)\s+([^\n]{1,150})/gm;
+  const matches: Array<{ index: number; code: string; heading: string }> = [];
+  let m: RegExpExecArray | null;
+  while ((m = headingRe.exec(text)) !== null) {
+    matches.push({ index: m.index, code: m[1].replace(/\.$/, ""), heading: m[0].trim() });
+  }
+  if (matches.length === 0) {
+    return [{ sectionCode: "DOC", headingText: "Document", sectionText: text, startIndex: 0 }];
+  }
+  return matches.map((match, i) => ({
+    sectionCode:  match.code,
+    headingText:  match.heading,
+    sectionText:  text.slice(match.index, matches[i + 1]?.index ?? text.length).trim(),
+    startIndex:   match.index,
+  }));
+}
+
+/**
+ * Locate startAnchor + endAnchor within sectionText and slice the verbatim span.
+ * Falls back to the full sectionText when anchors are absent or not found.
+ */
+function resolveSourceText(
+  sectionText: string,
+  startAnchor: string | null | undefined,
+  endAnchor:   string | null | undefined,
+): { text: string; resolved: boolean } {
+  if (!startAnchor || !endAnchor) return { text: sectionText, resolved: true };
+
+  const lower = sectionText.toLowerCase();
+  const firstN = (s: string, n: number) => s.toLowerCase().split(/\s+/).slice(0, n).join(" ");
+  const lastN  = (s: string, n: number) => s.toLowerCase().split(/\s+/).slice(-n).join(" ");
+
+  for (const n of [6, 4, 3]) {
+    const startKey = firstN(startAnchor, n);
+    const si = lower.indexOf(startKey);
+    if (si === -1) continue;
+    for (const m of [6, 4, 3]) {
+      const endKey = lastN(endAnchor, m);
+      const ei = lower.indexOf(endKey, si + startKey.length);
+      if (ei === -1) continue;
+      return { text: sectionText.slice(si, ei + endKey.length).trim(), resolved: true };
+    }
+  }
+  return { text: sectionText, resolved: false };
+}
+
+/** Run tasks with at most `limit` in-flight at once, preserving result order. */
+async function runConcurrent<T>(tasks: Array<() => Promise<T>>, limit: number): Promise<T[]> {
+  const results: T[] = new Array(tasks.length);
+  let next = 0;
+  async function worker(): Promise<void> {
+    while (next < tasks.length) {
+      const i = next++;
+      results[i] = await tasks[i]();
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, tasks.length) }, worker));
+  return results;
+}
+
 // ── Decompose (SSE) ───────────────────────────────────────────────────────────
 
 router.post("/rfp/packs/:id/decompose", async (req, res): Promise<void> => {
@@ -555,83 +626,161 @@ router.post("/rfp/packs/:id/decompose", async (req, res): Promise<void> => {
   req.log.info({ packId: pack.id }, "rfp: decomposing bid document");
 
   try {
-    const { system: rawSystem, userTemplate } = parsePromptFile(readPrompt("decompose.md"));
-    const userContent = rawSystem   // decompose.md has no SYSTEM/USER split — entire file is context
-      ? userTemplate
-        .replace("{{BUYER_NAME}}",          pack.buyer)
-        .replace("{{ENGAGEMENT_PROFILE}}",  JSON.stringify({ ourRole: profile.ourRole, primePartner: profile.primePartner, ourRemit: profile.ourRemit, otherParties: profile.otherParties }, null, 2))
-        .replace("{{DOCUMENT_TEXT}}",       pack.parsedContent)
-      : "";
+    const profileSnippet = JSON.stringify({
+      ourRole:      profile.ourRole,
+      primePartner: profile.primePartner,
+      ourRemit:     profile.ourRemit,
+      otherParties: profile.otherParties,
+    }, null, 2);
 
-    const system = rawSystem ||
-      `You are RRAI, Risk Rising's bid intelligence platform. Decompose the RFP document into structured requirements. Output JSON only.`;
-    const user   = userContent ||
-      `Buyer: ${pack.buyer}\nEngagement profile: ${JSON.stringify({ ourRole: profile.ourRole, primePartner: profile.primePartner, ourRemit: profile.ourRemit }, null, 2)}\n\nDocument:\n${pack.parsedContent}`;
+    // ── 1. Pre-split document into sections ──────────────────────────────────
+    const sections = splitDocumentSections(pack.parsedContent);
+    req.log.info({ packId: pack.id, sections: sections.length }, "rfp: document split into sections");
 
-    type RawReq = {
-      code: string; order: number; title: string; sourceText: string;
-      scoringWeight: string | null; minimumExpectations: string[];
-      considerations: string[]; mandatedStructure: string | null;
-      owner: string; ownerRationale: string; ownerConfidence?: string; parentId: string | null;
+    // ── 2. Prompt templates ──────────────────────────────────────────────────
+
+    type SectionReqRaw = {
+      code: string; title: string; order: number;
+      scoringWeight: string | null;
+      minimumExpectations: string[];
+      considerations: string[];
+      mandatedStructure: string | null;
+      owner: string; ownerRationale: string; ownerConfidence?: string;
+      parentId: string | null;
+      startAnchor: string | null;
+      endAnchor:   string | null;
     };
-    type DecomposeResult = {
-      crossCuttingConstraints: Array<{ type: string; text: string }>;
-      requirements: RawReq[];
-    };
 
-    // Pick starting token tier from document size to avoid wasted retry passes.
-    // Rule of thumb: output ≈ input chars / 4 (tokens) × 2.5 (JSON overhead).
-    const docChars    = pack.parsedContent.length;
-    const estTokens   = Math.ceil((docChars / 4) * 2.5);
-    const startTier   = estTokens > 28_000 ? 64_000
-                      : estTokens > 12_000 ? 32_000
-                      : 16_000;
-    const tokenTiers  = [16_000, 32_000, 64_000].filter((t) => t >= startTier);
+    const SECTION_SYSTEM =
+      `You are RRAI, Risk Rising's bid intelligence platform. Decompose ONE section of an RFP into structured requirements. Return JSON only — no prose, no markdown fences.
+Rules:
+1. Return requirements in document order; "order" integers are sequential within this section.
+2. "startAnchor": first 8 words of the requirement's span in the section text. "endAnchor": last 8 words. Set both null when the section maps to exactly one requirement.
+3. minimumExpectations: verbatim items from "at a minimum" / "must include" lists.
+4. considerations: buyer hints, guidance notes, evaluation criteria.
+5. owner classification — RR: implementation/delivery/training/support/consulting; LogicGate: platform product/licensing/capabilities; shared: joint contribution required; M&S: buyer-only activities.`;
 
-    req.log.info({ packId: pack.id, docChars, estTokens, startTier }, "rfp: decompose token planning");
+    const buildSectionUser = (sec: DocSection) =>
+      `Buyer: ${pack.buyer}
+Engagement profile: ${profileSnippet}
 
-    let result: DecomposeResult | null = null;
-    for (const maxTokens of tokenTiers) {
-      try {
-        result = await callClaudeJSONStreamed<DecomposeResult>(system, user, res, { maxTokens });
-        break;
-      } catch (err) {
-        const msg = (err as Error).message;
-        if (msg.includes("truncated") && maxTokens < 64_000) { continue; }
-        throw err;
+Section code: ${sec.sectionCode}
+Section heading: ${sec.headingText}
+
+Section text:
+${sec.sectionText}
+
+Return this JSON only:
+{
+  "requirements": [
+    {
+      "code": "string",
+      "title": "string",
+      "order": 1,
+      "scoringWeight": "string | null",
+      "minimumExpectations": ["string"],
+      "considerations": ["string"],
+      "mandatedStructure": "string | null",
+      "owner": "RR | LogicGate | shared | M&S",
+      "ownerRationale": "string",
+      "ownerConfidence": "low | medium | high",
+      "parentId": "string | null",
+      "startAnchor": "string | null",
+      "endAnchor": "string | null"
+    }
+  ]
+}`;
+
+    const CONSTRAINTS_SYSTEM =
+      `You are RRAI. Extract all cross-cutting constraints from this RFP — facts that apply to ALL requirements. Return JSON only.
+Types: timeline (dates/milestones), module (mandatory platform capabilities), integration (required integrations), commercial (pricing/payment constraints), other.`;
+
+    const constraintsUser =
+      `Buyer: ${pack.buyer}
+
+Document (first 30 000 chars):
+${pack.parsedContent.slice(0, 30_000)}
+
+Return: { "crossCuttingConstraints": [{ "type": "timeline|module|integration|commercial|other", "text": "string" }] }`;
+
+    // ── 3. Run all calls concurrently (cap 5 in-flight) ─────────────────────
+
+    const constraintsTask = (): Promise<{ crossCuttingConstraints: Array<{ type: string; text: string }> }> =>
+      callClaudeJSON(CONSTRAINTS_SYSTEM, constraintsUser, { maxTokens: 4_000 })
+        .catch((e: unknown) => {
+          req.log.warn({ err: e }, "rfp: constraints pass failed, using empty");
+          return { crossCuttingConstraints: [] };
+        });
+
+    const sectionTasks = sections.map(
+      (sec) => (): Promise<{ sec: DocSection; reqs: SectionReqRaw[] }> =>
+        callClaudeJSON<{ requirements: SectionReqRaw[] }>(
+          SECTION_SYSTEM, buildSectionUser(sec), { maxTokens: 8_000 },
+        )
+          .then((r) => ({ sec, reqs: Array.isArray(r.requirements) ? r.requirements : [] }))
+          .catch((e: unknown) => {
+            req.log.warn({ err: e, sectionCode: sec.sectionCode }, "rfp: section decompose failed, skipping");
+            return { sec, reqs: [] };
+          }),
+    );
+
+    type ConstraintsResult = { crossCuttingConstraints: Array<{ type: string; text: string }> };
+    type SectionResult     = { sec: DocSection; reqs: SectionReqRaw[] };
+
+    const allTasks   = [constraintsTask, ...sectionTasks] as Array<() => Promise<ConstraintsResult | SectionResult>>;
+    const allResults = await runConcurrent(allTasks, 5);
+
+    const constraintsRaw = allResults[0] as ConstraintsResult;
+    const sectionResults = (allResults.slice(1) as SectionResult[]);
+
+    // ── 4. Reassemble in document order ─────────────────────────────────────
+    const sorted = sectionResults.slice().sort((a, b) => a.sec.startIndex - b.sec.startIndex);
+
+    let globalOrder = 0;
+    const assembled: Array<SectionReqRaw & { _sectionText: string }> = [];
+    for (const { sec, reqs } of sorted) {
+      for (const r of reqs.slice().sort((a, b) => (a.order ?? 0) - (b.order ?? 0))) {
+        assembled.push({ ...r, order: ++globalOrder, _sectionText: sec.sectionText });
       }
     }
-    if (!result) throw new Error("Decompose: no output after retry");
 
+    // ── 5. Extract verbatim sourceText from anchors in code ──────────────────
     const VALID_OWNERS = new Set(["RR", "LogicGate", "shared", "M&S"]);
-    const crossCuttingConstraints: CrossCuttingConstraint[] = (Array.isArray(result.crossCuttingConstraints) ? result.crossCuttingConstraints : []).map((c) => ({
-      type: (["timeline","module","integration","commercial","other"].includes(c.type) ? c.type : "other") as CrossCuttingConstraint["type"],
-      text: String(c.text ?? ""),
+
+    const crossCuttingConstraints: CrossCuttingConstraint[] =
+      (Array.isArray(constraintsRaw.crossCuttingConstraints) ? constraintsRaw.crossCuttingConstraints : [])
+        .map((c) => ({
+          type: (["timeline","module","integration","commercial","other"].includes(c.type) ? c.type : "other") as CrossCuttingConstraint["type"],
+          text: String(c.text ?? ""),
+        }));
+
+    let unresolvedCount = 0;
+    const requirements = saveRequirements(req.params.id, assembled.map((r, i) => {
+      const { text: sourceText, resolved } = resolveSourceText(r._sectionText, r.startAnchor, r.endAnchor);
+      if (!resolved) unresolvedCount++;
+      return {
+        code:                r.code ?? `REQ${i + 1}`,
+        order:               r.order ?? (i + 1),
+        title:               r.title ?? "",
+        sourceText,
+        scoringWeight:       r.scoringWeight ?? null,
+        minimumExpectations: Array.isArray(r.minimumExpectations) ? r.minimumExpectations : [],
+        considerations:      Array.isArray(r.considerations) ? r.considerations : [],
+        mandatedStructure:   r.mandatedStructure ?? null,
+        owner:               (VALID_OWNERS.has(r.owner) ? r.owner : "shared") as RequirementOwner,
+        ownerRationale:      r.ownerRationale ?? "",
+        ownerConfirmed:      false,
+        ownerConfidence:     (["low","medium","high"].includes(r.ownerConfidence ?? "") ? r.ownerConfidence : "medium") as OwnerConfidence,
+        responseStage:       "pending" as const,
+        rewriteAttempts:     0,
+        parentId:            r.parentId ?? null,
+        crossCuttingConstraints,
+      };
     }));
 
-    const rawReqs = Array.isArray(result.requirements) ? result.requirements : [];
-    const requirements = saveRequirements(req.params.id, rawReqs.map((r, i) => ({
-      code:                  r.code    ?? `REQ${i + 1}`,
-      order:                 r.order   ?? (i + 1),
-      title:                 r.title   ?? "",
-      sourceText:            r.sourceText ?? "",
-      scoringWeight:         r.scoringWeight ?? null,
-      minimumExpectations:   Array.isArray(r.minimumExpectations) ? r.minimumExpectations : [],
-      considerations:        Array.isArray(r.considerations) ? r.considerations : [],
-      mandatedStructure:     r.mandatedStructure ?? null,
-      owner:           (VALID_OWNERS.has(r.owner) ? r.owner : "shared") as RequirementOwner,
-      ownerRationale:  r.ownerRationale ?? "",
-      ownerConfirmed:  false,
-      ownerConfidence: (["low","medium","high"].includes(r.ownerConfidence ?? "") ? r.ownerConfidence : "medium") as OwnerConfidence,
-      responseStage:   "pending" as const,
-      rewriteAttempts: 0,
-      parentId:        r.parentId ?? null,
-      crossCuttingConstraints,
-    })));
-
     appendAuditEvent(pack.id, null, "decomposed",
-      `Decomposed ${requirements.length} requirements from ${pack.buyer} bid`, "RRAI");
-    req.log.info({ packId: pack.id, count: requirements.length }, "rfp: decompose complete");
+      `Decomposed ${requirements.length} requirements across ${sections.length} sections (${unresolvedCount} anchors fell back to section text)`, "RRAI");
+    req.log.info({ packId: pack.id, count: requirements.length, sections: sections.length, unresolvedCount }, "rfp: decompose complete");
     finish({ requirements, crossCuttingConstraints });
   } catch (err) {
     req.log.error({ err }, "rfp: decompose failed");
