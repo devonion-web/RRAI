@@ -140,25 +140,50 @@ export async function rfpDecompose(packId) {
     try { const j = await res.json(); msg = j.error || msg } catch {}
     throw new Error(msg)
   }
-  const reader  = res.body.getReader()
-  const decoder = new TextDecoder()
-  let buffer    = ''
-  while (true) {
-    const { done, value } = await reader.read()
-    if (done) break
-    buffer += decoder.decode(value, { stream: true })
-    const events = buffer.split('\n\n')
-    buffer = events.pop() ?? ''
-    for (const block of events) {
-      for (const line of block.split('\n')) {
-        if (!line.startsWith('data: ')) continue
-        const payload = JSON.parse(line.slice(6))
-        if (payload.error) throw new Error(payload.error)
-        return payload   // { requirements, crossCuttingConstraints }
+
+  // Read SSE stream; on network drop fall through to polling
+  try {
+    const reader  = res.body.getReader()
+    const decoder = new TextDecoder()
+    let buffer    = ''
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+      const events = buffer.split('\n\n')
+      buffer = events.pop() ?? ''
+      for (const block of events) {
+        for (const line of block.split('\n')) {
+          if (!line.startsWith('data: ')) continue
+          const payload = JSON.parse(line.slice(6))
+          if (payload.error) throw new Error(payload.error)
+          return payload   // { requirements, crossCuttingConstraints }
+        }
       }
     }
+  } catch (e) {
+    // Re-throw deliberate server errors; let network drops fall through to polling
+    if (e.message && !e.message.toLowerCase().includes('network') &&
+        !e.message.toLowerCase().includes('aborted') &&
+        !e.message.toLowerCase().includes('failed to fetch')) throw e
   }
-  throw new Error('Decompose stream ended without a data event — please retry.')
+
+  // SSE connection dropped before server finished — poll /requirements until data appears
+  const deadline = Date.now() + 6 * 60_000   // up to 6 minutes
+  while (Date.now() < deadline) {
+    await new Promise(r => setTimeout(r, 5_000))
+    try {
+      const poll = await fetch(`${BASE}/packs/${packId}/requirements`)
+      if (poll.ok) {
+        const { requirements } = await poll.json()
+        if (Array.isArray(requirements) && requirements.length > 0) {
+          const crossCuttingConstraints = requirements[0]?.crossCuttingConstraints ?? []
+          return { requirements, crossCuttingConstraints }
+        }
+      }
+    } catch {}  // keep polling on transient errors
+  }
+  throw new Error('Decompose is taking longer than expected — please wait a moment and retry.')
 }
 
 // ── Requirements ──────────────────────────────────────────────────────────────

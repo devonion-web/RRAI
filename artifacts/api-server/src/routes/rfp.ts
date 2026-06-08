@@ -560,6 +560,29 @@ function splitDocumentSections(text: string): DocSection[] {
 }
 
 /**
+ * Merge consecutive tiny sections so each group is ~targetSize chars.
+ * Keeps the first section's code/heading/startIndex for the group.
+ * Hard-caps at MAX_SECTION to avoid oversized LLM calls.
+ */
+function mergeSections(sections: DocSection[], targetSize = 2_500, maxSize = 5_000): DocSection[] {
+  if (sections.length === 0) return sections;
+  const groups: DocSection[] = [];
+  let cur = { ...sections[0] };
+  for (let i = 1; i < sections.length; i++) {
+    const s = sections[i];
+    if (cur.sectionText.length + s.sectionText.length + 2 <= maxSize &&
+        cur.sectionText.length < targetSize) {
+      cur = { ...cur, sectionText: cur.sectionText + "\n\n" + s.sectionText };
+    } else {
+      groups.push(cur);
+      cur = { ...s };
+    }
+  }
+  groups.push(cur);
+  return groups;
+}
+
+/**
  * Locate startAnchor + endAnchor within sectionText and slice the verbatim span.
  * Falls back to the full sectionText when anchors are absent or not found.
  */
@@ -643,8 +666,9 @@ router.post("/rfp/packs/:id/decompose", async (req, res): Promise<void> => {
     }, null, 2);
 
     // ── 1. Pre-split document into sections ──────────────────────────────────
-    const sections = splitDocumentSections(pack.parsedContent);
-    req.log.info({ packId: pack.id, sections: sections.length }, "rfp: document split into sections");
+    const rawSections = splitDocumentSections(pack.parsedContent);
+    const sections    = mergeSections(rawSections);
+    req.log.info({ packId: pack.id, rawSections: rawSections.length, sections: sections.length }, "rfp: document split into sections");
 
     // ── 2. Prompt templates ──────────────────────────────────────────────────
 
