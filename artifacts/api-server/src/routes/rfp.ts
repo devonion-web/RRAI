@@ -579,8 +579,19 @@ router.post("/rfp/packs/:id/decompose", async (req, res): Promise<void> => {
       requirements: RawReq[];
     };
 
+    // Pick starting token tier from document size to avoid wasted retry passes.
+    // Rule of thumb: output ≈ input chars / 4 (tokens) × 2.5 (JSON overhead).
+    const docChars    = pack.parsedContent.length;
+    const estTokens   = Math.ceil((docChars / 4) * 2.5);
+    const startTier   = estTokens > 28_000 ? 64_000
+                      : estTokens > 12_000 ? 32_000
+                      : 16_000;
+    const tokenTiers  = [16_000, 32_000, 64_000].filter((t) => t >= startTier);
+
+    req.log.info({ packId: pack.id, docChars, estTokens, startTier }, "rfp: decompose token planning");
+
     let result: DecomposeResult | null = null;
-    for (const maxTokens of [16_000, 32_000, 64_000]) {
+    for (const maxTokens of tokenTiers) {
       try {
         result = await callClaudeJSONStreamed<DecomposeResult>(system, user, res, { maxTokens });
         break;
