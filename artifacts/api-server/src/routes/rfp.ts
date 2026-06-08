@@ -4,7 +4,7 @@ import mammoth from "mammoth";
 import pdfParse from "pdf-parse";
 import { readFileSync } from "fs";
 import { join } from "path";
-import { callClaudeJSON } from "../lib/anthropic";
+import { callClaudeJSON, callClaudeJSONStreamed } from "../lib/anthropic";
 import { storeTextDoc, storeExcelDoc, getDocs, removeDoc, storeSize } from "../lib/docStore";
 import {
   createPack, getPack, setSections, getSection, updateSection,
@@ -582,7 +582,7 @@ router.post("/rfp/packs/:id/decompose", async (req, res): Promise<void> => {
     let result: DecomposeResult | null = null;
     for (const maxTokens of [16_000, 32_000, 64_000]) {
       try {
-        result = await callClaudeJSON<DecomposeResult>(system, user, { maxTokens });
+        result = await callClaudeJSONStreamed<DecomposeResult>(system, user, res, { maxTokens });
         break;
       } catch (err) {
         const msg = (err as Error).message;
