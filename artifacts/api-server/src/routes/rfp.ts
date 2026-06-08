@@ -570,19 +570,28 @@ function resolveSourceText(
 ): { text: string; resolved: boolean } {
   if (!startAnchor || !endAnchor) return { text: sectionText, resolved: true };
 
-  const lower = sectionText.toLowerCase();
-  const firstN = (s: string, n: number) => s.toLowerCase().split(/\s+/).slice(0, n).join(" ");
-  const lastN  = (s: string, n: number) => s.toLowerCase().split(/\s+/).slice(-n).join(" ");
+  // Build a regex from N words joined by \s+ so newlines / double-spaces in the
+  // original text don't prevent a match (the previous indexOf approach failed on these).
+  const escRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const wordsRe = (anchor: string, take: "first" | "last", n: number): RegExp => {
+    const words = anchor.trim().split(/\s+/);
+    const chosen = take === "first" ? words.slice(0, n) : words.slice(-n);
+    return new RegExp(chosen.map(escRe).join("\\s+"), "i");
+  };
 
   for (const n of [6, 4, 3]) {
-    const startKey = firstN(startAnchor, n);
-    const si = lower.indexOf(startKey);
-    if (si === -1) continue;
+    const startRe = wordsRe(startAnchor, "first", n);
+    const startMatch = startRe.exec(sectionText);
+    if (!startMatch) continue;
+    const si = startMatch.index;
+
     for (const m of [6, 4, 3]) {
-      const endKey = lastN(endAnchor, m);
-      const ei = lower.indexOf(endKey, si + startKey.length);
-      if (ei === -1) continue;
-      return { text: sectionText.slice(si, ei + endKey.length).trim(), resolved: true };
+      const endRe = wordsRe(endAnchor, "last", m);
+      const tail  = sectionText.slice(si + startMatch[0].length);
+      const endMatch = endRe.exec(tail);
+      if (!endMatch) continue;
+      const endPos = si + startMatch[0].length + endMatch.index + endMatch[0].length;
+      return { text: sectionText.slice(si, endPos).trim(), resolved: true };
     }
   }
   return { text: sectionText, resolved: false };
@@ -1068,7 +1077,7 @@ router.post("/rfp/packs/:id/validate-decomp", async (req, res): Promise<void> =>
       findings: string[]; missingItems: string[]; recommendedActions: string[];
     };
 
-    const llmResult = await callClaudeJSON<ValidateDecompResult>(system, userContent, { maxTokens: 4096 });
+    const llmResult = await callClaudeJSON<ValidateDecompResult>(system, userContent, { maxTokens: 8192 });
 
     const checks = {
       ...((llmResult?.checks) ?? {}),
