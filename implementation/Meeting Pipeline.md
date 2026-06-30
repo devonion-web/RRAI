@@ -1,0 +1,7 @@
+# Meeting Pipeline
+
+Status: Placeholder
+
+Purpose:
+
+To be completed.

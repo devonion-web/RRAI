@@ -1,0 +1,275 @@
+We are transitioning RRAI from an experimental AI application into a professionally architected software platform.
+
+The architecture handbook has now been completed and is the governing authority for the application.
+
+Your task is NOT to redesign the application.
+
+Your task is to prepare the repository so future development follows the architecture.
+
+-----------------------------------------
+OBJECTIVES
+-----------------------------------------
+
+1. Create a new top-level folder called:
+
+/architecture
+
+If it does not already exist.
+
+2. Verify that every Architecture Handbook document exists.
+
+00 Architecture Migration Plan.md
+
+01 Product Vision.md
+
+02 Executive Operating System.md
+
+03 Design Principles.md
+
+04 Capability Framework.md
+
+05 Workspace Framework.md
+
+06 Organisation Framework.md
+
+07 Memory Architecture.md
+
+08 Learning Engine.md
+
+09 Prompt Architecture.md
+
+10 Domain Model & Data Architecture.md
+
+11 Database Principles.md
+
+12 Technical Architecture & Persistence.md
+
+13 Security & Governance.md
+
+14 API & Integration Architecture.md
+
+15 Product Roadmap.md
+
+Do NOT modify these files.
+
+They are the constitutional architecture for RRAI.
+
+-----------------------------------------
+
+Now create the following new folders.
+
+product/
+
+engineering/
+
+capabilities/
+
+knowledge/
+
+templates/
+
+prompts/
+
+implementation/
+
+-----------------------------------------
+
+Within the product folder create:
+
+00 Product Specification.md
+
+01 Navigation.md
+
+02 Dashboard.md
+
+03 Workspace.md
+
+04 Conversation.md
+
+05 Projects.md
+
+06 Meetings.md
+
+07 Knowledge.md
+
+08 Memory.md
+
+09 Learning.md
+
+10 Capability Registry.md
+
+11 Executive Briefings.md
+
+12 Search.md
+
+13 Settings.md
+
+14 Administration.md
+
+Populate each file with a placeholder header only.
+
+Example:
+
+# Dashboard
+
+Status: Placeholder
+
+Purpose:
+
+To be completed.
+
+Nothing else.
+
+-----------------------------------------
+
+Within engineering create:
+
+00 Engineering Handbook.md
+
+01 Coding Standards.md
+
+02 Repository Standards.md
+
+03 Testing Standards.md
+
+04 Deployment Guide.md
+
+05 AI Development Guide.md
+
+06 Branch Strategy.md
+
+07 Logging & Monitoring.md
+
+08 Performance Standards.md
+
+Again only create placeholder documents.
+
+-----------------------------------------
+
+Within capabilities create:
+
+Capability Template.md
+
+Research.md
+
+Proposal Generation.md
+
+Meeting Intelligence.md
+
+Executive Planning.md
+
+Executive Briefings.md
+
+Marketing.md
+
+Sales Intelligence.md
+
+Relationship Intelligence.md
+
+Writing.md
+
+Presentation Generation.md
+
+Decision Support.md
+
+Again placeholder only.
+
+-----------------------------------------
+
+Within knowledge create:
+
+Knowledge Governance.md
+
+Risk Rising.md
+
+LogicGate.md
+
+GRC.md
+
+Operational Risk.md
+
+Third Party Risk.md
+
+Internal Audit.md
+
+Cyber Security.md
+
+Policy Management.md
+
+Compliance.md
+
+Regulations.md
+
+Competitors.md
+
+Industries.md
+
+Again placeholder only.
+
+-----------------------------------------
+
+Within prompts create:
+
+System Prompt.md
+
+Capability Prompt Template.md
+
+Workspace Prompt Template.md
+
+Organisation Prompt Template.md
+
+Reasoning Prompt.md
+
+Retrieval Prompt.md
+
+Validation Prompt.md
+
+Learning Prompt.md
+
+Again placeholder only.
+
+-----------------------------------------
+
+Within implementation create:
+
+Database Schema.md
+
+API Specification.md
+
+Memory Engine.md
+
+Learning Engine.md
+
+Capability Registry.md
+
+Workspace Manager.md
+
+Organisation Manager.md
+
+Document Pipeline.md
+
+Meeting Pipeline.md
+
+Search Architecture.md
+
+Background Jobs.md
+
+Again placeholder only.
+
+-----------------------------------------
+
+Finally:
+
+Generate a repository tree showing every folder and file.
+
+Do NOT generate application code.
+
+Do NOT modify the existing application.
+
+Do NOT change the database.
+
+Do NOT create new React components.
+
+This task is purely repository preparation.
+
+When complete, wait for the next architectural instruction.
