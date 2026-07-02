@@ -1,4 +1,4 @@
-# Capability Template
+# Retrieval Engine
 
 Status: Placeholder
 

@@ -1,0 +1,165 @@
+We need to update the repository structure to distinguish clearly between Product workflows, Capabilities, and Engines.
+
+Do not change application code.
+Do not change the database.
+Do not create React components.
+Do not modify the architecture handbook unless explicitly instructed.
+This is a documentation and repository-structure task only.
+
+CURRENT ISSUE
+
+The capabilities folder currently mixes three different concepts:
+
+1. Product workflows / executive activities
+2. Business capabilities
+3. Reusable AI engines
+
+We need to separate these.
+
+DEFINITIONS
+
+Product = what the executive is trying to accomplish.
+Examples:
+- Executive Briefing
+- Project & Opportunity System
+- Meeting Intelligence
+- Document Intelligence
+- Automation Engine
+
+Capabilities = reusable business-level AI capabilities.
+Examples:
+- Research
+- Writing
+- Decision Support
+- Sales Intelligence
+- Relationship Intelligence
+- Presentation Generation
+- Marketing
+
+Engines = lower-level reusable AI services used by capabilities and product workflows.
+Examples:
+- Reasoning Engine
+- Retrieval Engine
+- Search Engine
+- Memory Engine
+- Learning Engine
+- Document Analysis Engine
+- Meeting Analysis Engine
+- Relationship Engine
+- Automation Engine
+
+TASKS
+
+1. Leave the architecture folder unchanged.
+
+2. Leave the product folder as the executive workflow layer.
+
+The product folder should contain:
+
+product/
+00 Product Specification.md
+01 Executive Experience.md
+02 Executive Home.md
+03 Conversation System.md
+04 Workspace System.md
+05 Executive Briefing.md
+06 Capability Marketplace.md
+07 Knowledge System.md
+08 Memory System.md
+09 Learning System.md
+10 Project & Opportunity System.md
+11 Meeting Intelligence.md
+12 Document Intelligence.md
+13 Automation Engine.md
+14 Executive Settings.md
+15 Administration.md
+16 Reporting & Analytics.md
+
+3. Update the capabilities folder so it only contains business-level capabilities.
+
+Replace the current capabilities folder contents with:
+
+capabilities/
+00 Capability Template.md
+01 Research.md
+02 Writing.md
+03 Decision Support.md
+04 Sales Intelligence.md
+05 Relationship Intelligence.md
+06 Presentation Generation.md
+07 Marketing.md
+08 Opportunity Intelligence.md
+09 Customer Intelligence.md
+10 Delivery Intelligence.md
+11 Strategy Intelligence.md
+
+Each file should contain only:
+
+# [File Name Without Number]
+
+Status: Placeholder
+
+Purpose:
+
+To be completed.
+
+4. Create a new top-level folder called:
+
+engines/
+
+5. Add the following placeholder files inside engines:
+
+engines/
+00 Engine Template.md
+01 Reasoning Engine.md
+02 Retrieval Engine.md
+03 Search Engine.md
+04 Memory Engine.md
+05 Learning Engine.md
+06 Document Analysis Engine.md
+07 Meeting Analysis Engine.md
+08 Relationship Engine.md
+09 Automation Engine.md
+10 Prompt Orchestration Engine.md
+11 Context Assembly Engine.md
+12 Output Generation Engine.md
+
+Each file should contain only:
+
+# [File Name Without Number]
+
+Status: Placeholder
+
+Purpose:
+
+To be completed.
+
+6. Make sure these files are NOT in capabilities because they belong in product instead:
+
+Executive Briefings.md
+Executive Planning.md
+Meeting Intelligence.md
+Proposal Generation.md
+
+If they exist in capabilities, remove them.
+
+7. Add a short note to capabilities/00 Capability Template.md explaining:
+
+A capability is a reusable business-level AI skill.
+Capabilities may use multiple engines.
+Capabilities may be orchestrated by product workflows.
+Capabilities are not screens, pages, or one-off outputs.
+
+8. Add a short note to engines/00 Engine Template.md explaining:
+
+An engine is a reusable lower-level AI service.
+Engines provide technical or reasoning services used by capabilities and product workflows.
+Engines are not directly exposed to executives as product experiences.
+
+9. After completing the update, output the new repository tree for:
+
+product/
+capabilities/
+engines/
+
+Do not make any other changes.

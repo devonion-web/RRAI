@@ -1,4 +1,4 @@
-# Proposal Generation
+# Opportunity Intelligence
 
 Status: Placeholder
 

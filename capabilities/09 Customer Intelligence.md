@@ -1,4 +1,4 @@
-# Executive Briefings
+# Customer Intelligence
 
 Status: Placeholder
 
