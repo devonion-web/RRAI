@@ -1,4 +1,4 @@
-# Capability Registry
+# Workspace System
 
 Status: Placeholder
 

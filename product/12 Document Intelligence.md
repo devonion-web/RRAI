@@ -1,4 +1,4 @@
-# Search
+# Document Intelligence
 
 Status: Placeholder
 

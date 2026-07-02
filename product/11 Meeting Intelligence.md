@@ -1,4 +1,4 @@
-# Settings
+# Meeting Intelligence
 
 Status: Placeholder
 
