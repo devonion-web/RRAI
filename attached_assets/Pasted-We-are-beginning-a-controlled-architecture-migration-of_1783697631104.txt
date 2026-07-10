@@ -1,0 +1,285 @@
+We are beginning a controlled architecture migration of the existing RRAI application.
+
+Do not rebuild the application.
+
+Do not replace the current UI.
+
+Do not remove or rename existing features.
+
+Do not change the database schema, authentication, deployment configuration or AI behaviour during this task unless explicitly required to document the current state.
+
+The objective of this phase is to prepare the existing application for:
+
+* GitHub as the governed source repository;
+* Claude Code working directly against the repository;
+* ChatGPT providing architecture and change-review instructions;
+* Replit remaining the runtime, database and deployment environment;
+* future controlled ingestion of governed RRAI knowledge assets.
+
+This is a foundation and repository-readiness task only.
+
+Phase 1: Inspect the existing application
+
+Inspect the full current codebase and produce an evidence-based inventory of:
+
+* frontend framework and structure;
+* backend framework and structure;
+* database and ORM;
+* existing database tables;
+* current pages, routes and capabilities;
+* AI model integrations;
+* prompts and system instructions;
+* file-upload capabilities;
+* document storage;
+* knowledge retrieval or RAG capabilities;
+* conversations and message persistence;
+* opportunity or organisation memory;
+* authentication;
+* role and permission controls;
+* audit logging;
+* deployment configuration;
+* environment variables and secrets;
+* known incomplete or prototype features.
+
+Distinguish clearly between:
+
+* implemented and working;
+* implemented but incomplete;
+* prototype only;
+* referenced in documentation but not implemented;
+* not present.
+
+Do not infer that a capability exists merely because it appears in a design document.
+
+Phase 2: Protect the current application
+
+Before changing files:
+
+1. Create a named checkpoint of the current working application.
+2. Confirm the current application still starts successfully.
+3. Run the existing build, type-check and tests where available.
+4. Record any pre-existing failures separately.
+5. Do not make unrelated fixes during this task.
+
+Create a working Git branch named:
+
+chore/rrai-repository-foundation
+
+Do not commit directly to the main branch.
+
+If no Git repository exists, initialise one without removing or rewriting application files.
+
+If GitHub is not connected, prepare the local repository and then tell me the exact manual steps required to connect it through Replit’s Git pane. Do not claim that GitHub has been connected unless the remote is verified.
+
+Phase 3: Add repository foundations
+
+Create or update the following top-level structure without moving the application code yet:
+
+/
+├── app/                     # Reserved target location; do not move code in this phase
+├── architecture/
+├── product/
+├── capabilities/
+├── engines/
+├── knowledge/
+│   ├── master-assets/
+│   ├── vendor/
+│   └── generated/          # Must never become the source of truth
+├── prompts/
+├── templates/
+├── engineering/
+├── implementation/
+├── archive/
+└── reports/
+
+If creating an empty directory requires a placeholder, use .gitkeep.
+
+Do not duplicate existing governed documents into several locations. Where an existing file appears to belong in one of these areas, list the proposed move in the migration report rather than moving it during this phase.
+
+Phase 4: Create replit.md
+
+Create a root-level replit.md containing project instructions for Replit Agent.
+
+It must state:
+
+* RRAI is one platform with multiple lenses.
+* 00_RRAI_Master_Context_v2_0.md is the highest-authority document when present.
+* 01_RRAI_Platform_Architecture_v0_9.md sits directly beneath it.
+* Higher-authority documents prevail where governed documents conflict.
+* Do not redesign architecture while implementing a lower-level task.
+* Master Knowledge Assets are governed source material.
+* Generated chunks, summaries, embeddings and indexes are derived artefacts and never become the source of truth.
+* Runtime Memory is separate from governed Knowledge.
+* Commercial and delivery information must not be exposed to Analyst-lens reasoning.
+* Every agent or reasoning run operates inside one active lens.
+* Do not automatically alter approved Knowledge.
+* Learning may propose Knowledge changes but cannot approve or apply them.
+* Human approval is required for external publication, customer commitments, pricing or terms, legal or regulatory assertions, Knowledge changes, sending communications, opportunity/project status changes and external-system actions.
+* Do not expose API keys, database credentials or secrets in code, commits, logs or documentation.
+* Before changing established behaviour, inspect the governing files and current implementation.
+* Use UK English in governed documentation.
+* Prefer small, reviewable changes on branches.
+* Do not commit generated runtime data, uploaded customer documents, database contents or secrets to Git.
+
+Keep replit.md concise enough to be operationally useful. Do not copy the complete architecture documents into it.
+
+Phase 5: Add safe repository controls
+
+Create or update:
+
+.gitignore
+
+It must exclude, as applicable:
+
+* .env and local environment files;
+* secrets and credentials;
+* dependency directories;
+* build outputs;
+* logs;
+* temporary uploads;
+* exported database data;
+* local vector indexes;
+* generated embeddings;
+* customer and opportunity uploads;
+* operating-system files;
+* IDE-specific files.
+
+Do not ignore governed Markdown files or source code.
+
+README.md
+
+Add a concise repository overview covering:
+
+* what RRAI is;
+* where the current application runs;
+* high-level technology stack;
+* governing-document hierarchy;
+* repository area descriptions;
+* development start commands;
+* build and test commands;
+* branch and review rules;
+* clear current-state limitations.
+
+Do not describe target-state capabilities as already implemented.
+
+CONTRIBUTING.md
+
+Define:
+
+* branch-based changes;
+* no direct AI edits to main;
+* small commits;
+* required build/type-check/test evidence;
+* governing-document conformance;
+* prohibition on committing secrets or runtime/customer data;
+* human review before merging architecture, Knowledge or consequential application changes.
+
+Phase 6: Produce evidence-based reports
+
+Create:
+
+reports/current-state-inventory.md
+
+Include the Phase 1 findings with file-path evidence.
+
+reports/repository-migration-plan.md
+
+For every existing file or major directory, state:
+
+* current path;
+* purpose;
+* proposed target path;
+* whether it should be kept, moved, renamed, merged, archived or left unchanged;
+* reason;
+* dependency;
+* risk;
+* proposed migration phase.
+
+Do not perform those moves in this phase.
+
+reports/architecture-implementation-gap.md
+
+Compare the current implementation against these target architectural capabilities:
+
+* Knowledge and Memory separation;
+* write-time classification;
+* partition and sensitivity metadata;
+* lens routing;
+* retrieval-time filtering;
+* one-way-valve enforcement;
+* evidence tiers and conflict surfacing;
+* human approval gates;
+* governed audit logging;
+* learning writes marked unverified;
+* Learning-to-Knowledge review gate;
+* authentication and role-based permissions;
+* document storage;
+* master-asset registry;
+* ingestion and vector retrieval.
+
+For each, report:
+
+* implemented;
+* partial;
+* absent;
+* cannot verify;
+* evidence;
+* dependency;
+* recommended future phase.
+
+Do not implement these capabilities during this task.
+
+reports/github-readiness-checklist.md
+
+Confirm:
+
+* Git repository initialised;
+* branch created;
+* current state checkpointed;
+* .gitignore safe;
+* secrets excluded;
+* current build status;
+* repository ready or not ready to connect;
+* any required manual GitHub/Replit steps.
+
+Phase 7: Validate and stop
+
+After completing the documentation and repository controls:
+
+1. Run the application.
+2. Run build and type-check.
+3. Run existing tests.
+4. Confirm no intentional user-facing behaviour changed.
+5. Show the complete changed-file list.
+6. Summarise any failures or uncertainties.
+7. Stop and wait for review.
+
+Do not proceed into:
+
+* authentication implementation;
+* Knowledge ingestion;
+* vector search;
+* database migration;
+* file migration;
+* agent creation;
+* lens routing;
+* access-control enforcement;
+* audit-log implementation;
+* UI redesign.
+
+These will be separate, reviewed phases.
+
+Required final response
+
+Return:
+
+1. current-state summary;
+2. checkpoint and branch confirmation;
+3. files created or changed;
+4. build/type-check/test results;
+5. security concerns found;
+6. GitHub connection status;
+7. manual actions required from me;
+8. recommendation for the single next implementation phase.
+
+Do not say the migration is complete. This task only establishes the repository foundation and produces the evidence needed to plan it safely.

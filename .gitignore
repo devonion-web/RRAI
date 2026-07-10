@@ -47,3 +47,25 @@ Thumbs.db
 # Replit
 .cache/
 .local/
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Uploads, exports, generated knowledge artefacts
+uploads/
+tmp-uploads/
+**/uploads/
+exports/
+db-export/
+*.dump
+*.sql.gz
+knowledge/generated/*
+!knowledge/generated/.gitkeep
+*.vecidx
+*.faiss
+embeddings/
+vector-index/

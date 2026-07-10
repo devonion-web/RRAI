@@ -58,3 +58,19 @@ _Populate as you build._
 ## Pointers
 
 - See the `pnpm-workspace` skill for workspace structure, TypeScript setup, and package details
+
+## Governance (RRAI repository foundation)
+
+- RRAI is one platform with multiple lenses.
+- `00_RRAI_Master_Context_v2_0.md` is the highest-authority document when present. `01_RRAI_Platform_Architecture_v0_9.md` sits directly beneath it. Where governed documents conflict, the higher-authority document prevails.
+- Do not redesign architecture while implementing a lower-level task. Inspect the governing files and current implementation before changing established behaviour.
+- Master Knowledge Assets (`knowledge/master-assets/`) are governed source material. Generated chunks, summaries, embeddings and indexes (`knowledge/generated/`) are derived artefacts and never become the source of truth.
+- Runtime Memory (conversations, opportunity/session state) is separate from governed Knowledge.
+- Commercial and delivery information must not be exposed to Analyst-lens reasoning.
+- Every agent or reasoning run operates inside one active lens.
+- Do not automatically alter approved Knowledge. Learning may propose Knowledge changes but cannot approve or apply them.
+- Human approval is required before: external publication, customer commitments, pricing or terms, legal or regulatory assertions, Knowledge changes, sending communications, opportunity/project status changes, and external-system actions.
+- Never expose API keys, database credentials or secrets in code, commits, logs or documentation.
+- Use UK English in governed documentation (`architecture/`, `product/`, `capabilities/`, `engines/`, `knowledge/`, `prompts/`, `templates/`, `engineering/`, `implementation/`).
+- Prefer small, reviewable changes on branches; do not commit generated runtime data, uploaded customer documents, database contents or secrets to Git.
+- See `reports/current-state-inventory.md`, `reports/repository-migration-plan.md`, `reports/architecture-implementation-gap.md`, and `reports/github-readiness-checklist.md` for the current evidence-based state of the migration.
