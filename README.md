@@ -19,10 +19,9 @@ RRAI is a modular AI operating platform for Risk Rising. It provides a dashboard
 
 ## Governing-document hierarchy
 
-1. `00_RRAI_Master_Context_v2_0.md` — highest authority, when present.
-2. `01_RRAI_Platform_Architecture_v0_9.md` — sits directly beneath the master context.
-3. `architecture/` — constitutional product and technical architecture (numbered 00–17, plus `99 Architecture Index.md`).
-4. `product/`, `capabilities/`, `engines/`, `knowledge/`, `prompts/`, `templates/`, `engineering/`, `implementation/` — governed documentation layers beneath the architecture layer.
+1. `RRAI Constitution.md` (v1.0, root) — highest authority.
+2. `architecture/` — constitutional product and technical architecture (numbered 00–17, plus `99 Architecture Index.md`).
+3. `product/`, `capabilities/`, `engines/`, `knowledge/`, `prompts/`, `templates/`, `engineering/`, `implementation/` — governed documentation layers beneath the architecture layer.
 
 Where governed documents conflict, the higher-authority document prevails. See `replit.md` for the full governance summary.
 
