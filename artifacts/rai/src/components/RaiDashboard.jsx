@@ -1,5 +1,6 @@
 import React from 'react'
 import { MODULES } from '../config/modules.js'
+import { useIsAdmin } from '../config/access.js'
 
 const NAVY = '#0B1F3A'
 const NAVY_LIGHT = '#EAF1F8'
@@ -7,6 +8,11 @@ const MUTED = '#64748b'
 const BORDER = '#e2e8f0'
 
 export default function RaiDashboard({ onSelectModule }) {
+  const isAdmin = useIsAdmin()
+  // Admin-only modules are hidden from non-admins. Additive: existing modules
+  // have no `adminOnly` flag and are unaffected.
+  const visibleModules = MODULES.filter((mod) => !mod.adminOnly || isAdmin)
+
   return (
     <div
       style={{
@@ -90,7 +96,7 @@ export default function RaiDashboard({ onSelectModule }) {
             gap: 16,
           }}
         >
-          {MODULES.map((mod) => (
+          {visibleModules.map((mod) => (
             <ModuleCard
               key={mod.id}
               module={mod}

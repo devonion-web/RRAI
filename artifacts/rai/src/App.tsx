@@ -4,6 +4,9 @@ import RaiDashboard from './components/RaiDashboard'
 import LogicGateModule from './modules/logicgate/LogicGateModule'
 // @ts-ignore
 import RFPModule from './modules/rfp/RFPModule'
+// @ts-ignore
+import DevelopmentModule from './modules/development/DevelopmentModule'
+import { useIsAdmin } from './config/access.js'
 
 type ModuleId = string | null
 
@@ -40,10 +43,15 @@ const MODULE_LABELS: Record<string, string> = {
   marketing: 'Marketing Specialist',
   delivery: 'Delivery Specialist',
   knowledge: 'Knowledge Specialist',
+  development: 'Development',
 }
 
 export default function App() {
   const [activeModule, setActiveModule] = useState<ModuleId>(null)
+  const isAdmin = useIsAdmin()
+
+  // Admin-only lens: never render for non-admins, even if the id is set.
+  const showDevelopment = activeModule === 'development' && isAdmin
 
   if (activeModule) {
     return (
@@ -60,6 +68,7 @@ export default function App() {
         )}
         {activeModule === 'rfp' && <RFPModule onBack={() => setActiveModule(null)} />}
         {activeModule === 'logicgate' && <LogicGateModule />}
+        {showDevelopment && <DevelopmentModule />}
       </div>
     )
   }
