@@ -1,10 +1,23 @@
 # 00 – Architecture Migration Plan
 
 Version: 1.0
-Status: Foundational
-Authority: Highest
+Status: Foundational — transitional document (see supersession notice below)
+Authority: Subordinate — see supersession notice below
 Audience: Product Owner, Architects, Engineers
 Last Updated: June 2026
+
+---
+
+> **Supersession notice — added July 2026**
+>
+> This document predates the Master Context v2.0 and the approved Platform Architecture v1.0. It was written before those governing documents existed.
+>
+> - Any claim that this document holds "Highest" authority is **superseded**. This document is a transitional operational plan, not a constitutional document.
+> - This document is **subordinate** to:
+>   - [`architecture/00_RRAI_Master_Context_v2_0.md`](00_RRAI_Master_Context_v2_0.md) — highest authority
+>   - [`architecture/01_RRAI_Platform_Architecture_v1_0.md`](01_RRAI_Platform_Architecture_v1_0.md) — approved implementation architecture
+> - Where any content in this document **conflicts** with the Master Context or Platform Architecture, **the Master Context prevails**.
+> - This document remains useful as a record of the migration rationale and phases. It becomes historical reference once migration is complete.
 
 ---
 

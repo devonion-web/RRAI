@@ -15,7 +15,7 @@
 ## Governing-document conformance
 
 - Check `architecture/`, `product/`, `capabilities/`, `engines/`, `knowledge/`, `prompts/`, `templates/`, `engineering/`, and `implementation/` before changing established behaviour — do not redesign architecture while implementing a lower-level task.
-- `RRAI Constitution.md` (v1.0, root) is the highest-authority document and takes precedence over all lower-level documents.
+- `architecture/00_RRAI_Master_Context_v2_0.md` is the highest-authority document. `architecture/01_RRAI_Platform_Architecture_v1_0.md` is the approved implementation architecture immediately beneath it. Both take precedence over all lower-level documents. The root `RRAI Constitution.md` is a redirect only.
 - Use UK English in all governed documentation.
 
 ## Data and secrets

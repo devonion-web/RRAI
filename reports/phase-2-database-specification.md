@@ -2,7 +2,7 @@
 
 Status: Specification only — do not implement until approved.
 Date: 14 July 2026
-Authority: Governed by `RRAI Constitution.md` and `architecture/11 Database Principles.md`
+Authority: Governed by `architecture/00_RRAI_Master_Context_v2_0.md` and `architecture/11 Database Principles.md`
 
 ---
 

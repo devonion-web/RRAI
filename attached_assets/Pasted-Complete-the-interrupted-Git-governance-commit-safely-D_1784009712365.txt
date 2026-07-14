@@ -1,0 +1,78 @@
+Complete the interrupted Git governance commit safely.
+
+Do not change application code, database schema, runtime behaviour, AI behaviour, or governed document content.
+
+The current repository state is:
+
+- branch: main
+- local changes are present but unstaged
+- the Platform Architecture rename appears as:
+  - deleted: architecture/01_RRAI_Platform_Architecture_v0_9.md
+  - untracked: architecture/01_RRAI_Platform_Architecture_v1_0.md
+- archive/RRAI Constitution v1.0.md is untracked
+- documentation and report files are modified
+- attached_assets/Pasted-Apply-the-approved-governance-clean-up-Do-not-change-ap_1784009181163.txt is an accidental prompt artefact and must not be committed
+- a stale .git/index.lock may exist from an interrupted Git process
+
+Perform the following actions:
+
+1. Check whether any real Git process is still running.
+
+2. If no active Git process is using the repository, remove only the stale lock file:
+
+   .git/index.lock
+
+3. Remove the accidental file:
+
+   attached_assets/Pasted-Apply-the-approved-governance-clean-up-Do-not-change-ap_1784009181163.txt
+
+   Do not remove any other attached assets.
+
+4. Stage all intended governance changes, including deletions and renames.
+
+5. Review the staged diff and confirm it contains only:
+
+   - CONTRIBUTING.md
+   - README.md
+   - RRAI Constitution.md
+   - architecture/00 Architecture Migration Plan.md
+   - rename of architecture/01_RRAI_Platform_Architecture_v0_9.md to architecture/01_RRAI_Platform_Architecture_v1_0.md
+   - archive/RRAI Constitution v1.0.md
+   - replit.md
+   - reports/github-readiness-checklist.md
+   - reports/phase-2-database-specification.md
+   - reports/repository-migration-plan.md
+
+6. Confirm no application files under artifacts/, lib/, app/, or any runtime source directory are staged.
+
+7. Commit with this exact message:
+
+   Resolve RRAI governing document authority
+
+8. Push the commit to:
+
+   origin main
+
+9. Verify:
+
+   - working tree is clean;
+   - local main is up to date with origin/main;
+   - no v0_9 Platform Architecture file remains;
+   - architecture/01_RRAI_Platform_Architecture_v1_0.md is tracked;
+   - archive/RRAI Constitution v1.0.md is tracked;
+   - the accidental attached_assets prompt file is absent;
+   - no embedded token appears in the origin remote URL.
+
+10. Do not create a develop branch in this task. Branch strategy will be handled separately after this governance commit is safely complete.
+
+Return:
+
+1. whether a Git process was found;
+2. whether the lock file was removed;
+3. exact staged-file list;
+4. commit hash;
+5. push confirmation;
+6. final git status;
+7. any unexpected file or error.
+
+If Git commit or push is blocked by the environment, stop and provide the exact Shell commands I must run manually. Do not claim the commit succeeded unless verified.
