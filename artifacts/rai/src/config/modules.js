@@ -53,4 +53,16 @@ export const MODULES = [
     icon: '🧠',
     category: 'Intelligence',
   },
+  {
+    // Administrator-only Development Lens (Phase 1: UI shell).
+    // Gated via `adminOnly`; only rendered for admins (see RaiDashboard + App).
+    id: 'development',
+    title: 'Development',
+    description:
+      'Administrator workspace for platform architecture, knowledge, engineering, source control, roadmap, reviews and build status. Phase 1 establishes the UI shell; later phases populate each area.',
+    status: 'active',
+    icon: '🛠',
+    category: 'Platform',
+    adminOnly: true,
+  },
 ]
