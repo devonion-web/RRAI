@@ -1,0 +1,51 @@
+Enumerating objects: 16, done.
+Counting objects: 100% (16/16), done.
+Delta compression using up to 2 threads
+Compressing objects: 100% (13/13), done.
+Writing objects: 100% (13/13), 5.29 KiB | 5.29 MiB/s, done.
+Total 13 (delta 11), reused 0 (delta 0), pack-reused 0 (from 0)
+remote: Resolving deltas: 100% (11/11), completed with 3 local objects.
+remote: error: GH013: Repository rule violations found for refs/heads/main.
+remote: 
+remote: - GITHUB PUSH PROTECTION
+remote:   —————————————————————————————————————————
+remote:     Resolve the following violations before pushing again
+remote: 
+remote:     - Push cannot contain secrets
+remote: 
+remote:     
+remote:      (?) Learn how to resolve a blocked push
+remote:      https://docs.github.com/code-security/secret-scanning/working-with-secret-scanning-and-push-protection/working-with-push-protection-from-the-command-line#resolving-a-blocked-push
+remote:     
+remote:     
+remote:       —— GitHub Personal Access Token ——————————————————————
+remote:        locations:
+remote:          - commit: 104585ba350c671e5023b1e7963030f2f644590f
+remote:            path: .replit:37
+remote:     
+remote:        (?) To push, remove secret from commit(s) or follow this URL to allow the secret.
+remote:        https://github.com/devonion-web/RRAI/security/secret-scanning/unblock-secret/3GTtYDCsYral3l443BiDcyCRHel
+remote:     
+remote:     
+remote:       —— GitHub Personal Access Token ——————————————————————
+remote:        locations:
+remote:          - commit: 37e67c1348de314057b080380c181d68d1521369
+remote:            path: .replit:37
+remote:     
+remote:        (?) To push, remove secret from commit(s) or follow this URL to allow the secret.
+remote:        https://github.com/devonion-web/RRAI/security/secret-scanning/unblock-secret/3GTtYARJuYvqqhdecgtHKrXuJpY
+remote:     
+remote:     
+remote:       —— GitHub Personal Access Token ——————————————————————
+remote:        locations:
+remote:          - commit: 0ad784146f91b40e52cd4b619ee67adea98b41d2
+remote:            path: .replit:37
+remote:     
+remote:        (?) To push, remove secret from commit(s) or follow this URL to allow the secret.
+remote:        https://github.com/devonion-web/RRAI/security/secret-scanning/unblock-secret/3GTtYCmeJIQjIJzWI3rQg3HxSlX
+remote:     
+remote: 
+remote: 
+To https://github.com/devonion-web/RRAI.git
+ ! [remote rejected] main -> main (push declined due to repository rule violations)
+error: failed to push some refs to 'https://github.com/devonion-web/RRAI.git'

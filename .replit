@@ -34,4 +34,3 @@ externalPort = 3000
 [userenv]
 
 [userenv.shared]
-GITHUB_TOKEN = "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"
