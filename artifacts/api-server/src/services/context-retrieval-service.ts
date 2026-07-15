@@ -5,33 +5,31 @@
  * provenance-tagged context blocks that prompt assembly may include directly.
  *
  * Rules:
- *   - Only assets approved by the routing decision are loaded.
+ *   - Routing decision is applied BEFORE search — only permitted assets are searched.
  *   - Opportunity fields are selected at the field level — never the full record.
  *   - The one-way valve is enforced here: commercial/delivery fields are excluded
  *     for analyst and intelligence lenses regardless of opportunity linkage.
  *   - No raw database records are injected blindly into prompts.
  *   - Every block carries source metadata for traceability.
+ *   - Knowledge content is retrieved via chunk search, not whole-file loading.
  *
  * Policy version: lens-policy-v1
+ * Search version: retrieval-v1
  */
 
-import { readFileSync, existsSync } from "fs";
-import { join } from "path";
 import type { Conversation } from "@workspace/db/schema";
 import type { RoutingDecision } from "./lens-routing-service";
 import type { KnowledgePartition, SensitivityLevel, MemorySourceType } from "../policies/lens-policy";
 import * as oppsRepo from "../repositories/opportunities-repository";
+import { searchKnowledge, type SearchOutput } from "./knowledge-search-service";
 import { logger } from "../lib/logger";
-
-// ── Path resolution ───────────────────────────────────────────────────────────
-// Workspace root is two levels above the api-server package dir.
-const WORKSPACE_ROOT = join(process.cwd(), "..", "..");
 
 // ── Context block types ───────────────────────────────────────────────────────
 
 /** Source type taxonomy for retrieval traces. */
 export type ContextSourceType =
-  | "knowledge_asset"
+  | "knowledge_chunk"
+  | "knowledge_asset"     // kept for backwards compat in traces
   | "opportunity_identity"
   | "opportunity_commercial"
   | "conversation_context";
@@ -39,16 +37,26 @@ export type ContextSourceType =
 export interface ContextBlock {
   /** What kind of source this came from. */
   sourceType: ContextSourceType;
-  /** Stable identifier — knowledge asset ID, opportunity ID, or conversation ID. */
+  /** Stable identifier — chunk ID, knowledge asset ID, opportunity ID, or conversation ID. */
   sourceId: string;
+  /** Asset ID (for knowledge chunks — same as assetId in the chunk). */
+  assetId?: string;
   /** Human-readable title for the block. */
   title: string;
+  /** Heading path within the source document (knowledge chunks only). */
+  headingPath?: string;
+  /** Chunk index within the source document (knowledge chunks only). */
+  chunkIndex?: number;
   /** Partition classification inherited from the manifest or policy. */
   partition: KnowledgePartition;
   /** Sensitivity level inherited from the manifest or policy. */
   sensitivity: SensitivityLevel;
   /** Verification state of the source. */
   verificationState: string;
+  /** Evidence tier of the source (knowledge chunks only). */
+  evidenceTier?: string;
+  /** Relevance score (knowledge chunks only). */
+  score?: number;
   /** The actual content that may be supplied to the model. */
   content: string;
 }
@@ -74,19 +82,8 @@ export interface RetrievalResult {
   partitionsIncluded: KnowledgePartition[];
   /** Unique sensitivity values of included blocks. */
   sensitivityLevelsIncluded: SensitivityLevel[];
-}
-
-// ── Knowledge asset loading ───────────────────────────────────────────────────
-
-function tryLoadKnowledgeFile(file: string): string | null {
-  const fullPath = join(WORKSPACE_ROOT, "knowledge", file);
-  if (!existsSync(fullPath)) return null;
-  try {
-    const content = readFileSync(fullPath, "utf-8").trim();
-    return content || null;
-  } catch {
-    return null;
-  }
+  /** The search output from the knowledge search service (for trace enrichment). */
+  searchOutput?: SearchOutput;
 }
 
 // ── Opportunity context selection ─────────────────────────────────────────────
@@ -131,14 +128,20 @@ export interface RetrievalInput {
   routingDecision: RoutingDecision;
   conversation: Conversation;
   actor: { userId: string; orgId: string };
+  /** The user's current message — used as the search query for chunk retrieval. */
+  userQuery?: string;
 }
 
 /**
  * Load and filter all context permitted by the routing decision.
+ *
+ * Knowledge content is retrieved via semantic chunk search (PostgreSQL FTS).
+ * Opportunity context is retrieved from the database with field-level selection.
+ *
  * Returns structured blocks with provenance — ready for prompt assembly.
  */
 export async function retrieveContext(input: RetrievalInput): Promise<RetrievalResult> {
-  const { routingDecision, conversation, actor } = input;
+  const { routingDecision, conversation, actor, userQuery = "" } = input;
   const { policy, permittedKnowledgeAssets, excludedKnowledgeAssets } = routingDecision;
 
   const permittedBlocks: ContextBlock[] = [];
@@ -146,33 +149,70 @@ export async function retrieveContext(input: RetrievalInput): Promise<RetrievalR
   const usedAssetIds: string[] = [];
   const usedMemorySources = new Set<MemorySourceType>();
 
-  // ── 1. Knowledge assets ────────────────────────────────────────────────────
+  // ── 1. Knowledge chunks (chunk-based retrieval) ────────────────────────────
 
-  for (const asset of permittedKnowledgeAssets) {
-    const content = tryLoadKnowledgeFile(asset.file);
+  let searchOutput: SearchOutput | undefined;
 
-    if (!content) {
-      excludedSources.push({
-        sourceId: asset.id,
-        title: asset.title,
-        partition: asset.partition,
-        sensitivity: asset.sensitivity,
-        reason: "knowledge file missing or empty at runtime — skipped safely",
+  const indexableAssets = permittedKnowledgeAssets.filter((a) => a.suppliedToLlm);
+
+  if (indexableAssets.length > 0) {
+    try {
+      const permittedPartitions = policy.permittedKnowledgePartitions as string[];
+
+      searchOutput = await searchKnowledge({
+        userQuery: userQuery || conversation.title || "general knowledge",
+        permittedAssetIds: indexableAssets.map((a) => a.id),
+        permittedPartitions,
+        sensitivityCeiling: routingDecision.sensitivityCeiling,
+        permittedAssets: indexableAssets,
+        maxResults: 12,
+        charBudget: 25_000,
+        activeLens: routingDecision.activeLens,
+        conversationType: conversation.conversationType,
       });
-      logger.warn({ assetId: asset.id, file: asset.file }, "context-retrieval: knowledge file missing");
-      continue;
-    }
 
-    permittedBlocks.push({
-      sourceType: "knowledge_asset",
-      sourceId: asset.id,
-      title: asset.title,
-      partition: asset.partition,
-      sensitivity: asset.sensitivity,
-      verificationState: asset.verificationState,
-      content,
-    });
-    usedAssetIds.push(asset.id);
+      // Convert search results to context blocks
+      for (const result of searchOutput.results) {
+        const asset = indexableAssets.find((a) => a.id === result.assetId);
+        if (!asset) continue;
+
+        permittedBlocks.push({
+          sourceType: "knowledge_chunk",
+          sourceId: result.chunkId,
+          assetId: result.assetId,
+          title: result.title,
+          headingPath: result.headingPath,
+          chunkIndex: result.chunkIndex,
+          partition: asset.partition as KnowledgePartition,
+          sensitivity: asset.sensitivity as SensitivityLevel,
+          verificationState: result.verificationState,
+          evidenceTier: result.evidenceTier,
+          score: result.score,
+          content: result.content,
+        });
+
+        if (!usedAssetIds.includes(result.assetId)) {
+          usedAssetIds.push(result.assetId);
+        }
+      }
+
+      // Propagate sensitivity exclusions from search
+      for (const ex of searchOutput.excluded) {
+        const asset = indexableAssets.find((a) => a.id === ex.assetId);
+        if (asset) {
+          excludedSources.push({
+            sourceId: ex.assetId,
+            title: asset.title,
+            partition: asset.partition as KnowledgePartition,
+            sensitivity: asset.sensitivity as SensitivityLevel,
+            reason: ex.reason,
+          });
+        }
+      }
+    } catch (err) {
+      logger.error({ err }, "context-retrieval: knowledge search failed — falling back to empty context");
+      // Non-fatal — return empty knowledge context rather than crashing
+    }
   }
 
   // Carry excluded knowledge assets from routing decision into excluded sources
@@ -279,5 +319,6 @@ export async function retrieveContext(input: RetrievalInput): Promise<RetrievalR
     usedMemorySources: [...usedMemorySources],
     partitionsIncluded,
     sensitivityLevelsIncluded,
+    searchOutput,
   };
 }

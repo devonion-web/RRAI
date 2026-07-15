@@ -4,24 +4,25 @@
  * Pipeline (per the RRAI Prompt Architecture, doc 09):
  *   1.  Resolve active lens from persisted conversation record (server-authoritative).
  *   2.  Compute routing decision via lens-routing-service (deterministic, no I/O).
- *   3.  Retrieve filtered context via context-retrieval-service.
+ *   3.  Retrieve filtered context via context-retrieval-service (chunk-based search).
  *   4.  Assemble layered system prompt (10-layer architecture):
  *         L1 System behaviour
  *         L2 Architecture rules (one-way valve, human accountability)
- *         L3 Organisation context (from neutral knowledge assets)
+ *         L3 Organisation context (neutral knowledge chunks)
  *         L4 Workspace context (future)
  *         L5 Lens posture (from governed prompt file)
- *         L6 Retrieved knowledge blocks
+ *         L6 Retrieved knowledge blocks (non-neutral chunks)
  *         L7 Memory / opportunity context
  *         L8 Learning (future)
  *   5.  Assemble message context (L9 conversation + L10 current request).
  *   6.  Stream Anthropic response.
- *   7.  Persist complete content + retrieval trace.
+ *   7.  Persist complete content + enriched retrieval trace.
  *
  * The caller (route handler) owns SSE headers and keepalive.
  * All lens routing and partition enforcement is done server-side.
  *
  * Policy version: lens-policy-v1
+ * Search version: retrieval-v1
  */
 
 import { readFileSync, existsSync } from "fs";
@@ -36,12 +37,14 @@ import { logAuditEvent } from "../repositories/audit-repository";
 import type { Message, Conversation } from "@workspace/db/schema";
 import { computeRoutingDecision } from "./lens-routing-service";
 import { retrieveContext } from "./context-retrieval-service";
+import { SEARCH_VERSION } from "./knowledge-search-service";
+import { CHUNK_POLICY_VERSION } from "./knowledge-chunking-service";
 import type { Lens } from "../policies/lens-policy";
 
 // ── Configuration ─────────────────────────────────────────────────────────────
 
 const MODEL = "claude-sonnet-4-6";
-const CONTEXT_CHAR_BUDGET = 60_000;
+const HISTORY_CHAR_BUDGET = 30_000;
 const MAX_TOKENS = 4096;
 
 // Workspace root is two levels above the api-server package dir
@@ -72,6 +75,8 @@ interface AssembledPrompt {
   system: string;
   /** Human-readable summary of what layers are active — for debugging. */
   layerSummary: string[];
+  /** Estimated chars of knowledge content included. */
+  knowledgeCharsIncluded: number;
 }
 
 function assembleSystemPrompt(
@@ -81,6 +86,7 @@ function assembleSystemPrompt(
 ): AssembledPrompt {
   const parts: string[] = [];
   const layerSummary: string[] = [];
+  let knowledgeCharsIncluded = 0;
 
   // ── Layer 1: System behaviour ─────────────────────────────────────────────
   parts.push(
@@ -113,18 +119,29 @@ Core behaviour (applies in every lens):
   );
   layerSummary.push("L2: Architecture rules");
 
-  // ── Layer 3: Organisation context (from neutral knowledge assets) ─────────
+  // ── Layer 3: Organisation context (from neutral knowledge chunks) ──────────
   const orgKnowledgeBlocks = retrievedBlocks.filter(
-    (b) => b.sourceType === "knowledge_asset" && b.partition === "neutral",
+    (b) =>
+      (b.sourceType === "knowledge_chunk" || b.sourceType === "knowledge_asset") &&
+      b.partition === "neutral",
   );
+
   if (orgKnowledgeBlocks.length > 0) {
-    const orgSection = orgKnowledgeBlocks
-      .map((b) => `### ${b.title}\n\n${b.content}`)
+    // Sort by score descending (most relevant first)
+    const sorted = [...orgKnowledgeBlocks].sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
+
+    const orgSection = sorted
+      .map((b) => {
+        const headingCtx = b.headingPath ? ` [${b.headingPath}]` : "";
+        return `### ${b.title}${headingCtx}\n\n${b.content}`;
+      })
       .join("\n\n---\n\n");
+
     parts.push(`ORGANISATION AND DOMAIN KNOWLEDGE:\n\n${orgSection}`);
-    layerSummary.push(`L3: ${orgKnowledgeBlocks.length} neutral knowledge block(s)`);
+    knowledgeCharsIncluded += orgSection.length;
+    layerSummary.push(`L3: ${orgKnowledgeBlocks.length} neutral knowledge chunk(s)`);
   } else {
-    layerSummary.push("L3: no neutral knowledge blocks");
+    layerSummary.push("L3: no neutral knowledge chunks");
   }
 
   // ── Layer 4: Workspace context (not yet implemented) ─────────────────────
@@ -136,7 +153,6 @@ Core behaviour (applies in every lens):
     parts.push(`LENS POSTURE:\n\n${postureContent}`);
     layerSummary.push(`L5: ${lensPolicy.promptFile}`);
   } else {
-    // Inline fallback if posture file is missing — should not happen in production
     parts.push(
       `ACTIVE LENS: ${lens.toUpperCase()}\n\n${lensPolicy.description}\n\nOperate with the posture described above. Do not deviate from the one-way valve rules.`,
     );
@@ -145,16 +161,25 @@ Core behaviour (applies in every lens):
 
   // ── Layer 6: Retrieved knowledge (non-neutral partitions) ─────────────────
   const specialisedBlocks = retrievedBlocks.filter(
-    (b) => b.sourceType === "knowledge_asset" && b.partition !== "neutral",
+    (b) =>
+      (b.sourceType === "knowledge_chunk" || b.sourceType === "knowledge_asset") &&
+      b.partition !== "neutral",
   );
+
   if (specialisedBlocks.length > 0) {
-    const specSection = specialisedBlocks
-      .map((b) => `### ${b.title} [${b.partition}]\n\n${b.content}`)
+    const sorted = [...specialisedBlocks].sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
+    const specSection = sorted
+      .map((b) => {
+        const headingCtx = b.headingPath ? ` [${b.headingPath}]` : "";
+        return `### ${b.title}${headingCtx} [${b.partition}]\n\n${b.content}`;
+      })
       .join("\n\n---\n\n");
-    parts.push(`ADDITIONAL KNOWLEDGE [${specialisedBlocks.map((b) => b.partition).join(", ")}]:\n\n${specSection}`);
-    layerSummary.push(`L6: ${specialisedBlocks.length} specialised knowledge block(s)`);
+
+    parts.push(`ADDITIONAL KNOWLEDGE [${[...new Set(specialisedBlocks.map((b) => b.partition))].join(", ")}]:\n\n${specSection}`);
+    knowledgeCharsIncluded += specSection.length;
+    layerSummary.push(`L6: ${specialisedBlocks.length} specialised knowledge chunk(s)`);
   } else {
-    layerSummary.push("L6: no specialised knowledge blocks");
+    layerSummary.push("L6: no specialised knowledge chunks");
   }
 
   // ── Layer 7: Memory / opportunity context ────────────────────────────────
@@ -193,6 +218,7 @@ Use this context to inform relevant responses. Do not assume information beyond 
   return {
     system: parts.join("\n\n===\n\n"),
     layerSummary,
+    knowledgeCharsIncluded,
   };
 }
 
@@ -208,7 +234,7 @@ function assembleMessageContext(
   currentUserContent: string,
 ): AnthropicMessage[] {
   const result: AnthropicMessage[] = [];
-  let budget = CONTEXT_CHAR_BUDGET - currentUserContent.length;
+  let budget = HISTORY_CHAR_BUDGET - currentUserContent.length;
 
   for (let i = history.length - 1; i >= 0; i--) {
     const msg = history[i];
@@ -262,11 +288,13 @@ export async function streamAssistantResponse(input: StreamMessageInput): Promis
     // ── 1. Compute routing decision ─────────────────────────────────────────
     const routingDecision = computeRoutingDecision({ activeLens: lens });
 
-    // ── 2. Retrieve filtered context ────────────────────────────────────────
+    // ── 2. Retrieve filtered context (chunk-based search) ───────────────────
     const [retrievalResult, history] = await Promise.all([
-      retrieveContext({ routingDecision, conversation, actor }),
+      retrieveContext({ routingDecision, conversation, actor, userQuery: userContent }),
       msgsRepo.listMessages(conversation.id, 200),
     ]);
+
+    const { searchOutput } = retrievalResult;
 
     logger.debug(
       {
@@ -274,7 +302,8 @@ export async function streamAssistantResponse(input: StreamMessageInput): Promis
         lens,
         permittedBlocks: retrievalResult.permittedBlocks.length,
         excludedSources: retrievalResult.excludedSources.length,
-        layerSummary: [], // populated below
+        searchVersion: searchOutput?.searchVersion ?? "none",
+        candidateCount: searchOutput?.candidateCount ?? 0,
       },
       "assistant-service: context retrieved",
     );
@@ -296,7 +325,7 @@ export async function streamAssistantResponse(input: StreamMessageInput): Promis
     sseWrite(res, { pending: true, messageId: assistantMsgId });
 
     // ── 5. Assemble layered system prompt ───────────────────────────────────
-    const { system, layerSummary } = assembleSystemPrompt(
+    const { system, layerSummary, knowledgeCharsIncluded } = assembleSystemPrompt(
       lens,
       routingDecision.policy,
       retrievalResult.permittedBlocks,
@@ -337,7 +366,16 @@ export async function streamAssistantResponse(input: StreamMessageInput): Promis
 
     await convsRepo.touchLastMessageAt(conversation.id);
 
-    // ── 10. Persist retrieval trace ─────────────────────────────────────────
+    // ── 10. Persist enriched retrieval trace ────────────────────────────────
+    const selectedChunkIds = searchOutput?.results.map((r) => r.chunkId) ?? [];
+    const scoreSummaries = searchOutput?.results.map((r) => ({
+      chunkId: r.chunkId,
+      assetId: r.assetId,
+      score: r.score,
+      evidenceTier: r.evidenceTier,
+      verificationState: r.verificationState,
+    })) ?? [];
+
     await traceRepo.createTrace({
       organisationId: actor.orgId,
       conversationId: conversation.id,
@@ -349,6 +387,21 @@ export async function streamAssistantResponse(input: StreamMessageInput): Promis
       partitionsIncluded: retrievalResult.partitionsIncluded,
       sensitivityLevelsIncluded: retrievalResult.sensitivityLevelsIncluded,
       excludedSources: retrievalResult.excludedSources,
+      // Search metadata
+      searchQuery: userContent,
+      searchVersion: searchOutput?.searchVersion ?? SEARCH_VERSION,
+      chunkPolicyVersion: CHUNK_POLICY_VERSION,
+      candidateCount: searchOutput?.candidateCount ?? 0,
+      selectedChunkIds: selectedChunkIds.length > 0 ? selectedChunkIds : null,
+      scoreSummaries: scoreSummaries.length > 0 ? scoreSummaries : null,
+      evidenceTiersUsed: searchOutput
+        ? [...new Set(searchOutput.results.map((r) => r.evidenceTier))]
+        : null,
+      verificationStatesUsed: searchOutput
+        ? [...new Set(searchOutput.results.map((r) => r.verificationState))]
+        : null,
+      omittedDueToBudget: searchOutput?.omittedDueToBudget ?? 0,
+      contextCharEstimate: knowledgeCharsIncluded,
     }).catch((err) => {
       // Non-fatal — log but do not fail the response
       logger.error({ err, conversationId: conversation.id }, "assistant-service: failed to persist retrieval trace");
@@ -367,10 +420,13 @@ export async function streamAssistantResponse(input: StreamMessageInput): Promis
         model: MODEL,
         lens,
         policyVersion: routingDecision.policyVersion,
+        searchVersion: searchOutput?.searchVersion ?? SEARCH_VERSION,
         stopReason: finalMsg.stop_reason,
         permittedAssets: retrievalResult.usedAssetIds,
+        chunksSelected: selectedChunkIds.length,
         memorySourceTypes: retrievalResult.usedMemorySources,
         excludedSourceCount: retrievalResult.excludedSources.length,
+        knowledgeCharsIncluded,
       },
       lens,
     });

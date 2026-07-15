@@ -18,6 +18,7 @@ import logicgateRouter from "./logicgate";
 import rfpRouter from "./rfp";
 import developmentRouter from "./development";
 import conversationsRouter from "./conversations";
+import adminRouter from "./admin";
 
 const router: IRouter = Router();
 
@@ -27,5 +28,6 @@ router.use(conversationsRouter);
 router.use(logicgateRouter);
 router.use(rfpRouter);
 router.use(developmentRouter);
+router.use(adminRouter);
 
 export default router;

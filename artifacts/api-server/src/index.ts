@@ -1,5 +1,6 @@
 import app from "./app";
 import { logger } from "./lib/logger";
+import { runStartupValidation } from "./services/knowledge-indexing-service";
 
 const rawPort = process.env["PORT"];
 
@@ -22,4 +23,9 @@ app.listen(port, (err) => {
   }
 
   logger.info({ port }, "Server listening");
+
+  // Non-blocking: validate knowledge index and auto-index on first run
+  runStartupValidation().catch((startupErr) => {
+    logger.error({ err: startupErr }, "Knowledge index startup validation failed");
+  });
 });

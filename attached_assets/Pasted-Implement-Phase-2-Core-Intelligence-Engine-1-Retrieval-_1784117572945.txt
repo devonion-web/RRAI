@@ -1,0 +1,725 @@
+Implement Phase 2 — Core Intelligence Engine #1:
+
+Retrieval & RAG Engine v1
+
+Objective
+
+Build a lightweight, governed retrieval engine for RRAI that selects the most relevant permitted knowledge fragments for each assistant request.
+
+The platform already has:
+
+* Governed knowledge files
+* A knowledge manifest
+* Lens routing
+* Partition and sensitivity enforcement
+* Context retrieval boundaries
+* Persistent conversations
+* Opportunity-linked context
+* Retrieval traces
+
+This task must improve retrieval quality without weakening any existing control.
+
+The Retrieval Engine must operate inside the existing lens-routing and retrieval membrane.
+
+The correct sequence is:
+
+User request
+→ Persisted conversation lens
+→ Lens-routing decision
+→ Permitted assets and memory sources
+→ Search only within the permitted corpus
+→ Rank relevant fragments
+→ Apply evidence and confidence rules
+→ Assemble bounded context
+→ Record provenance
+→ Send filtered context to the model
+
+Never search first and filter afterwards.
+
+⸻
+
+1. Inspect the current implementation
+
+Before changing code, inspect:
+
+* policies/lens-policy.ts
+* services/lens-routing-service.ts
+* services/context-retrieval-service.ts
+* services/assistant-service.ts
+* The knowledge manifest
+* Current knowledge loaders
+* Retrieval traces
+* Existing knowledge files
+* Existing database extensions
+* Replit/PostgreSQL support for pgvector
+* Existing token or character budgeting
+* Current prompt assembly
+* Any document chunking or search code already present
+
+Do not create a parallel retrieval system.
+
+Extend the existing services and preserve their responsibilities.
+
+⸻
+
+2. Retrieval approach
+
+Implement a staged retrieval model.
+
+Stage 1 — Governed corpus filtering
+
+Use the existing routing decision to determine:
+
+* Permitted knowledge assets
+* Permitted partitions
+* Sensitivity ceiling
+* LLM eligibility
+* Organisation scope
+* Permitted runtime memory
+
+Only permitted content may enter the searchable corpus.
+
+Stage 2 — Fragment retrieval
+
+Split permitted knowledge assets into retrievable fragments.
+
+Select the fragments most relevant to the user’s current request.
+
+Stage 3 — Ranking
+
+Rank candidates using a deterministic hybrid score.
+
+Start with:
+
+* Full-text relevance
+* Exact term matches
+* Heading and title matches
+* Asset tags
+* Verification state
+* Evidence tier
+* Recency where materially relevant
+* Source authority
+
+Semantic vector similarity may be added if pgvector is available and stable.
+
+Do not make vector search the only retrieval method.
+
+Stage 4 — Context assembly
+
+Select a bounded set of high-value fragments.
+
+Remove duplicates and near-duplicates.
+
+Preserve provenance.
+
+Apply the prompt budget.
+
+⸻
+
+3. Knowledge chunk model
+
+Create a persistent knowledge_chunks table, or equivalent governed index.
+
+At minimum include:
+
+* id
+* assetId
+* chunkIndex
+* headingPath
+* content
+* contentHash
+* tokenEstimate
+* partition
+* sensitivity
+* verificationState
+* evidenceTier
+* tags
+* sourceUpdatedAt
+* indexedAt
+* indexVersion
+* Optional embedding field where supported
+
+The knowledge manifest remains the authority for asset classification.
+
+Chunk rows are a derived retrieval index, not independent governed knowledge.
+
+Do not allow chunk metadata to weaken the parent asset’s classification.
+
+Where values conflict, the parent asset’s more restrictive classification wins.
+
+⸻
+
+4. Chunking rules
+
+Implement deterministic Markdown-aware chunking.
+
+Rules should include:
+
+* Preserve heading hierarchy.
+* Do not split small coherent sections unnecessarily.
+* Split long sections at paragraph boundaries.
+* Keep lists and tables coherent where practical.
+* Attach the heading path to every chunk.
+* Avoid tiny fragments with no standalone meaning.
+* Apply reasonable maximum and target token sizes.
+* Generate stable content hashes.
+* Preserve repository-relative source identity.
+
+Do not use an LLM to chunk governed knowledge in this phase.
+
+Chunking must be reproducible.
+
+⸻
+
+5. Indexing service
+
+Create a reusable indexing service, for example:
+
+artifacts/api-server/src/services/knowledge-indexing-service.ts
+
+It must:
+
+1. Read the knowledge manifest.
+2. Validate every registered asset.
+3. Load the source Markdown.
+4. Chunk it deterministically.
+5. Upsert chunks.
+6. Remove stale chunks when source content changes.
+7. Skip unchanged assets using content hashes.
+8. Record index version and timestamps.
+9. Fail safely when a governed source is missing or malformed.
+
+Add an admin-only command or endpoint to:
+
+* Validate the manifest
+* Reindex all assets
+* Reindex one asset
+* View safe index status
+
+Do not expose raw confidential content through index diagnostics.
+
+Indexing must not occur on every request.
+
+A startup validation is acceptable, but full reindexing should be explicit or change-driven.
+
+⸻
+
+6. Search service
+
+Create a dedicated search service, for example:
+
+artifacts/api-server/src/services/knowledge-search-service.ts
+
+Inputs:
+
+* Current user query
+* Routing decision
+* Permitted asset IDs
+* Permitted partitions
+* Sensitivity ceiling
+* Maximum fragments
+* Context budget
+* Optional tags or conversation type
+
+Outputs:
+
+{
+  query,
+  results: [
+    {
+      chunkId,
+      assetId,
+      title,
+      headingPath,
+      content,
+      score,
+      scoreBreakdown,
+      partition,
+      sensitivity,
+      verificationState,
+      evidenceTier
+    }
+  ],
+  excluded,
+  searchVersion
+}
+
+The service must be deterministic and testable without calling an LLM.
+
+⸻
+
+7. Full-text search
+
+Implement PostgreSQL full-text search or another appropriate local search method.
+
+Prefer PostgreSQL-native indexing if compatible with the current stack.
+
+Support:
+
+* Natural-language search
+* Exact phrase boosts
+* Title and heading boosts
+* Tag boosts
+* Basic term normalisation
+* Reasonable handling of acronyms such as GRC, TPRM, RFP and RFI
+
+Do not use raw string inclusion as the only ranking mechanism.
+
+Create appropriate indexes.
+
+⸻
+
+8. Vector search
+
+Use pgvector only if it is available and deployable in the current PostgreSQL environment.
+
+Where supported:
+
+* Add embeddings to knowledge chunks.
+* Use a current, configured embedding provider.
+* Store embedding model and version.
+* Re-embed only changed chunks.
+* Combine vector score with lexical score.
+
+Where unsupported or unnecessarily disruptive:
+
+* Deliver a strong lexical and metadata retrieval engine first.
+* Document vector search as the next retrieval enhancement.
+
+Do not weaken the delivery by forcing an unavailable dependency.
+
+Do not call an embedding API on every user request for indexed documents.
+
+⸻
+
+9. Hybrid ranking
+
+Create an explicit scoring model.
+
+Possible inputs:
+
+* Lexical relevance
+* Semantic similarity
+* Title match
+* Heading match
+* Tag match
+* Evidence tier
+* Verification state
+* Asset authority
+* Recency
+* Duplicate penalty
+
+Keep scoring rules centralised and versioned.
+
+Record the retrieval scoring version, for example:
+
+retrieval-policy-v1
+
+Do not hide unexplained score manipulation in frontend code.
+
+The final ranking must be inspectable through safe admin diagnostics.
+
+⸻
+
+10. Evidence precedence
+
+Apply the existing RRAI evidence precedence model.
+
+Do not silently resolve conflicts between authoritative sources.
+
+Where two retrieved fragments conflict:
+
+* Preserve both where relevant.
+* Prefer the higher-authority source for primary framing.
+* Mark the conflict for prompt assembly.
+* Instruct the assistant to surface material disagreement.
+* Do not combine conflicting claims into a false consensus.
+
+Include evidence tier and verification state in context metadata.
+
+⸻
+
+11. Runtime memory retrieval
+
+Extend retrieval beyond static knowledge only where permitted.
+
+Candidate runtime sources may include:
+
+* Recent conversation messages
+* Linked opportunity summary
+* Opportunity working-state excerpts
+* Contacts
+* Organisation facts
+* Previous generated artefact metadata
+
+These remain governed by the memory-source classification introduced in Remediation #6.
+
+Do not index complete raw opportunity JSON indiscriminately.
+
+For v1:
+
+* Keep static knowledge retrieval and runtime memory retrieval as separate channels.
+* Rank and budget them separately.
+* Combine only after policy filtering.
+* Preserve distinct provenance.
+
+Do not place cross-organisation runtime memory into a shared index.
+
+⸻
+
+12. Query construction
+
+Use the user’s current message as the primary search query.
+
+Optionally enrich it deterministically with:
+
+* Conversation title
+* Conversation type
+* Linked opportunity name
+* Selected lens
+* Recent user-message keywords
+
+Do not use an LLM-based query-rewriting step in v1 unless there is a compelling measured need.
+
+Avoid contaminating Analyst queries with excluded commercial context.
+
+⸻
+
+13. Context budgeting
+
+Implement an explicit context budget.
+
+Reserve capacity for:
+
+* System and lens instructions
+* Current user message
+* Recent conversation history
+* Static knowledge
+* Runtime memory
+* Response headroom
+
+The retrieval service must:
+
+* Respect a configurable maximum.
+* Prefer fewer stronger fragments over many weak ones.
+* Avoid duplicating the same fact.
+* Preserve complete sentences and coherent fragments.
+* Report what was omitted due to budget.
+
+Do not send the entire permitted knowledge base.
+
+⸻
+
+14. Assistant-service integration
+
+Update assistant-service.ts so that every assistant turn:
+
+1. Resolves the persisted active lens.
+2. Gets the routing decision.
+3. Builds the permitted search corpus.
+4. Searches and ranks relevant chunks.
+5. Retrieves permitted runtime memory.
+6. Applies context budgets.
+7. Persists the retrieval trace.
+8. Assembles the prompt.
+9. Calls Anthropic.
+10. Associates the trace with the assistant message.
+
+Remove broad static inclusion of whole knowledge files where replaced by retrieval.
+
+Do not alter existing SSE persistence behaviour.
+
+⸻
+
+15. Retrieval traces
+
+Extend the existing retrieval trace to include:
+
+* Search query
+* Search version
+* Retrieval-policy version
+* Candidate count
+* Selected chunk IDs
+* Selected asset IDs
+* Score summaries
+* Evidence tiers
+* Verification states
+* Excluded asset IDs and reasons
+* Omitted results due to budget
+* Runtime memory categories used
+* Context token or character estimate
+
+Do not store full sensitive content in traces.
+
+Admin diagnostics may display safe snippets only when classification permits and the administrator has organisation access.
+
+⸻
+
+16. Admin retrieval diagnostics
+
+Add an admin-only diagnostic surface or endpoint that can show:
+
+* Current index status
+* Registered assets
+* Indexed chunk counts
+* Last indexed time
+* Search query
+* Selected asset and chunk IDs
+* Score breakdown
+* Exclusion reasons
+* Retrieval and policy versions
+
+Do not expose:
+
+* Restricted content
+* Secrets
+* Cross-organisation memory
+* Full confidential prompt context by default
+
+This is a diagnostic tool, not an end-user feature.
+
+⸻
+
+17. OpenAPI
+
+Document all new or changed admin/index/search endpoints.
+
+Add schemas for:
+
+* Index status
+* Asset index status
+* Safe search diagnostics
+* Reindex responses
+* Retrieval trace extensions
+
+Regenerate clients and validation schemas.
+
+Do not expose internal embeddings through the API.
+
+⸻
+
+18. Tests
+
+Add comprehensive tests.
+
+Chunking
+
+* Heading hierarchy is preserved.
+* Stable input produces stable chunks and hashes.
+* Changed source updates only affected chunks.
+* Removed content removes stale chunks.
+* Long sections split correctly.
+* Short coherent sections remain intact.
+* Parent classification overrides weaker chunk metadata.
+
+Routing before search
+
+* Prohibited assets never enter the candidate set.
+* Analyst search cannot see commercial or delivery assets.
+* Restricted assets never enter search.
+* Unknown assets are excluded.
+* Cross-organisation memory never enters the candidate set.
+
+Search
+
+* Exact title matches rank highly.
+* Heading matches are boosted.
+* Relevant body content ranks above unrelated content.
+* Tags improve ranking appropriately.
+* Duplicate fragments are reduced.
+* Weak results can be omitted.
+* Results respect maximum count and budget.
+* Acronyms retrieve expected content.
+
+Evidence
+
+* Higher-authority sources receive appropriate weight.
+* Conflicting sources remain distinguishable.
+* Unverified sources do not outrank approved governed sources without strong relevance and explicit policy.
+* Evidence tier is preserved in returned metadata.
+
+Runtime integration
+
+* Assistant turns use selected chunks rather than whole files.
+* Retrieval trace is persisted.
+* Assistant message is linked to the trace.
+* Streaming still works.
+* Failed model generation retains retrieval trace.
+* Conversation persistence remains intact.
+
+Security
+
+* Admin diagnostics require authentication and admin role.
+* Diagnostics remain organisation-scoped.
+* Restricted content is never returned.
+* Raw embeddings are never exposed.
+
+Regression
+
+* All authentication tests pass.
+* All persistence tests pass.
+* All conversation tests pass.
+* All lens-routing tests pass.
+* LogicGate and RFP capabilities still work.
+
+⸻
+
+19. Evaluation set
+
+Create a small governed retrieval evaluation set.
+
+Include representative questions covering:
+
+* Risk Rising capabilities
+* LogicGate modules
+* GRC concepts
+* TPRM
+* RFP/RFI
+* Competitor comparisons
+* Commercial opportunity questions
+* Analyst-lens exclusion tests
+* Delivery-lens questions
+
+For each test define:
+
+* Query
+* Lens
+* Expected asset or topic
+* Prohibited asset or partition
+* Minimum acceptable retrieval behaviour
+
+Create a repeatable evaluation command that reports:
+
+* Recall at selected result count
+* Prohibited-source violations
+* Empty-result rate
+* Top-result accuracy
+
+Do not claim retrieval quality based only on unit tests.
+
+⸻
+
+20. Performance
+
+Add indexes appropriate to the selected search implementation.
+
+Measure:
+
+* Indexing time
+* Search latency
+* Number of chunks
+* Average selected context size
+
+Set a reasonable initial target for local retrieval latency.
+
+Do not add an external search service in v1.
+
+⸻
+
+21. Documentation
+
+Update the relevant architecture or engineering documentation with:
+
+* Retrieval flow
+* Index ownership
+* Chunking rules
+* Search policy version
+* Evidence ranking
+* Context budgeting
+* Reindex procedure
+* Diagnostic procedure
+* Known limitations
+
+Clearly state:
+
+* The manifest governs classification.
+* The index is derived.
+* Lens routing occurs before search.
+* Retrieval does not override sensitivity.
+* The model never receives unrestricted corpus access.
+
+⸻
+
+Boundaries
+
+Do not implement:
+
+* Learning loop
+* Automatic knowledge promotion
+* Human approval engine
+* External web search
+* Attachments or object storage
+* Document generation
+* Presentation generation
+* Agent orchestration
+* Customer-configurable retrieval policies
+* Cross-organisation indexing
+* Major frontend redesign
+
+Do not remove or weaken any Remediation #6 controls.
+
+⸻
+
+Validation
+
+Run:
+
+* Database migration
+* Manifest validation
+* Full reindex
+* OpenAPI codegen
+* Full TypeScript typecheck
+* All existing tests
+* New retrieval tests
+* Retrieval evaluation suite
+* API build
+* Frontend build
+* Full application startup
+
+Manually verify:
+
+1. Ask a Risk Rising capability question.
+2. Confirm the relevant Risk Rising chunks are selected.
+3. Ask a LogicGate module question.
+4. Confirm relevant LogicGate chunks are selected.
+5. Ask a TPRM question.
+6. Confirm domain knowledge is retrieved.
+7. Use Analyst lens with an opportunity linked.
+8. Confirm commercial sources do not enter the candidate set.
+9. Use Commercial lens.
+10. Confirm authorised opportunity memory can be used separately from governed knowledge.
+11. Inspect the retrieval trace.
+12. Confirm selected chunk IDs, scores and exclusions are recorded.
+13. Modify one knowledge file and reindex it.
+14. Confirm unchanged assets are not unnecessarily rebuilt.
+15. Confirm conversation streaming and persistence remain intact.
+
+⸻
+
+Delivery report
+
+Perform the implementation rather than only producing a plan.
+
+Then report:
+
+* Retrieval architecture implemented
+* Database and index changes
+* Chunking strategy
+* Search method selected
+* Whether vector search was implemented and why
+* Hybrid scoring model
+* Evidence precedence implementation
+* Context budgeting
+* Assistant-service changes
+* Retrieval trace changes
+* Admin diagnostics
+* Evaluation set and results
+* Number of assets and chunks indexed
+* Search latency
+* Tests added
+* Final typecheck result
+* Final test result
+* Final build result
+* Known retrieval limitations
+* Recommended next engine
+* Branch name and commit reference

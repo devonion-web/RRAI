@@ -12,7 +12,11 @@
  */
 
 import { db } from "@workspace/db";
-import { retrievalTracesTable, type RetrievalTrace } from "@workspace/db/schema";
+import {
+  retrievalTracesTable,
+  type RetrievalTrace,
+  type ChunkScoreSummary,
+} from "@workspace/db/schema";
 import { eq, desc } from "drizzle-orm";
 
 export interface CreateTraceInput {
@@ -32,6 +36,17 @@ export interface CreateTraceInput {
     sensitivity: string;
     reason: string;
   }>;
+  // ── Search metadata (optional — present only when retrieval engine is used) ─
+  searchQuery?: string | null;
+  searchVersion?: string | null;
+  chunkPolicyVersion?: string | null;
+  candidateCount?: number | null;
+  selectedChunkIds?: string[] | null;
+  scoreSummaries?: ChunkScoreSummary[] | null;
+  evidenceTiersUsed?: string[] | null;
+  verificationStatesUsed?: string[] | null;
+  omittedDueToBudget?: number | null;
+  contextCharEstimate?: number | null;
 }
 
 /** Create a retrieval trace record. Append-only — never updates existing records. */
@@ -49,6 +64,17 @@ export async function createTrace(input: CreateTraceInput) {
       partitionsIncluded: input.partitionsIncluded,
       sensitivityLevelsIncluded: input.sensitivityLevelsIncluded,
       excludedSources: input.excludedSources,
+      // Search metadata
+      searchQuery: input.searchQuery ?? null,
+      searchVersion: input.searchVersion ?? null,
+      chunkPolicyVersion: input.chunkPolicyVersion ?? null,
+      candidateCount: input.candidateCount ?? null,
+      selectedChunkIds: input.selectedChunkIds ?? null,
+      scoreSummaries: input.scoreSummaries ?? null,
+      evidenceTiersUsed: input.evidenceTiersUsed ?? null,
+      verificationStatesUsed: input.verificationStatesUsed ?? null,
+      omittedDueToBudget: input.omittedDueToBudget ?? null,
+      contextCharEstimate: input.contextCharEstimate ?? null,
     })
     .returning();
   return row;

@@ -13,10 +13,13 @@
  *  - policy_version ties each trace to the policy in force at retrieval time,
  *    so historical traces remain interpretable after policy updates.
  *  - The table is append-only for audit purposes.
+ *  - Extended columns (search metadata) are nullable — existing rows without
+ *    retrieval search data remain valid.
  */
 
 import {
   index,
+  integer,
   jsonb,
   pgTable,
   text,
@@ -33,6 +36,15 @@ export interface ExcludedSourceRecord {
   partition: string;
   sensitivity: string;
   reason: string;
+}
+
+/** Score summary record stored in the trace — no content, identifiers and scores only. */
+export interface ChunkScoreSummary {
+  chunkId: string;
+  assetId: string;
+  score: number;
+  evidenceTier: string;
+  verificationState: string;
 }
 
 export const retrievalTracesTable = pgTable(
@@ -67,6 +79,32 @@ export const retrievalTracesTable = pgTable(
       .$type<ExcludedSourceRecord[]>()
       .notNull()
       .default([]),
+
+    // ── Search metadata (nullable — not present in pre-retrieval-engine traces) ─
+
+    /** The search query sent to the retrieval engine. */
+    searchQuery: text("search_query"),
+    /** Retrieval engine version (e.g. "retrieval-v1"). */
+    searchVersion: varchar("search_version", { length: 64 }),
+    /** Chunking policy version in effect (e.g. "chunk-v1"). */
+    chunkPolicyVersion: varchar("chunk_policy_version", { length: 64 }),
+    /** Total candidates evaluated before budget filtering. */
+    candidateCount: integer("candidate_count"),
+    /** Ordered chunk IDs selected for the prompt (identifiers only). */
+    selectedChunkIds: text("selected_chunk_ids").array(),
+    /**
+     * Score summaries for selected chunks.
+     * Contains {chunkId, assetId, score, evidenceTier, verificationState} — no content.
+     */
+    scoreSummaries: jsonb("score_summaries").$type<ChunkScoreSummary[]>(),
+    /** Evidence tiers represented in selected chunks. */
+    evidenceTiersUsed: text("evidence_tiers_used").array(),
+    /** Verification states represented in selected chunks. */
+    verificationStatesUsed: text("verification_states_used").array(),
+    /** Number of candidate chunks not included because they exceeded the context budget. */
+    omittedDueToBudget: integer("omitted_due_to_budget"),
+    /** Estimated total characters of knowledge content sent in this request. */
+    contextCharEstimate: integer("context_char_estimate"),
 
     retrievedAt: timestamp("retrieved_at", { withTimezone: true }).notNull().defaultNow(),
   },
