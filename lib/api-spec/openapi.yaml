@@ -347,6 +347,240 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/LogoutSuccess'
+  /conversations:
+    get:
+      tags: [Conversations]
+      operationId: listConversations
+      summary: List recent active conversations for the authenticated user's organisation
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: Conversation list returned.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConversationListEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthorised'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+    post:
+      tags: [Conversations]
+      operationId: createConversation
+      summary: Create a new conversation
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateConversationRequest'
+      responses:
+        '201':
+          description: Conversation created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConversationEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorised'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /conversations/{id}:
+    parameters:
+      - $ref: '#/components/parameters/EntityId'
+    get:
+      tags: [Conversations]
+      operationId: getConversation
+      summary: Get a single conversation
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: Conversation found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConversationEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthorised'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    patch:
+      tags: [Conversations]
+      operationId: updateConversation
+      summary: Update a conversation title
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateConversationRequest'
+      responses:
+        '200':
+          description: Conversation updated.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConversationEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorised'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /conversations/{id}/archive:
+    post:
+      tags: [Conversations]
+      operationId: archiveConversation
+      summary: Archive a conversation
+      security:
+        - sessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/EntityId'
+      responses:
+        '200':
+          description: Conversation archived.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ArchiveResult'
+        '401':
+          $ref: '#/components/responses/Unauthorised'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /conversations/{id}/opportunity:
+    put:
+      tags: [Conversations]
+      operationId: linkConversationOpportunity
+      summary: Link or unlink an opportunity from a conversation
+      security:
+        - sessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/EntityId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LinkOpportunityRequest'
+      responses:
+        '200':
+          description: Opportunity linked or unlinked.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConversationEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorised'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /conversations/{id}/lens:
+    put:
+      tags: [Conversations]
+      operationId: changeConversationLens
+      summary: Change the active lens for a conversation
+      security:
+        - sessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/EntityId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChangeLensRequest'
+      responses:
+        '200':
+          description: Lens changed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConversationEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorised'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /conversations/{id}/messages:
+    get:
+      tags: [Conversations]
+      operationId: listMessages
+      summary: List messages in a conversation
+      security:
+        - sessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/EntityId'
+      responses:
+        '200':
+          description: Message list returned.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageListEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthorised'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    post:
+      tags: [Conversations]
+      operationId: sendMessage
+      summary: Send a user message and stream the assistant response as SSE
+      description: >
+        Persists the user message immediately, then streams the assistant response
+        as Server-Sent Events. The client should read the response body as a stream.
+
+        SSE event shapes:
+          - `{"pending":true,"messageId":"<id>"}` — assistant message created
+          - `{"delta":"<text>"}` — streaming text chunk
+          - `{"done":true,"messageId":"<id>"}` — generation complete
+          - `{"error":"<message>","messageId":"<id>"}` — generation failed
+      security:
+        - sessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/EntityId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SendMessageRequest'
+      responses:
+        '200':
+          description: SSE stream of assistant response chunks.
+          content:
+            text/event-stream:
+              schema:
+                type: string
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorised'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
 components:
   parameters:
     AuthorizationSessionHeader:
@@ -573,6 +807,149 @@ components:
           format: date-time
           nullable: true
           description: The server's current updatedAt — client should reload before retrying.
+    ConversationLens:
+      type: string
+      enum: [analyst, intelligence, commercial, delivery]
+      description: >
+        Active reasoning lens for the conversation.
+        analyst — risk analysis and control frameworks (default).
+        intelligence — market and competitive research.
+        commercial — commercial strategy and deal terms.
+        delivery — implementation and project execution.
+    ConversationType:
+      type: string
+      enum: [general, opportunity, research, delivery, rfp, presentation, document]
+      description: Classification of the conversation's primary purpose.
+    ConversationView:
+      type: object
+      required: [id, organisation_id, created_by_user_id, owner_user_id, title, status, conversation_type, active_lens, sensitivity, created_at, updated_at]
+      properties:
+        id:
+          type: string
+        organisation_id:
+          type: string
+        created_by_user_id:
+          type: [string, 'null']
+        owner_user_id:
+          type: [string, 'null']
+        opportunity_id:
+          type: [string, 'null']
+        title:
+          type: string
+        status:
+          type: string
+          enum: [active, archived]
+        conversation_type:
+          $ref: '#/components/schemas/ConversationType'
+        active_lens:
+          $ref: '#/components/schemas/ConversationLens'
+        sensitivity:
+          type: string
+        last_message_at:
+          type: [string, 'null']
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        archived_at:
+          type: [string, 'null']
+          format: date-time
+    ConversationEnvelope:
+      type: object
+      required: [conversation]
+      properties:
+        conversation:
+          $ref: '#/components/schemas/ConversationView'
+    ConversationListEnvelope:
+      type: object
+      required: [conversations]
+      properties:
+        conversations:
+          type: array
+          items:
+            $ref: '#/components/schemas/ConversationView'
+    MessageView:
+      type: object
+      required: [id, conversation_id, organisation_id, role, content, content_type, status, created_at, updated_at]
+      properties:
+        id:
+          type: string
+        conversation_id:
+          type: string
+        organisation_id:
+          type: string
+        created_by_user_id:
+          type: [string, 'null']
+        role:
+          type: string
+          enum: [user, assistant, system, tool]
+        content:
+          type: string
+        content_type:
+          type: string
+        model:
+          type: [string, 'null']
+        active_lens:
+          type: [string, 'null']
+        status:
+          type: string
+          enum: [pending, streaming, complete, failed]
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    MessageListEnvelope:
+      type: object
+      required: [messages]
+      properties:
+        messages:
+          type: array
+          items:
+            $ref: '#/components/schemas/MessageView'
+    CreateConversationRequest:
+      type: object
+      properties:
+        title:
+          type: string
+          minLength: 1
+        conversationType:
+          $ref: '#/components/schemas/ConversationType'
+        activeLens:
+          $ref: '#/components/schemas/ConversationLens'
+        opportunityId:
+          type: string
+    UpdateConversationRequest:
+      type: object
+      required: [title]
+      properties:
+        title:
+          type: string
+          minLength: 1
+    LinkOpportunityRequest:
+      type: object
+      required: [opportunityId]
+      properties:
+        opportunityId:
+          type: [string, 'null']
+          description: UUID of the opportunity to link, or null to unlink.
+    ChangeLensRequest:
+      type: object
+      required: [lens]
+      properties:
+        lens:
+          $ref: '#/components/schemas/ConversationLens'
+    SendMessageRequest:
+      type: object
+      required: [content]
+      properties:
+        content:
+          type: string
+          minLength: 1
   responses:
     Unauthorised:
       description: Not authenticated.

@@ -1,5 +1,6 @@
 import React from 'react'
-import RaiDashboard from './components/RaiDashboard'
+import WorkspaceHome from './components/WorkspaceHome'
+import ConversationView from './components/ConversationView'
 // @ts-ignore — plain JS modules; TS checks skipped
 import LogicGateModule from './modules/logicgate/LogicGateModule'
 // @ts-ignore
@@ -9,6 +10,13 @@ import DevelopmentModule from './modules/development/DevelopmentModule'
 import { useAuth } from '@workspace/replit-auth-web'
 
 type ModuleId = string | null
+
+interface ConversationRef {
+  id: string
+  title: string
+  activeLens?: string | null
+  [key: string]: unknown
+}
 
 const NAVY = '#0B1F3A'
 
@@ -132,6 +140,7 @@ function SignInScreen({ onLogin }: { onLogin: () => void }) {
 export default function App() {
   const { user, isLoading, isAuthenticated, isAdmin, login, logout } = useAuth()
   const [activeModule, setActiveModule] = React.useState<ModuleId>(null)
+  const [activeConversation, setActiveConversation] = React.useState<ConversationRef | null>(null)
 
   if (isLoading) return <LoadingScreen />
   if (!isAuthenticated) return <SignInScreen onLogin={login} />
@@ -141,12 +150,18 @@ export default function App() {
 
   const displayName = [user?.firstName, user?.lastName].filter(Boolean).join(' ') || user?.email || 'You'
 
+  // ── Module view ───────────────────────────────────────────────────────────
   if (activeModule) {
+    const goHome = () => {
+      setActiveModule(null)
+      setActiveConversation(null)
+    }
+
     return (
       <div>
         {activeModule !== 'rfp' && (
           <div style={backBarStyle}>
-            <button style={backButtonStyle} onClick={() => setActiveModule(null)}>
+            <button style={backButtonStyle} onClick={goHome}>
               ← RAI Home
             </button>
             <span style={{ opacity: 0.55 }}>
@@ -162,19 +177,31 @@ export default function App() {
             </button>
           </div>
         )}
-        {activeModule === 'rfp' && <RFPModule onBack={() => setActiveModule(null)} />}
+        {activeModule === 'rfp' && <RFPModule onBack={goHome} />}
         {activeModule === 'logicgate' && <LogicGateModule />}
         {showDevelopment && <DevelopmentModule />}
       </div>
     )
   }
 
+  // ── Conversation view ─────────────────────────────────────────────────────
+  if (activeConversation) {
+    return (
+      <ConversationView
+        conversationId={activeConversation.id}
+        onBack={() => setActiveConversation(null)}
+      />
+    )
+  }
+
+  // ── Workspace home (default) ──────────────────────────────────────────────
   return (
-    <RaiDashboard
-      onSelectModule={setActiveModule}
+    <WorkspaceHome
       user={user}
       isAdmin={isAdmin}
       onLogout={logout}
+      onSelectModule={setActiveModule}
+      onOpenConversation={(conv: ConversationRef) => setActiveConversation(conv)}
     />
   )
 }

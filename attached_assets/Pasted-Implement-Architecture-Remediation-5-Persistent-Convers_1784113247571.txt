@@ -1,0 +1,526 @@
+Implement Architecture Remediation #5:
+
+Persistent Conversations and Workspace Foundation
+
+Objective
+
+Create the persistent conversation and workspace foundation for RRAI.
+
+The platform currently has authenticated users, organisation-scoped opportunities and durable working state, but it still behaves primarily as a collection of modules.
+
+This remediation must introduce:
+
+* Persistent conversations
+* Persistent messages
+* Conversation ownership and organisation scoping
+* Opportunity-linked conversation context
+* A basic RRAI conversation interface
+* A workspace home showing recent work and active opportunities
+
+The goal is not to build the complete future RRAI experience. The goal is to create the minimum durable platform foundation required for a continuous assistant.
+
+First: inspect the current implementation
+
+Before changing code, inspect:
+
+* The Phase 2 database specification
+* Existing organisations, org_memberships, users, opportunities and audit tables
+* Existing frontend routing and dashboard
+* Existing module configuration
+* Any current chat, message, transcript or conversation components
+* Existing Anthropic request helpers
+* Any SSE streaming implementation in the RFP capability
+* Current authentication hooks
+* Current organisation resolution
+* Current opportunity selection and working-state logic
+* Existing OpenAPI generation and React Query client patterns
+* The Master Context and Platform Architecture requirements for conversations, memory, lenses and approvals
+
+Do not recreate structures that already exist.
+
+1. Database model
+
+Add persistent conversation tables using Drizzle.
+
+Conversations
+
+At minimum:
+
+* id
+* organisationId
+* createdByUserId
+* ownerUserId
+* opportunityId, nullable
+* title
+* status
+* conversationType
+* activeLens
+* sensitivity
+* metadata as JSONB
+* lastMessageAt
+* createdAt
+* updatedAt
+* archivedAt
+
+Initial conversation types may include:
+
+* general
+* opportunity
+* research
+* delivery
+* rfp
+* presentation
+* document
+
+Do not hardcode these throughout the application. Use a central typed definition.
+
+Messages
+
+At minimum:
+
+* id
+* conversationId
+* organisationId
+* createdByUserId, nullable for assistant/system messages
+* role
+* content
+* contentType
+* model
+* status
+* metadata as JSONB
+* createdAt
+* updatedAt
+
+Supported roles should include:
+
+* user
+* assistant
+* system
+* tool
+
+Supported statuses should include:
+
+* pending
+* streaming
+* complete
+* failed
+
+Conversation events
+
+Use the existing audit architecture where possible.
+
+Record:
+
+* Conversation created
+* Conversation renamed
+* Conversation archived
+* Message created
+* Assistant response completed
+* Assistant response failed
+* Opportunity linked or unlinked
+* Lens changed
+
+Do not create a competing audit system.
+
+2. Repository and service layer
+
+Create repositories and services in the existing server structure.
+
+For example:
+
+artifacts/api-server/src/repositories/
+  conversations-repository.ts
+  messages-repository.ts
+artifacts/api-server/src/services/
+  conversations-service.ts
+  assistant-service.ts
+
+Equivalent naming is acceptable if consistent.
+
+Routes must not directly manipulate database tables for business operations.
+
+The service layer must enforce:
+
+* Authenticated identity
+* Organisation membership
+* Conversation ownership or permitted access
+* Opportunity access before linking
+* Server-derived actor attribution
+* Valid conversation status transitions
+
+3. Conversation API
+
+Create authenticated endpoints for:
+
+Conversations
+
+* List authorised conversations
+* Create a conversation
+* Read a conversation
+* Update title or metadata
+* Archive a conversation
+* Link or unlink an authorised opportunity
+
+Messages
+
+* List messages in a conversation
+* Add a user message
+* Generate an assistant response
+* Retry a failed assistant response where appropriate
+
+Prefer one endpoint that accepts a user message and streams the assistant response while persisting both.
+
+For example:
+
+POST /api/conversations/:id/messages
+
+The final API design may differ if repository conventions justify it.
+
+4. Streaming and persistence
+
+Use SSE or the repository’s existing reliable streaming approach.
+
+The correct sequence should be:
+
+1. Validate user and conversation access.
+2. Persist the user message.
+3. Create a pending assistant message.
+4. Begin model response.
+5. Stream partial content to the browser.
+6. Persist assistant content safely as it is produced or at controlled checkpoints.
+7. Mark the assistant message complete when finished.
+8. Mark it failed with safe error metadata when generation fails.
+
+A page refresh during or after generation must not erase completed messages.
+
+Do not rely on browser state as the conversation record.
+
+Do not expose raw provider errors or secrets to the frontend.
+
+5. Prompt assembly
+
+For this remediation, implement a minimal governed prompt assembly process.
+
+The assistant request may use:
+
+* RRAI system prompt
+* Authenticated user context
+* Organisation context
+* Active conversation lens
+* Linked opportunity summary
+* Recent conversation messages
+* Governed Risk Rising and LogicGate knowledge where relevant
+
+Do not yet implement full RAG, vector retrieval or one-way-valve enforcement.
+
+However:
+
+* Do not hardcode long operational knowledge in route files.
+* Use existing governed knowledge loaders.
+* Keep prompt assembly in a dedicated service or utility.
+* Preserve clear boundaries so later lens routing and retrieval can replace the initial implementation.
+
+6. Context-window management
+
+Do not send unlimited conversation history to the model.
+
+Implement a simple, deterministic strategy such as:
+
+* Recent message window by token or character budget
+* Always include the current user message
+* Include the system prompt
+* Include linked opportunity summary where relevant
+* Exclude archived or failed content where appropriate
+
+Document the initial strategy.
+
+Do not implement automatic summarisation unless needed to stay within a safe context budget.
+
+Design the schema so future conversation summaries can be added without destructive changes.
+
+7. Active lens field
+
+Conversations must carry an activeLens value, but this remediation does not implement full lens routing.
+
+Support the current constitutional lens names:
+
+* analyst
+* intelligence
+* commercial
+* delivery
+
+The frontend must visibly show the active lens.
+
+The user may change it only through a validated server request.
+
+The server must persist the selection.
+
+For now, the selected lens may influence the system instruction and tone only.
+
+Do not claim that one-way-valve or sensitivity enforcement is complete.
+
+8. Workspace home
+
+Replace the current module-only landing experience with a basic workspace home.
+
+The workspace should include:
+
+Continue working
+
+Show recent conversations with:
+
+* Title
+* Active lens
+* Linked opportunity, where present
+* Last activity time
+* Conversation type
+
+Active opportunities
+
+Show recent authorised opportunities with:
+
+* Name
+* Customer
+* Stage
+* Last updated
+* Action to open the opportunity
+
+Start something new
+
+Provide clear actions such as:
+
+* Start a conversation
+* Create an opportunity
+* Open RFP/RFI Workbench
+* Open LogicGate Specialist
+
+Do not remove the existing modules.
+
+The workspace should become the default home, with modules available as tools within the platform.
+
+User context
+
+Show:
+
+* Signed-in user
+* Organisation
+* Logout
+* Admin access where permitted
+
+Do not expose internal IDs.
+
+9. Conversation interface
+
+Create a clean initial conversation UI with:
+
+* Conversation title
+* Visible active lens
+* Opportunity link, if applicable
+* Scrollable message history
+* User and assistant message distinction
+* Text input
+* Send action
+* Streaming response state
+* Retry or error state
+* Empty state for new conversations
+* Clear indication when content is still generating
+
+The UI should match the existing RRAI visual language.
+
+Do not overbuild:
+
+* Rich text editing
+* Attachments
+* Voice
+* Multi-agent orchestration
+* Tool panels
+* Branching conversations
+
+Those can follow later.
+
+10. Opportunity linkage
+
+A conversation may be linked to an existing authorised opportunity.
+
+When linked:
+
+* The opportunity name must be visible.
+* The server may include a concise opportunity summary in prompt assembly.
+* The conversation must not gain access to opportunities outside the user’s organisation.
+* Changing the linked opportunity must be audited.
+* Linking must not duplicate opportunity working state into the conversation record.
+
+11. Access control
+
+Enforce server-side:
+
+* Users only see conversations in authorised organisations.
+* Users cannot read or write another organisation’s messages.
+* Client-supplied user IDs are ignored.
+* Client-supplied organisation IDs do not bypass membership checks.
+* Opportunity linking requires access to that opportunity.
+* Admin status does not automatically grant cross-organisation access unless explicitly designed.
+
+Return consistent:
+
+* 401 unauthenticated
+* 403 authenticated but not authorised
+* 404 inaccessible or missing record where appropriate
+
+12. OpenAPI and generated clients
+
+Update the OpenAPI specification for all conversation and message endpoints.
+
+Include:
+
+* Conversation schemas
+* Message schemas
+* Streaming endpoint documentation
+* Lens values
+* Conversation type values
+* Error responses
+* Authentication requirements
+
+Regenerate:
+
+* Zod schemas
+* React client code
+
+Use generated schemas and client code where practical.
+
+13. Tests
+
+Add automated tests covering:
+
+Persistence
+
+* Create a conversation
+* Persist a user message
+* Persist an assistant message
+* Reload message history
+* Archive a conversation
+* Link an opportunity
+* Conversation survives service or server restart simulation
+
+Access control
+
+* Unauthenticated access returns 401
+* User cannot read another organisation’s conversation
+* User cannot write to another organisation’s conversation
+* User cannot link an unauthorised opportunity
+* Client-supplied identity does not override the authenticated actor
+
+Streaming
+
+* User message is persisted before generation begins
+* Assistant message moves through pending/streaming/complete
+* Failed generation marks the message failed
+* Completed content remains after reconnect
+* Duplicate submission is prevented where practical
+
+Frontend
+
+* Recent conversations render
+* New conversation can be created
+* Message history loads
+* Streaming state displays
+* Failed response displays
+* Active lens displays and persists
+* Linked opportunity displays
+* Workspace opens as the default authenticated home
+
+14. Audit
+
+Use the persistent audit table to record the key conversation and message events.
+
+Do not log complete message content in audit events.
+
+Audit metadata may include:
+
+* Conversation ID
+* Message ID
+* Event type
+* Lens
+* Opportunity ID
+* Model
+* Completion or failure status
+
+15. Boundaries
+
+Do not implement in this remediation:
+
+* Full RAG
+* Vector search
+* One-way-valve enforcement
+* Sensitivity-filtered retrieval
+* Learning loop
+* Knowledge promotion workflow
+* Attachment upload
+* Document object storage
+* Presentation generation
+* Email sending
+* Full approval workflow
+* Major LogicGate component decomposition
+* Removal of existing specialist modules
+
+Do not change current LogicGate or RFP behaviour except to integrate links into the workspace where appropriate.
+
+16. Validation
+
+Run:
+
+* Database migration
+* OpenAPI codegen
+* Full TypeScript typecheck
+* Existing tests
+* New conversation tests
+* Frontend typecheck
+* API build
+* Frontend build
+* Full application startup
+
+Manually verify:
+
+1. Sign in.
+2. Create a new conversation.
+3. Send a message.
+4. Observe the streamed response.
+5. Refresh the page.
+6. Confirm the entire conversation remains.
+7. Link an opportunity.
+8. Confirm the assistant receives the concise opportunity context.
+9. Switch the active lens.
+10. Confirm the lens persists after refresh.
+11. Sign in from another browser.
+12. Confirm authorised recent conversations appear.
+13. Confirm an unauthorised account cannot access them.
+14. Archive a conversation.
+15. Confirm it no longer appears in the default recent list.
+16. Confirm the existing LogicGate and RFP tools still work.
+
+Delivery report
+
+Perform the implementation rather than only producing a plan.
+
+Then report:
+
+* Tables and migrations added
+* Repository and service files added
+* Routes added
+* Prompt assembly approach
+* Streaming persistence approach
+* Context-window strategy
+* Active lens handling
+* Workspace changes
+* Conversation UI changes
+* Opportunity linking
+* OpenAPI changes
+* Audit events added
+* Tests added
+* Final typecheck result
+* Final test result
+* Final build result
+* Manual persistence and cross-browser result
+* Known limitations
+* Recommended next remediation
+* Branch name and commit reference

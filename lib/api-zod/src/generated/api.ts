@@ -259,3 +259,223 @@ export const LogoutMobileSessionResponse = zod.object({
 })
 
 
+/**
+ * @summary List recent active conversations for the authenticated user's organisation
+ */
+export const ListConversationsResponse = zod.object({
+  "conversations": zod.array(zod.object({
+  "id": zod.string(),
+  "organisation_id": zod.string(),
+  "created_by_user_id": zod.string().nullable(),
+  "owner_user_id": zod.string().nullable(),
+  "opportunity_id": zod.string().nullish(),
+  "title": zod.string(),
+  "status": zod.enum(['active', 'archived']),
+  "conversation_type": zod.enum(['general', 'opportunity', 'research', 'delivery', 'rfp', 'presentation', 'document']).describe('Classification of the conversation\'s primary purpose.'),
+  "active_lens": zod.enum(['analyst', 'intelligence', 'commercial', 'delivery']).describe('Active reasoning lens for the conversation. analyst — risk analysis and control frameworks (default). intelligence — market and competitive research. commercial — commercial strategy and deal terms. delivery — implementation and project execution.\n'),
+  "sensitivity": zod.string(),
+  "last_message_at": zod.coerce.date().nullish(),
+  "created_at": zod.coerce.date(),
+  "updated_at": zod.coerce.date(),
+  "archived_at": zod.coerce.date().nullish()
+}))
+})
+
+
+/**
+ * @summary Create a new conversation
+ */
+
+
+
+export const CreateConversationBody = zod.object({
+  "title": zod.string().min(1).optional(),
+  "conversationType": zod.enum(['general', 'opportunity', 'research', 'delivery', 'rfp', 'presentation', 'document']).optional().describe('Classification of the conversation\'s primary purpose.'),
+  "activeLens": zod.enum(['analyst', 'intelligence', 'commercial', 'delivery']).optional().describe('Active reasoning lens for the conversation. analyst — risk analysis and control frameworks (default). intelligence — market and competitive research. commercial — commercial strategy and deal terms. delivery — implementation and project execution.\n'),
+  "opportunityId": zod.string().optional()
+})
+
+
+/**
+ * @summary Get a single conversation
+ */
+export const GetConversationParams = zod.object({
+  "id": zod.coerce.string()
+})
+
+export const GetConversationResponse = zod.object({
+  "conversation": zod.object({
+  "id": zod.string(),
+  "organisation_id": zod.string(),
+  "created_by_user_id": zod.string().nullable(),
+  "owner_user_id": zod.string().nullable(),
+  "opportunity_id": zod.string().nullish(),
+  "title": zod.string(),
+  "status": zod.enum(['active', 'archived']),
+  "conversation_type": zod.enum(['general', 'opportunity', 'research', 'delivery', 'rfp', 'presentation', 'document']).describe('Classification of the conversation\'s primary purpose.'),
+  "active_lens": zod.enum(['analyst', 'intelligence', 'commercial', 'delivery']).describe('Active reasoning lens for the conversation. analyst — risk analysis and control frameworks (default). intelligence — market and competitive research. commercial — commercial strategy and deal terms. delivery — implementation and project execution.\n'),
+  "sensitivity": zod.string(),
+  "last_message_at": zod.coerce.date().nullish(),
+  "created_at": zod.coerce.date(),
+  "updated_at": zod.coerce.date(),
+  "archived_at": zod.coerce.date().nullish()
+})
+})
+
+
+/**
+ * @summary Update a conversation title
+ */
+export const UpdateConversationParams = zod.object({
+  "id": zod.coerce.string()
+})
+
+
+
+
+export const UpdateConversationBody = zod.object({
+  "title": zod.string().min(1)
+})
+
+export const UpdateConversationResponse = zod.object({
+  "conversation": zod.object({
+  "id": zod.string(),
+  "organisation_id": zod.string(),
+  "created_by_user_id": zod.string().nullable(),
+  "owner_user_id": zod.string().nullable(),
+  "opportunity_id": zod.string().nullish(),
+  "title": zod.string(),
+  "status": zod.enum(['active', 'archived']),
+  "conversation_type": zod.enum(['general', 'opportunity', 'research', 'delivery', 'rfp', 'presentation', 'document']).describe('Classification of the conversation\'s primary purpose.'),
+  "active_lens": zod.enum(['analyst', 'intelligence', 'commercial', 'delivery']).describe('Active reasoning lens for the conversation. analyst — risk analysis and control frameworks (default). intelligence — market and competitive research. commercial — commercial strategy and deal terms. delivery — implementation and project execution.\n'),
+  "sensitivity": zod.string(),
+  "last_message_at": zod.coerce.date().nullish(),
+  "created_at": zod.coerce.date(),
+  "updated_at": zod.coerce.date(),
+  "archived_at": zod.coerce.date().nullish()
+})
+})
+
+
+/**
+ * @summary Archive a conversation
+ */
+export const ArchiveConversationParams = zod.object({
+  "id": zod.coerce.string()
+})
+
+export const ArchiveConversationResponse = zod.object({
+  "archived": zod.boolean(),
+  "id": zod.string()
+})
+
+
+/**
+ * @summary Link or unlink an opportunity from a conversation
+ */
+export const LinkConversationOpportunityParams = zod.object({
+  "id": zod.coerce.string()
+})
+
+export const LinkConversationOpportunityBody = zod.object({
+  "opportunityId": zod.string().nullable().describe('UUID of the opportunity to link, or null to unlink.')
+})
+
+export const LinkConversationOpportunityResponse = zod.object({
+  "conversation": zod.object({
+  "id": zod.string(),
+  "organisation_id": zod.string(),
+  "created_by_user_id": zod.string().nullable(),
+  "owner_user_id": zod.string().nullable(),
+  "opportunity_id": zod.string().nullish(),
+  "title": zod.string(),
+  "status": zod.enum(['active', 'archived']),
+  "conversation_type": zod.enum(['general', 'opportunity', 'research', 'delivery', 'rfp', 'presentation', 'document']).describe('Classification of the conversation\'s primary purpose.'),
+  "active_lens": zod.enum(['analyst', 'intelligence', 'commercial', 'delivery']).describe('Active reasoning lens for the conversation. analyst — risk analysis and control frameworks (default). intelligence — market and competitive research. commercial — commercial strategy and deal terms. delivery — implementation and project execution.\n'),
+  "sensitivity": zod.string(),
+  "last_message_at": zod.coerce.date().nullish(),
+  "created_at": zod.coerce.date(),
+  "updated_at": zod.coerce.date(),
+  "archived_at": zod.coerce.date().nullish()
+})
+})
+
+
+/**
+ * @summary Change the active lens for a conversation
+ */
+export const ChangeConversationLensParams = zod.object({
+  "id": zod.coerce.string()
+})
+
+export const ChangeConversationLensBody = zod.object({
+  "lens": zod.enum(['analyst', 'intelligence', 'commercial', 'delivery']).describe('Active reasoning lens for the conversation. analyst — risk analysis and control frameworks (default). intelligence — market and competitive research. commercial — commercial strategy and deal terms. delivery — implementation and project execution.\n')
+})
+
+export const ChangeConversationLensResponse = zod.object({
+  "conversation": zod.object({
+  "id": zod.string(),
+  "organisation_id": zod.string(),
+  "created_by_user_id": zod.string().nullable(),
+  "owner_user_id": zod.string().nullable(),
+  "opportunity_id": zod.string().nullish(),
+  "title": zod.string(),
+  "status": zod.enum(['active', 'archived']),
+  "conversation_type": zod.enum(['general', 'opportunity', 'research', 'delivery', 'rfp', 'presentation', 'document']).describe('Classification of the conversation\'s primary purpose.'),
+  "active_lens": zod.enum(['analyst', 'intelligence', 'commercial', 'delivery']).describe('Active reasoning lens for the conversation. analyst — risk analysis and control frameworks (default). intelligence — market and competitive research. commercial — commercial strategy and deal terms. delivery — implementation and project execution.\n'),
+  "sensitivity": zod.string(),
+  "last_message_at": zod.coerce.date().nullish(),
+  "created_at": zod.coerce.date(),
+  "updated_at": zod.coerce.date(),
+  "archived_at": zod.coerce.date().nullish()
+})
+})
+
+
+/**
+ * @summary List messages in a conversation
+ */
+export const ListMessagesParams = zod.object({
+  "id": zod.coerce.string()
+})
+
+export const ListMessagesResponse = zod.object({
+  "messages": zod.array(zod.object({
+  "id": zod.string(),
+  "conversation_id": zod.string(),
+  "organisation_id": zod.string(),
+  "created_by_user_id": zod.string().nullish(),
+  "role": zod.enum(['user', 'assistant', 'system', 'tool']),
+  "content": zod.string(),
+  "content_type": zod.string(),
+  "model": zod.string().nullish(),
+  "active_lens": zod.string().nullish(),
+  "status": zod.enum(['pending', 'streaming', 'complete', 'failed']),
+  "created_at": zod.coerce.date(),
+  "updated_at": zod.coerce.date()
+}))
+})
+
+
+/**
+ * Persists the user message immediately, then streams the assistant response as Server-Sent Events. The client should read the response body as a stream.
+SSE event shapes:
+  - `{"pending":true,"messageId":"<id>"}` — assistant message created
+  - `{"delta":"<text>"}` — streaming text chunk
+  - `{"done":true,"messageId":"<id>"}` — generation complete
+  - `{"error":"<message>","messageId":"<id>"}` — generation failed
+
+ * @summary Send a user message and stream the assistant response as SSE
+ */
+export const SendMessageParams = zod.object({
+  "id": zod.coerce.string()
+})
+
+
+
+
+export const SendMessageBody = zod.object({
+  "content": zod.string().min(1)
+})
+
+

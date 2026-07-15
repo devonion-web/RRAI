@@ -144,6 +144,146 @@ export interface WorkingStateConflict {
 }
 
 /**
+ * Active reasoning lens for the conversation. analyst — risk analysis and control frameworks (default). intelligence — market and competitive research. commercial — commercial strategy and deal terms. delivery — implementation and project execution.
+
+ */
+export type ConversationLens = typeof ConversationLens[keyof typeof ConversationLens];
+
+
+export const ConversationLens = {
+  analyst: 'analyst',
+  intelligence: 'intelligence',
+  commercial: 'commercial',
+  delivery: 'delivery',
+} as const;
+
+/**
+ * Classification of the conversation's primary purpose.
+ */
+export type ConversationType = typeof ConversationType[keyof typeof ConversationType];
+
+
+export const ConversationType = {
+  general: 'general',
+  opportunity: 'opportunity',
+  research: 'research',
+  delivery: 'delivery',
+  rfp: 'rfp',
+  presentation: 'presentation',
+  document: 'document',
+} as const;
+
+export type ConversationViewStatus = typeof ConversationViewStatus[keyof typeof ConversationViewStatus];
+
+
+export const ConversationViewStatus = {
+  active: 'active',
+  archived: 'archived',
+} as const;
+
+export interface ConversationView {
+  id: string;
+  organisation_id: string;
+  /** @nullable */
+  created_by_user_id: string | null;
+  /** @nullable */
+  owner_user_id: string | null;
+  /** @nullable */
+  opportunity_id?: string | null;
+  title: string;
+  status: ConversationViewStatus;
+  conversation_type: ConversationType;
+  active_lens: ConversationLens;
+  sensitivity: string;
+  /** @nullable */
+  last_message_at?: string | null;
+  created_at: string;
+  updated_at: string;
+  /** @nullable */
+  archived_at?: string | null;
+}
+
+export interface ConversationEnvelope {
+  conversation: ConversationView;
+}
+
+export interface ConversationListEnvelope {
+  conversations: ConversationView[];
+}
+
+export type MessageViewRole = typeof MessageViewRole[keyof typeof MessageViewRole];
+
+
+export const MessageViewRole = {
+  user: 'user',
+  assistant: 'assistant',
+  system: 'system',
+  tool: 'tool',
+} as const;
+
+export type MessageViewStatus = typeof MessageViewStatus[keyof typeof MessageViewStatus];
+
+
+export const MessageViewStatus = {
+  pending: 'pending',
+  streaming: 'streaming',
+  complete: 'complete',
+  failed: 'failed',
+} as const;
+
+export interface MessageView {
+  id: string;
+  conversation_id: string;
+  organisation_id: string;
+  /** @nullable */
+  created_by_user_id?: string | null;
+  role: MessageViewRole;
+  content: string;
+  content_type: string;
+  /** @nullable */
+  model?: string | null;
+  /** @nullable */
+  active_lens?: string | null;
+  status: MessageViewStatus;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface MessageListEnvelope {
+  messages: MessageView[];
+}
+
+export interface CreateConversationRequest {
+  /** @minLength 1 */
+  title?: string;
+  conversationType?: ConversationType;
+  activeLens?: ConversationLens;
+  opportunityId?: string;
+}
+
+export interface UpdateConversationRequest {
+  /** @minLength 1 */
+  title: string;
+}
+
+export interface LinkOpportunityRequest {
+  /**
+     * UUID of the opportunity to link, or null to unlink.
+     * @nullable
+     */
+  opportunityId: string | null;
+}
+
+export interface ChangeLensRequest {
+  lens: ConversationLens;
+}
+
+export interface SendMessageRequest {
+  /** @minLength 1 */
+  content: string;
+}
+
+/**
  * Not authenticated.
  */
 export type UnauthorisedResponse = ErrorEnvelope;

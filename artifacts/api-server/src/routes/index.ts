@@ -17,11 +17,13 @@ import authRouter from "./auth";
 import logicgateRouter from "./logicgate";
 import rfpRouter from "./rfp";
 import developmentRouter from "./development";
+import conversationsRouter from "./conversations";
 
 const router: IRouter = Router();
 
 router.use(healthRouter);
 router.use(authRouter);
+router.use(conversationsRouter);
 router.use(logicgateRouter);
 router.use(rfpRouter);
 router.use(developmentRouter);
