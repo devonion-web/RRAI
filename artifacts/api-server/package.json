@@ -10,7 +10,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "node --test src/lib/knowledge-loader.test.mjs",
     "test:integration": "node --test --import tsx/esm src/routes/logicgate.test.ts",
-    "evaluate:retrieval": "node --import tsx/esm src/scripts/evaluate-retrieval.ts"
+    "evaluate:retrieval": "node --import tsx/esm src/scripts/evaluate-retrieval.ts",
+    "run-reindex": "node --import tsx/esm src/scripts/run-reindex.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.100.1",

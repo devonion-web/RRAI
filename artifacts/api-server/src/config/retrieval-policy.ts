@@ -8,12 +8,21 @@
  * so that retrieval traces remain interpretable against the policy in force
  * at the time they were created.
  *
- * Policy version: retrieval-policy-v1.1
+ * Policy version: retrieval-policy-v1.2
+ * Changes from v1.1:
+ *  - FTS switched from AND (plainto_tsquery) to OR (lexeme union) with filler-word
+ *    stripping, improving recall for natural-language questions.
+ *  - FTS_RANK_MULTIPLIER: 2.0 added — amplifies FTS signal relative to fixed
+ *    metadata boosts so topic relevance dominates authority tier.
+ *  - EVIDENCE_TIER and VERIFICATION_STATE weights reduced ~5× to prevent
+ *    approved-tier assets from consistently outranking relevant draft content.
+ *  - Heading/tag boost maxima reduced proportionally.
+ *  - BCP expansion updated to include "management" (BCM content uses that term).
  */
 
 // ── Version ───────────────────────────────────────────────────────────────────
 
-export const RETRIEVAL_POLICY_VERSION = "retrieval-policy-v1.1";
+export const RETRIEVAL_POLICY_VERSION = "retrieval-policy-v1.2";
 
 // ── Score thresholds ──────────────────────────────────────────────────────────
 
@@ -130,7 +139,7 @@ export const DOMAIN_VOCABULARY: readonly VocabularyEntry[] = [
   { term: /\bCIS\b/,                   expansion: "center internet security controls",                 label: "CIS" },
   { term: /\bRTO\b/,                   expansion: "recovery time objective business continuity",       label: "RTO" },
   { term: /\bRPO\b/,                   expansion: "recovery point objective disaster recovery",        label: "RPO" },
-  { term: /\bBCP\b/,                   expansion: "business continuity plan planning",                 label: "BCP" },
+  { term: /\bBCP\b/,                   expansion: "business continuity plan planning management",      label: "BCP" },
   { term: /\bBCM\b/,                   expansion: "business continuity management resilience",         label: "BCM" },
   { term: /\bBIA\b/,                   expansion: "business impact analysis continuity",               label: "BIA" },
 
@@ -159,30 +168,46 @@ export const DOMAIN_VOCABULARY: readonly VocabularyEntry[] = [
 // ── Scoring weights ───────────────────────────────────────────────────────────
 //
 // Applied in hybrid scoring on top of FTS rank.
-// These values sum to ~1.0 maximum headroom above the base FTS score.
+//
+// Design principle (v1.2): FTS topic-relevance must dominate. The FTS score
+// (ts_rank, range 0–1) is multiplied by FTS_RANK_MULTIPLIER before combining
+// with fixed metadata boosts. Evidence-tier and verification-state weights are
+// kept small so that a relevance difference of ~0.05 ts_rank units always
+// outweighs the maximum authority-tier premium.
 
 export const SCORING_WEIGHTS = {
+  /**
+   * Multiplier applied to the raw ts_rank score before combining with boosts.
+   * Amplifies the FTS relevance signal so topic match dominates authority tier.
+   */
+  FTS_RANK_MULTIPLIER: 2.0,
   /** Maximum heading path match boost. */
-  HEADING_BOOST_MAX: 0.30,
+  HEADING_BOOST_MAX: 0.20,
   /** Per-term heading boost increment. */
-  HEADING_BOOST_PER_TERM: 0.10,
+  HEADING_BOOST_PER_TERM: 0.06,
   /** Maximum tag match boost. */
-  TAG_BOOST_MAX: 0.20,
+  TAG_BOOST_MAX: 0.12,
   /** Per-tag boost increment. */
-  TAG_BOOST_PER_TAG: 0.08,
-  /** Evidence tier weights. */
+  TAG_BOOST_PER_TAG: 0.04,
+  /**
+   * Evidence tier weights.
+   * Kept small (≤0.05) so that authority does not override topic relevance.
+   */
   EVIDENCE_TIER: {
-    governed: 0.25,
-    established: 0.20,
-    current: 0.10,
-    observed: 0.05,
+    governed: 0.05,
+    established: 0.04,
+    current: 0.02,
+    observed: 0.01,
     unverified: 0.00,
   } as Record<string, number>,
-  /** Verification state weights. */
+  /**
+   * Verification state weights.
+   * Kept small so draft domain content can still outrank approved general content.
+   */
   VERIFICATION_STATE: {
-    approved: 0.15,
-    draft: 0.05,
-    superseded: -0.10,
+    approved: 0.04,
+    draft: 0.01,
+    superseded: -0.05,
   } as Record<string, number>,
   /** Penalty for duplicate heading path already in result set. */
   DUPLICATE_HEADING_PENALTY: RETRIEVAL_THRESHOLDS.DUPLICATE_HEADING_PENALTY,

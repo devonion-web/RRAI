@@ -51,9 +51,9 @@ const SENSITIVITY_CEILINGS: Record<string, string> = {
 const ACCEPTANCE_GATES = {
   prohibitedPartitionViolations: 0,
   prohibitedAssetViolations:     0,
-  minRecallAt5:                  0.75,
-  minTopOneAccuracy:             0.60,
-  maxIrrelevantRate:             0.20,
+  minRecallAt5:                  0.85,
+  minTopOneAccuracy:             0.70,
+  maxIrrelevantRate:             0.10,
   maxP95LatencyMs:               1000,
 };
 

@@ -32,11 +32,12 @@
  * Retrieval policy version: retrieval-policy-v1.1
  */
 
-import { inArray, and, sql } from "drizzle-orm";
+import { inArray, and, sql, desc } from "drizzle-orm";
 import { db } from "@workspace/db";
 import { knowledgeChunksTable } from "@workspace/db/schema";
 import type { ManifestAsset } from "../lib/knowledge-manifest";
 import { CHUNK_POLICY_VERSION } from "./knowledge-chunking-service";
+import { logger } from "../lib/logger";
 import {
   RETRIEVAL_POLICY_VERSION,
   RETRIEVAL_THRESHOLDS,
@@ -48,6 +49,54 @@ import {
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 export const SEARCH_VERSION = "retrieval-v1";
+
+// ── Query preprocessing ───────────────────────────────────────────────────────
+//
+// Strips question-form filler words before FTS so that auxiliary verbs and
+// generic adjectives ("does", "work", "main") do not appear in the AND-query
+// and cause spurious noResult for natural language questions.
+// The preprocessed text is used only for plainto_tsquery / lexeme extraction;
+// the original enriched query is still used for heading/tag boosting.
+
+const QUERY_FILLER_WORDS = new Set([
+  // Question words
+  "what", "how", "why", "when", "where", "who", "which",
+  // Auxiliary / modal verbs
+  "does", "doing", "did", "was", "were", "been", "being",
+  "has", "have", "had", "will", "would", "could", "should",
+  "may", "might", "must", "can", "shall",
+  // Generic question-frame verbs
+  "mean", "means", "meant", "stand", "stands", "stood",
+  "work", "works", "worked",
+  "require", "requires", "required",
+  "affect", "affects", "affected",
+  "involve", "involves", "involved",
+  "contain", "contains", "contained",
+  "include", "includes", "included",
+  "provide", "provides", "provided",
+  "help", "helps", "helped",
+  "explain", "explains", "describe", "describes",
+  "define", "defines",
+  // Generic adjectives used in question framing
+  "main", "key", "typical", "common", "important",
+  "good", "best", "right", "real",
+]);
+
+/**
+ * Strip question-frame filler words from a query string so that the remaining
+ * terms are substantive content words suitable for FTS matching.
+ * Short words (< 3 chars) are also removed to avoid noisy single-char stems.
+ */
+function buildFtsText(query: string): string {
+  const tokens = query
+    .replace(/[^a-z0-9\s'-]/gi, " ")
+    .toLowerCase()
+    .split(/\s+/)
+    .filter((w) => w.length >= 3 && !QUERY_FILLER_WORDS.has(w));
+  // Deduplicate while preserving order
+  const seen = new Set<string>();
+  return tokens.filter((t) => seen.has(t) ? false : (seen.add(t), true)).join(" ");
+}
 
 // ── Sensitivity level ordering ────────────────────────────────────────────────
 
@@ -325,7 +374,7 @@ async function safeTagFallback(
       and(
         inArray(knowledgeChunksTable.assetId, permittedAssetIds),
         inArray(knowledgeChunksTable.partition, permittedPartitions),
-        sql`${knowledgeChunksTable.tags} && ${tagArray}`,
+        sql`${knowledgeChunksTable.tags} && ARRAY[${sql.join(tagArray.map((t) => sql`${t}`), sql`, `)}]::text[]`,
       ),
     )
     .limit(maxResults);
@@ -386,10 +435,12 @@ export async function searchKnowledge(input: SearchInput): Promise<SearchOutput>
   }
 
   // ── FTS search ─────────────────────────────────────────────────────────────
+  //
+  // Uses Drizzle's typed query builder with inArray() for array parameters —
+  // avoids the raw db.execute() + ANY($array) binding issue where JS arrays are
+  // not correctly serialised as PostgreSQL array types.
 
-  const tsQuery = enrichedQuery.replace(/'/g, "''");
-
-  let rows: Array<{
+  type ChunkRow = {
     id: string;
     assetId: string;
     chunkIndex: number;
@@ -402,40 +453,66 @@ export async function searchKnowledge(input: SearchInput): Promise<SearchOutput>
     evidenceTier: string;
     tags: string[];
     ftsRank: number;
-  }> = [];
+  };
 
+  let rows: ChunkRow[] = [];
   let usedTagFallback = false;
 
+  // Build the FTS query text: strip filler/question-frame words so that
+  // "How does business continuity management work?" reduces to
+  // "business continuity management" — avoiding spurious noResult cases
+  // where auxiliary verbs aren't in the knowledge content.
+  const ftsText = buildFtsText(enrichedQuery) || enrichedQuery;
+
+  // OR-based FTS using PostgreSQL lexeme union.
+  // Converts ftsText → tsvector → extracts unique lexemes → joins with ' | '
+  // → to_tsquery OR expression. This matches any chunk containing at least one
+  // query stem, with ts_rank weighting by how many stems matched.
+  // Handles ftsText with no tsvector lexemes (all stop words) by falling back
+  // to a tsquery that matches everything — the scoring threshold filters irrelevant.
+  const orTsquery = sql`(
+    SELECT COALESCE(
+      to_tsquery('english', string_agg(lexeme, ' | ')),
+      to_tsquery('english', 'content')
+    )
+    FROM unnest(to_tsvector('english', ${ftsText}))
+  )`;
+
+  const chunkTsvector = sql`to_tsvector('english', coalesce(${knowledgeChunksTable.headingPath}, '') || ' ' || ${knowledgeChunksTable.content})`;
+
+  // ts_rank expression — referenced in both SELECT and ORDER BY
+  const ftsRankExpr = sql<number>`ts_rank(${chunkTsvector}, ${orTsquery}, 32)`;
+
+  const ftsMatchExpr = sql`${chunkTsvector} @@ ${orTsquery}`;
+
   try {
-    rows = await db.execute(sql`
-      SELECT
-        id,
-        asset_id                AS "assetId",
-        chunk_index             AS "chunkIndex",
-        heading_path            AS "headingPath",
-        content,
-        token_estimate          AS "tokenEstimate",
-        partition,
-        sensitivity,
-        verification_state      AS "verificationState",
-        evidence_tier           AS "evidenceTier",
-        tags,
-        ts_rank(
-          to_tsvector('english', coalesce(heading_path, '') || ' ' || content),
-          plainto_tsquery('english', ${tsQuery}),
-          32
-        ) AS "ftsRank"
-      FROM knowledge_chunks
-      WHERE
-        asset_id = ANY(${permittedAssetIds})
-        AND partition = ANY(${permittedPartitions})
-        AND to_tsvector('english', coalesce(heading_path, '') || ' ' || content)
-            @@ plainto_tsquery('english', ${tsQuery})
-      ORDER BY "ftsRank" DESC
-      LIMIT ${RETRIEVAL_THRESHOLDS.MAX_CANDIDATES}
-    `) as unknown as typeof rows;
-  } catch {
-    // FTS index not ready — attempt safe tag fallback below
+    rows = await db
+      .select({
+        id: knowledgeChunksTable.id,
+        assetId: knowledgeChunksTable.assetId,
+        chunkIndex: knowledgeChunksTable.chunkIndex,
+        headingPath: knowledgeChunksTable.headingPath,
+        content: knowledgeChunksTable.content,
+        tokenEstimate: knowledgeChunksTable.tokenEstimate,
+        partition: knowledgeChunksTable.partition,
+        sensitivity: knowledgeChunksTable.sensitivity,
+        verificationState: knowledgeChunksTable.verificationState,
+        evidenceTier: knowledgeChunksTable.evidenceTier,
+        tags: knowledgeChunksTable.tags,
+        ftsRank: ftsRankExpr,
+      })
+      .from(knowledgeChunksTable)
+      .where(
+        and(
+          inArray(knowledgeChunksTable.assetId, permittedAssetIds),
+          inArray(knowledgeChunksTable.partition, permittedPartitions),
+          ftsMatchExpr,
+        ),
+      )
+      .orderBy(desc(ftsRankExpr))
+      .limit(RETRIEVAL_THRESHOLDS.MAX_CANDIDATES) as ChunkRow[];
+  } catch (err) {
+    logger.error({ err }, "knowledge-search-service: FTS query failed — attempting tag fallback");
   }
 
   // ── Safe tag-based fallback (not arbitrary high-authority chunks) ──────────
@@ -452,7 +529,8 @@ export async function searchKnowledge(input: SearchInput): Promise<SearchOutput>
         RETRIEVAL_THRESHOLDS.MAX_CANDIDATES,
       );
       usedTagFallback = rows.length > 0;
-    } catch {
+    } catch (err) {
+      logger.error({ err }, "knowledge-search-service: tag fallback failed");
       rows = [];
     }
   }
@@ -503,7 +581,9 @@ export async function searchKnowledge(input: SearchInput): Promise<SearchOutput>
     }
     seenHeadingPaths.add(r.headingPath);
 
-    const total = ftsRank + headingBoost + tagBoost + evidenceTierWeight + verificationWeight + duplicatePenalty;
+    // Apply FTS multiplier so topic relevance dominates authority tier boosts
+    const ftsRankScore = ftsRank * SCORING_WEIGHTS.FTS_RANK_MULTIPLIER;
+    const total = ftsRankScore + headingBoost + tagBoost + evidenceTierWeight + verificationWeight + duplicatePenalty;
 
     return {
       chunkId: r.id,
