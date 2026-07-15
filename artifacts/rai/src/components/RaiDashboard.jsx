@@ -1,17 +1,20 @@
 import React from 'react'
 import { MODULES } from '../config/modules.js'
-import { useIsAdmin } from '../config/access.js'
 
 const NAVY = '#0B1F3A'
 const NAVY_LIGHT = '#EAF1F8'
 const MUTED = '#64748b'
 const BORDER = '#e2e8f0'
 
-export default function RaiDashboard({ onSelectModule }) {
-  const isAdmin = useIsAdmin()
+export default function RaiDashboard({ onSelectModule, user, isAdmin, onLogout }) {
   // Admin-only modules are hidden from non-admins. Additive: existing modules
-  // have no `adminOnly` flag and are unaffected.
+  // have no `adminOnly` flag and are unaffected. Role is server-provided —
+  // the client cannot influence it.
   const visibleModules = MODULES.filter((mod) => !mod.adminOnly || isAdmin)
+
+  const displayName = user
+    ? [user.firstName, user.lastName].filter(Boolean).join(' ') || user.email || 'Signed in'
+    : null
 
   return (
     <div
@@ -68,6 +71,37 @@ export default function RaiDashboard({ onSelectModule }) {
         >
           Operating Platform
         </div>
+        {displayName && (
+          <>
+            <div
+              style={{
+                color: 'rgba(255,255,255,0.6)',
+                fontSize: 12,
+                fontWeight: 500,
+                marginLeft: 8,
+              }}
+            >
+              {displayName}
+            </div>
+            <button
+              onClick={onLogout}
+              style={{
+                background: 'rgba(255,255,255,0.1)',
+                border: '1px solid rgba(255,255,255,0.18)',
+                borderRadius: 6,
+                color: '#fff',
+                padding: '5px 12px',
+                fontSize: 12,
+                fontWeight: 600,
+                cursor: 'pointer',
+                fontFamily: 'inherit',
+                marginLeft: 4,
+              }}
+            >
+              Sign out
+            </button>
+          </>
+        )}
       </header>
 
       <main style={{ maxWidth: 1100, margin: '0 auto', padding: '44px 30px' }}>

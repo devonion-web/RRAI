@@ -6,6 +6,7 @@ import { readFileSync } from "fs";
 import { join } from "path";
 import { loadRiskRisingKnowledge } from "../lib/knowledge-loader";
 import { callClaudeJSON } from "../lib/anthropic";
+import { requireAuthenticatedUser } from "../middlewares/routeAuth";
 import { storeTextDoc, storeExcelDoc, getDocs, removeDoc, storeSize } from "../lib/docStore";
 import {
   createPack, getPack, setSections, getSection, updateSection,
@@ -27,6 +28,9 @@ import { parseExcelForRequirements } from "../lib/xlsxParser";
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024, files: 20 } });
 const router = Router();
 const PROMPTS_DIR = join(process.cwd(), "prompts");
+
+// All RFP routes require an authenticated session.
+router.use("/rfp{/*splat}", requireAuthenticatedUser);
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 

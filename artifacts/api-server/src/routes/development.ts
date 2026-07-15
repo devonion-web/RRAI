@@ -6,11 +6,16 @@ import {
 } from "@workspace/db";
 import * as service from "../lib/developmentService.js";
 import * as repo from "../lib/developmentRepository.js";
+import { requireRole, getAuthenticatedUser } from "../middlewares/routeAuth";
 
 const router: IRouter = Router();
 
+// All /development/* routes require the "admin" role.
+// 401 for unauthenticated requests, 403 for non-admins.
+router.use("/development{/*splat}", requireRole("admin"));
+
 // GET /api/development/tasks
-router.get("/development/tasks", async (req: Request, res: Response) => {
+router.get("/development/tasks", async (req: Request, res: Response): Promise<void> => {
   try {
     const tasks = await repo.listTasks();
     res.json({ tasks });
@@ -21,7 +26,7 @@ router.get("/development/tasks", async (req: Request, res: Response) => {
 });
 
 // POST /api/development/tasks
-router.post("/development/tasks", async (req: Request, res: Response) => {
+router.post("/development/tasks", async (req: Request, res: Response): Promise<void> => {
   const parsed = insertDevelopmentTaskSchema.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: "Validation failed", issues: parsed.error.issues });
@@ -37,8 +42,8 @@ router.post("/development/tasks", async (req: Request, res: Response) => {
 });
 
 // GET /api/development/tasks/:id
-router.get("/development/tasks/:id", async (req: Request, res: Response) => {
-  const id = req.params["id"] as string;
+router.get("/development/tasks/:id", async (req: Request, res: Response): Promise<void> => {
+  const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
   try {
     const detail = await repo.getTaskDetail(id);
     if (!detail) {
@@ -53,8 +58,8 @@ router.get("/development/tasks/:id", async (req: Request, res: Response) => {
 });
 
 // POST /api/development/tasks/:id/findings
-router.post("/development/tasks/:id/findings", async (req: Request, res: Response) => {
-  const id = req.params["id"] as string;
+router.post("/development/tasks/:id/findings", async (req: Request, res: Response): Promise<void> => {
+  const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
   const parsed = insertReviewFindingSchema.safeParse({
     ...req.body,
     developmentTaskId: id,
@@ -73,11 +78,21 @@ router.post("/development/tasks/:id/findings", async (req: Request, res: Respons
 });
 
 // POST /api/development/tasks/:id/approvals
-router.post("/development/tasks/:id/approvals", async (req: Request, res: Response) => {
-  const id = req.params["id"] as string;
+// decidedBy and decidedByLabel are sourced from the authenticated session —
+// the client cannot supply or override them.
+router.post("/development/tasks/:id/approvals", async (req: Request, res: Response): Promise<void> => {
+  const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  const user = getAuthenticatedUser(req);
+
+  // Strip any client-supplied identity fields; inject from the authenticated session.
+  const { decidedBy: _stripDecidedBy, decidedByLabel: _stripLabel, ...safeBody } = req.body;
+
   const parsed = insertApprovalSchema.safeParse({
-    ...req.body,
+    ...safeBody,
     developmentTaskId: id,
+    decidedByLabel: user
+      ? [user.firstName, user.lastName].filter(Boolean).join(" ") || user.email || user.id
+      : "admin",
   });
   if (!parsed.success) {
     res.status(400).json({ error: "Validation failed", issues: parsed.error.issues });

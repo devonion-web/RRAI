@@ -3,9 +3,20 @@ import multer from "multer";
 import { callClaude, callClaudeJSON, callClaudeJSONStreamed, callClaudeTextStreamed } from "../lib/anthropic";
 import { logger } from "../lib/logger";
 import { loadLogicGateKnowledge } from "../lib/knowledge-loader";
+import { requireAuthenticatedUser } from "../middlewares/routeAuth";
 
 const router: IRouter = Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
+
+// All LogicGate routes require an authenticated session.
+router.use("/generate-prep", requireAuthenticatedUser);
+router.use("/post-discovery", requireAuthenticatedUser);
+router.use("/score-deal", requireAuthenticatedUser);
+router.use("/generate-proposal", requireAuthenticatedUser);
+router.use("/generate-sow", requireAuthenticatedUser);
+router.use("/generate-email", requireAuthenticatedUser);
+router.use("/score-opportunity", requireAuthenticatedUser);
+router.use("/opportunities{/*splat}", requireAuthenticatedUser);
 
 // ─── In-memory stores ─────────────────────────────────────────────────────────
 

@@ -1,0 +1,334 @@
+Implement Architecture Remediation #2 for the RRAI platform:
+
+Authentication and Identity Foundation
+
+Objective
+
+Introduce real user authentication and server-enforced identity across the RRAI application.
+
+This task must replace all client-side or URL-based access assumptions with authenticated server-side identity.
+
+Authentication must create the foundation required for:
+
+* Persistent user-owned data
+* Organisation-scoped access
+* Lens routing
+* Approval workflows
+* Audit attribution
+* Conversation ownership
+* Administrative permissions
+
+Do not implement those later capabilities in this task. Build the authentication and identity foundation only.
+
+First: inspect the current application
+
+Before changing code, inspect:
+
+* The frontend application entry points
+* API server middleware and route registration
+* Existing database schema
+* Existing Drizzle configuration
+* SESSION_SECRET
+* Any existing Replit Auth, Clerk, OAuth, JWT or session-related code
+* artifacts/rai/src/lib/access.js
+* The Development module admin access mechanism
+* Any use of ?admin=true
+* Any user, actor, owner, approver or decided_by fields
+* Current deployment assumptions
+
+Confirm whether Replit Auth is available and appropriate for this application.
+
+Prefer the authentication mechanism best supported by the current Replit deployment environment. Do not introduce an unnecessarily complex third-party provider where native Replit authentication is sufficient.
+
+Architectural requirements
+
+Authentication must be:
+
+* Server enforced
+* Session based or securely token based
+* Persistent across page refreshes
+* Resistant to client-side role manipulation
+* Suitable for future organisation membership
+* Suitable for audit attribution
+* Compatible with the existing React frontend, Express API and PostgreSQL/Drizzle stack
+
+The browser must never be treated as the authority for:
+
+* User identity
+* User role
+* Administrative status
+* Organisation membership
+* Approval authority
+* Lens permissions
+
+Required database model
+
+Add or adapt a governed user identity model using Drizzle.
+
+At minimum support:
+
+Users
+
+* Internal user ID
+* Authentication provider ID
+* Email
+* Display name
+* Avatar URL, where available
+* Account status
+* Created date
+* Updated date
+* Last sign-in date
+
+Roles
+
+Support an extensible role model.
+
+Initial roles:
+
+* user
+* admin
+
+Do not hardcode role checks throughout the application. Provide a reusable authorisation function or middleware.
+
+The design must allow future roles such as:
+
+* reviewer
+* approver
+* knowledge_manager
+* platform_admin
+
+Do not implement those future roles beyond making the model extensible.
+
+Organisation readiness
+
+Do not implement full organisation tenancy unless it is already partly present.
+
+However, ensure the user model can later be associated with one or more organisations without destructive schema redesign.
+
+Document the intended future relationship.
+
+Required server implementation
+
+Create reusable authentication middleware in an appropriate server location.
+
+It must provide:
+
+requireAuthenticatedUser
+requireRole(...)
+getAuthenticatedUser
+
+Equivalent names are acceptable if consistent with repository conventions.
+
+Every protected API route must derive identity from the authenticated server session or verified token.
+
+Do not accept user IDs, roles or admin flags from query parameters, request bodies or localStorage as authoritative identity.
+
+Add a current-user endpoint such as:
+
+GET /api/auth/me
+
+It should return only the safe profile data required by the frontend.
+
+Add login and logout handling appropriate to the chosen authentication provider.
+
+Required frontend implementation
+
+Add authentication-aware application behaviour.
+
+At minimum:
+
+* Show a signed-out state when no authenticated session exists
+* Provide the appropriate sign-in action
+* Load the authenticated user from the server
+* Show the user’s name or identity in the platform shell
+* Provide a logout action
+* Protect authenticated application routes
+* Handle expired sessions safely
+* Avoid rendering protected content before identity has been resolved
+
+Do not redesign the full workspace in this task.
+
+Remove insecure access behaviour
+
+Remove or neutralise all access controls based on:
+
+* ?admin=true
+* Client-side role flags
+* LocalStorage role assumptions
+* Hidden navigation alone
+* Frontend-only permission checks
+
+Specifically inspect the Development module access mechanism.
+
+The Development module must only be accessible to users whose authenticated server-side role permits access.
+
+A user must not be able to become an administrator by modifying:
+
+* The URL
+* Browser state
+* Local storage
+* API request payloads
+
+Route protection
+
+Classify existing API routes into:
+
+Public
+
+Examples may include:
+
+* Health check
+* Authentication callback routes
+* Static public assets
+
+Authenticated
+
+All active RRAI working capabilities should require authentication unless there is a documented reason otherwise.
+
+Admin-only
+
+At minimum, the Development module’s administrative API routes must be protected server-side.
+
+Provide one central route-access map or documented classification rather than scattered undocumented decisions.
+
+Audit attribution
+
+Update existing audit-producing services so that, where an authenticated user exists, audit records use the authenticated user identity.
+
+Do not accept arbitrary actor, decided_by, approved_by or equivalent values supplied by the frontend.
+
+Where existing database fields are nullable, preserve compatibility but begin populating them from authenticated identity.
+
+Do not implement the complete unified audit architecture in this task.
+
+Security requirements
+
+Apply appropriate security controls, including:
+
+* Secure cookies where cookies are used
+* HTTP-only session cookies
+* SameSite protection
+* Session expiry
+* CSRF protection where applicable
+* Safe handling of authentication callback errors
+* No secrets exposed to the browser
+* No sensitive session logging
+* No authentication tokens stored insecurely in localStorage
+* Consistent unauthorised and forbidden responses
+
+Use:
+
+* 401 for unauthenticated requests
+* 403 for authenticated users without sufficient authority
+
+OpenAPI
+
+Update lib/api-spec/openapi.yaml for the authentication endpoints created or changed in this task.
+
+Document:
+
+* Current-user response
+* Authentication error responses
+* Security requirements for protected endpoints where practical
+
+Regenerate the existing generated clients and schemas where required.
+
+Do not expand the complete OpenAPI specification for every application endpoint in this task unless necessary for authentication.
+
+Tests
+
+Add focused tests covering at least:
+
+* Unauthenticated user cannot access a protected API route
+* Authenticated user can access a permitted route
+* Ordinary user cannot access an admin-only route
+* Admin user can access the Development module API
+* ?admin=true does not grant access
+* Client-supplied role or user ID does not override server identity
+* Current-user endpoint returns safe profile data
+* Logout invalidates the session
+* Expired or invalid sessions return 401
+* Role middleware returns 403 when appropriate
+
+Use test identities and mock provider behaviour where required.
+
+Do not require live external authentication during automated tests.
+
+Migration and compatibility
+
+Provide a safe database migration.
+
+Do not delete existing data.
+
+Do not require manual editing of production database records unless unavoidable.
+
+If an initial administrator must be provisioned, use a documented environment variable or controlled bootstrap mechanism.
+
+Do not make the first registered user an administrator automatically unless explicitly justified and protected against production misuse.
+
+Boundaries
+
+Do not implement:
+
+* Full organisation tenancy
+* Lens routing
+* One-way-valve enforcement
+* Persistent opportunity migration
+* Conversation persistence
+* Approval workflow UI
+* Knowledge permissions
+* Presentation Engine runtime features
+* Workspace redesign
+
+Those depend on authentication but belong in later remediation tasks.
+
+Do not refactor unrelated modules.
+
+Do not alter AI prompts, scoring, proposal generation or RFP behaviour except where authentication protection is required.
+
+Validation
+
+Run:
+
+* Database migration
+* TypeScript typecheck
+* Authentication tests
+* Existing test suite
+* Application build
+* Server startup
+* Frontend startup
+
+Manually verify:
+
+1. Signed-out users see the correct authentication state.
+2. Signed-in users can access standard capabilities.
+3. Non-admin users cannot access the Development module.
+4. Adding ?admin=true has no effect.
+5. Admin users can access permitted administrative functionality.
+6. Refreshing the browser preserves the authenticated session.
+7. Logout removes access.
+8. Protected API routes cannot be called anonymously.
+9. Existing LogicGate and RFP workflows still work after authentication.
+
+Delivery report
+
+Perform the implementation rather than only producing a plan.
+
+Then report:
+
+* Authentication provider selected
+* Why it was selected
+* Files created
+* Files changed
+* Database tables and migration added
+* Middleware added
+* Routes protected
+* Frontend authentication changes
+* Insecure access mechanisms removed
+* OpenAPI changes
+* Tests added
+* Typecheck, build and test results
+* How the initial admin role is provisioned
+* Known limitations
+* Recommended next remediation
+* Branch name and commit reference
