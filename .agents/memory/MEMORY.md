@@ -1,7 +1,7 @@
 - [RAI modular structure](rai-modular-structure.md) — LogicGateModule.jsx is the ported original app; new modules = one entry in config/modules.js + new component.
 - [Knowledge loader path resolution](knowledge-loader-path.md) — KNOWLEDGE_DIR must use `process.cwd() + "../../knowledge"` since pnpm sets CWD to the package dir, not workspace root.
 - [Replit Auth OIDC implementation](replit-auth-oidc.md) — server-enforced OIDC auth with DB sessions; role from RRAI_ADMIN_EMAILS env var; never trust client for identity.
-- [Pre-existing TS errors to preserve](pre-existing-ts-errors.md) — two TS errors in api-server that must not be "fixed": anthropic.ts:124 and rfp.ts:722.
+- [TypeScript quality gate](ts-quality-gate.md) — zero errors required; pre-existing is not an exemption; `as any` forbidden; `as unknown as` permitted at I/O seams only; CI in `.github/workflows/ci.yml`.
 - [DB schema lib rebuild](db-lib-rebuild.md) — after adding new tables to lib/db, always run `pnpm run typecheck:libs` before leaf artifact typechecks or imports will fail.
 - [OpenAPI YAML structure](openapi-yaml-structure.md) — components can only have one `parameters:`, `schemas:`, and `responses:` block; duplicate keys cause orval to silently fail with "Failed to resolve input".
 - [Integration test runner](integration-test-runner.md) — use `node --test --import tsx/esm <file.ts>` for TS tests; plain `--experimental-strip-types` fails on directory imports in workspace libs.

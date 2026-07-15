@@ -1,0 +1,202 @@
+Implement Architecture Remediation #4:
+
+Restore a Clean TypeScript Quality Gate
+
+Objective
+
+Resolve every existing TypeScript error in the RRAI repository and make a clean typecheck a mandatory, reliable engineering quality gate.
+
+The API server currently reports two known errors:
+
+* artifacts/api-server/src/lib/anthropic.ts, around line 124
+* artifacts/api-server/src/routes/rfp.ts, around line 742
+
+Do not suppress, ignore or reclassify these as pre-existing.
+
+Fix the underlying causes.
+
+Required work
+
+1. Reproduce the failures
+
+Run the complete repository typecheck and capture:
+
+* Exact error messages
+* Affected files
+* Affected types
+* Whether the errors originate from application code, generated code or dependency typings
+
+Do not rely solely on the previously reported line numbers, as they may have shifted.
+
+2. Fix anthropic.ts
+
+Inspect the Anthropic client wrapper and resolve the actual typing mismatch.
+
+Check for issues including:
+
+* Incorrect message content types
+* Stream event unions
+* Tool-use content blocks
+* Optional fields treated as required
+* Model response typing
+* SDK version drift
+* Incorrect casting
+* Error handling types
+
+Use the official installed SDK types.
+
+Do not use any, broad unsafe casts, @ts-ignore or @ts-expect-error unless there is a documented upstream typing defect and no safer alternative exists.
+
+Preserve current runtime behaviour.
+
+3. Fix rfp.ts
+
+Inspect the RFP route error and correct the underlying contract mismatch.
+
+Check for issues including:
+
+* Incorrect request or response types
+* SSE payload typing
+* Optional document fields
+* Generated schema mismatch
+* Array or object narrowing
+* Return-path inconsistency
+* Invalid use of unknown values
+
+Preserve existing RFP behaviour, response schemas and streaming behaviour.
+
+4. Search for hidden suppressions
+
+Search the repository for:
+
+* @ts-ignore
+* @ts-expect-error
+* eslint-disable used to bypass type safety
+* Unsafe as any
+* as unknown as
+* Typecheck scripts using || true
+* Excluded production files
+* Build scripts that continue after typecheck failure
+
+Report each occurrence.
+
+Do not remove legitimate suppressions blindly. Review each one and fix unsafe production-code suppressions where practical.
+
+5. Standardise typecheck scripts
+
+Ensure the workspace has clear commands for:
+
+* Libraries
+* API server
+* Frontend
+* Full repository
+
+The full command must fail with a non-zero exit code when a production TypeScript error exists.
+
+Do not allow one package’s failure to be hidden by another package succeeding.
+
+6. Add CI enforcement
+
+Inspect the existing GitHub Actions or CI configuration.
+
+If CI exists:
+
+* Add or correct a required TypeScript typecheck step.
+* Ensure it runs before build or deployment.
+* Ensure failure blocks the pipeline.
+
+If no CI workflow exists, create a minimal workflow that runs:
+
+1. Dependency installation using the repository’s package manager
+2. Code generation where required
+3. Full TypeScript typecheck
+4. Existing tests
+5. Build
+
+Do not add deployment behaviour.
+
+7. Generated-code handling
+
+Where generated API clients or Zod schemas participate in typechecking:
+
+* Run code generation before typecheck.
+* Confirm generated files are current.
+* Do not manually patch generated outputs when the source OpenAPI specification should be corrected instead.
+* Confirm a clean checkout can regenerate and typecheck successfully.
+
+8. Tests and regression protection
+
+Add focused tests only where fixing the errors changes logic that is not already covered.
+
+At minimum verify:
+
+* Anthropic request assembly still produces valid model requests.
+* Anthropic streaming or non-streaming behaviour still works as currently intended.
+* RFP response or stream construction remains valid.
+* Existing 24 persistence tests continue passing.
+* Existing authentication and knowledge-loader tests continue passing.
+
+9. Documentation
+
+Update the appropriate engineering document or README with:
+
+* The canonical full typecheck command
+* The requirement that production code must have zero TypeScript errors
+* The rule that “pre-existing” is not an acceptable exemption
+* How generated code should be refreshed before typechecking
+* The narrow circumstances in which a suppression may be permitted
+
+Do not create a large new architecture document for this task.
+
+10. Validation
+
+Run and report:
+
+* OpenAPI code generation
+* Library typecheck
+* API-server typecheck
+* Frontend typecheck
+* Full workspace typecheck
+* Full test suite
+* Production build
+
+The expected result is:
+
+TypeScript errors: 0
+Tests: all passing
+Build: passing
+
+Boundaries
+
+Do not:
+
+* Refactor the entire Anthropic integration
+* Redesign the RFP workflow
+* Change AI models
+* Change prompts
+* Alter persistence
+* Alter authentication
+* Decompose LogicGateModule.jsx
+* Implement conversation persistence
+* Implement lens routing
+* Add unrelated linting work
+
+Keep the remediation focused on restoring a clean and enforceable quality gate.
+
+Delivery report
+
+Perform the changes, then report:
+
+* Exact original errors
+* Root cause of each
+* Files changed
+* Suppressions found and their disposition
+* Typecheck scripts changed
+* CI changes
+* Tests added or updated
+* Codegen result
+* Final typecheck result
+* Final test result
+* Final build result
+* Remaining known type-safety limitations
+* Branch name and commit reference

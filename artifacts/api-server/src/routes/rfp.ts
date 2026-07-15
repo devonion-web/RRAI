@@ -719,7 +719,7 @@ Return: { "crossCuttingConstraints": [{ "type": "timeline|module|integration|com
     // ── 3. Run all calls concurrently (cap 5 in-flight) ─────────────────────
 
     const constraintsTask = (): Promise<{ crossCuttingConstraints: Array<{ type: string; text: string }> }> =>
-      callClaudeJSON(CONSTRAINTS_SYSTEM, constraintsUser, { maxTokens: 4_000 })
+      callClaudeJSON<{ crossCuttingConstraints: Array<{ type: string; text: string }> }>(CONSTRAINTS_SYSTEM, constraintsUser, { maxTokens: 4_000 })
         .catch((e: unknown) => {
           req.log.warn({ err: e }, "rfp: constraints pass failed, using empty");
           return { crossCuttingConstraints: [] };

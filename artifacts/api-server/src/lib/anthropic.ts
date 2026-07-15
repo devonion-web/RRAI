@@ -119,9 +119,9 @@ export async function callClaudeJSON<T>(
 
     throw new Error("Claude returned no usable content block");
   } catch (err: unknown) {
-    // If the proxy/model rejects tool_choice (400), fall back to plain text + defensive parse
-    const isApiErr = err instanceof Anthropic.APIError;
-    if (isApiErr && (err as Anthropic.APIError).status === 400) {
+    // If the proxy/model rejects tool_choice (400), fall back to plain text + defensive parse.
+    // The instanceof check narrows err to Anthropic.APIError so .status is accessible without a cast.
+    if (err instanceof Anthropic.APIError && err.status === 400) {
       logger.warn("callClaudeJSON: tool-forcing rejected (400), falling back to text parse");
       const raw = await callClaude(system, user, { maxTokens });
       return defensiveParse<T>(raw);
