@@ -1,0 +1,554 @@
+# Phase 2 — Platform Governance Engine
+## GitHub Synchronisation & Platform Status Engine
+
+You are implementing a permanent platform capability.
+
+This is NOT a one-off report.
+
+This becomes a core RRAI engine responsible for ensuring that the implementation, repository and architecture remain synchronised forever.
+
+The platform now has three environments:
+
+• GitHub (authoritative repository)
+• Replit (implementation/runtime)
+• Claude Project (architecture and governed knowledge)
+
+GitHub is the single source of truth.
+
+Replit is connected directly to GitHub.
+
+Claude consumes the repository as its architectural knowledge source.
+
+The objective of this engine is to ensure that Claude never works from an outdated understanding of the platform again.
+
+This engine must become part of the permanent platform architecture.
+
+--------------------------------------------------
+OBJECTIVES
+--------------------------------------------------
+
+Build a Platform Governance & Synchronisation Engine that can:
+
+• Inspect the repository
+• Understand the current implementation
+• Compare implementation against architecture
+• Detect implementation drift
+• Generate authoritative implementation documents
+• Maintain implementation history
+• Provide Claude with an accurate snapshot of the platform
+
+These documents are generated from the repository and implementation.
+
+They are NOT manually maintained.
+
+--------------------------------------------------
+NEW REPOSITORY STRUCTURE
+--------------------------------------------------
+
+Create:
+
+implementation/
+
+00_Platform_Status.md
+01_Architecture_Progress.md
+02_Engine_Status.md
+03_API_Status.md
+04_Database_Status.md
+05_UI_Status.md
+06_Knowledge_Status.md
+07_Test_Status.md
+08_Build_Status.md
+99_Build_History.md
+
+These become governed implementation artefacts.
+
+--------------------------------------------------
+PLATFORM STATUS GENERATOR
+--------------------------------------------------
+
+Implement a generator that scans the repository and automatically produces a complete implementation snapshot.
+
+The generator should inspect:
+
+• Git branch
+• Git commit
+• Repository version
+• Workspace packages
+• Database schema
+• API routes
+• OpenAPI
+• Knowledge manifest
+• Indexed knowledge
+• Authentication
+• Conversations
+• Opportunities
+• Retrieval
+• Learning
+• Reasoning
+• Document Engine
+• Presentation Engine
+• Agent Orchestrator
+• Approval Engine
+• Automation Engine
+• Tests
+• TypeScript
+• Build status
+• CI
+
+The generator should never rely on hardcoded assumptions.
+
+It must inspect the repository.
+
+--------------------------------------------------
+00_PLATFORM_STATUS.MD
+--------------------------------------------------
+
+Generate a complete platform overview.
+
+Include:
+
+Platform version
+
+Repository version
+
+Branch
+
+Commit hash
+
+Last generated
+
+Overall platform maturity
+
+Architecture completion estimate
+
+Current implementation completion estimate
+
+Implemented capabilities
+
+Partially implemented capabilities
+
+Planned capabilities
+
+Repository health
+
+Database summary
+
+API summary
+
+Knowledge summary
+
+Retrieval summary
+
+Conversation summary
+
+Workspace summary
+
+Authentication summary
+
+Learning summary
+
+Reasoning summary
+
+Document Engine summary
+
+Presentation Engine summary
+
+Approval Engine summary
+
+Automation summary
+
+Agent summary
+
+Known technical debt
+
+Current priorities
+
+Next recommended engine
+
+Recent implementation milestones
+
+--------------------------------------------------
+01_ARCHITECTURE_PROGRESS.MD
+--------------------------------------------------
+
+Compare architecture against implementation.
+
+For every major architectural area classify as:
+
+Implemented
+
+Partially Implemented
+
+Planned
+
+Deferred
+
+Removed
+
+Highlight architectural drift.
+
+Highlight implementation drift.
+
+Highlight obsolete architecture.
+
+--------------------------------------------------
+02_ENGINE_STATUS.MD
+--------------------------------------------------
+
+Create a section for every platform engine.
+
+Examples:
+
+Authentication
+
+Memory
+
+Retrieval
+
+Learning
+
+Reasoning
+
+Knowledge
+
+Document Production
+
+Presentation
+
+Agent Orchestrator
+
+Approval
+
+Automation
+
+Conversation
+
+Workspace
+
+For each include:
+
+Purpose
+
+Current Version
+
+Completion %
+
+Implemented components
+
+Missing components
+
+Dependencies
+
+Repository location
+
+Last updated
+
+Next milestone
+
+--------------------------------------------------
+03_API_STATUS.MD
+--------------------------------------------------
+
+Inspect OpenAPI.
+
+Summarise:
+
+Route count
+
+Protected routes
+
+Admin routes
+
+Public routes
+
+Coverage
+
+Implemented services
+
+Missing services
+
+API maturity
+
+--------------------------------------------------
+04_DATABASE_STATUS.MD
+--------------------------------------------------
+
+Inspect the schema.
+
+Document:
+
+Tables
+
+Relationships
+
+Indexes
+
+Knowledge tables
+
+Memory tables
+
+Conversation tables
+
+Opportunity tables
+
+Learning tables
+
+Audit tables
+
+Retrieval tables
+
+Organisation tables
+
+Database maturity
+
+--------------------------------------------------
+05_UI_STATUS.MD
+--------------------------------------------------
+
+Inspect the frontend.
+
+Summarise:
+
+Workspace
+
+Conversation UI
+
+Dashboard
+
+Modules
+
+Navigation
+
+Admin interfaces
+
+Engine UIs
+
+Future placeholders
+
+UI maturity
+
+--------------------------------------------------
+06_KNOWLEDGE_STATUS.MD
+--------------------------------------------------
+
+Inspect the knowledge system.
+
+Summarise:
+
+Knowledge assets
+
+Manifest
+
+Chunks
+
+Indexed assets
+
+Chunk counts
+
+Evidence tiers
+
+Sensitivity levels
+
+Partitions
+
+Knowledge gaps
+
+Pending knowledge
+
+LLM-enabled assets
+
+--------------------------------------------------
+07_TEST_STATUS.MD
+--------------------------------------------------
+
+Inspect the repository.
+
+Summarise:
+
+Unit tests
+
+Integration tests
+
+Evaluation suites
+
+Retrieval evaluation
+
+Current pass rate
+
+Coverage (if available)
+
+Quality gates
+
+--------------------------------------------------
+08_BUILD_STATUS.MD
+--------------------------------------------------
+
+Summarise:
+
+TypeScript
+
+Production build
+
+CI
+
+GitHub Actions
+
+Bundle status
+
+Known warnings
+
+Current production readiness
+
+--------------------------------------------------
+99_BUILD_HISTORY.MD
+--------------------------------------------------
+
+Append only.
+
+Never overwrite.
+
+Every completed engine automatically creates a history entry.
+
+Each entry should contain:
+
+Date
+
+Engine
+
+Summary
+
+Files changed
+
+Architecture impact
+
+Repository impact
+
+Branch
+
+Commit
+
+--------------------------------------------------
+AUTOMATIC SYNCHRONISATION
+--------------------------------------------------
+
+Whenever a major engine or architectural milestone completes:
+
+Regenerate:
+
+00_Platform_Status.md
+
+01_Architecture_Progress.md
+
+02_Engine_Status.md
+
+03_API_Status.md
+
+04_Database_Status.md
+
+05_UI_Status.md
+
+06_Knowledge_Status.md
+
+07_Test_Status.md
+
+08_Build_Status.md
+
+Never overwrite Build History.
+
+Always append.
+
+--------------------------------------------------
+GITHUB INTEGRATION
+--------------------------------------------------
+
+Because Replit is connected to GitHub:
+
+The generator must always include:
+
+Current branch
+
+Current commit hash
+
+Repository version
+
+Modified files
+
+Pending commits
+
+Repository cleanliness
+
+These values must be obtained from Git.
+
+Never hardcode them.
+
+--------------------------------------------------
+CLAUDE WORKFLOW
+--------------------------------------------------
+
+The intention is that Claude will always read:
+
+1. 00_RRAI_Master_Context_v2_0.md
+
+2. 01_RRAI_Platform_Architecture.md
+
+3. implementation/00_Platform_Status.md
+
+before generating any new architecture or implementation guidance.
+
+Therefore the generated implementation documents become the authoritative description of the live platform.
+
+--------------------------------------------------
+VALIDATION
+--------------------------------------------------
+
+Run:
+
+Repository scan
+
+Git scan
+
+Database scan
+
+Knowledge scan
+
+Manifest validation
+
+OpenAPI scan
+
+API scan
+
+Route scan
+
+Frontend scan
+
+Test scan
+
+Build scan
+
+Generate all implementation documents
+
+Run full TypeScript
+
+Run all tests
+
+Run production build
+
+--------------------------------------------------
+DELIVERABLE
+--------------------------------------------------
+
+Commit the new Platform Governance & Synchronisation Engine to GitHub.
+
+Provide a final report containing:
+
+• Repository statistics
+• Engine completion matrix
+• Platform maturity estimate
+• Architecture completion estimate
+• Generated documents
+• Repository health
+• Git status
+• Current implementation status
+• Recommended next engine
+
+This engine becomes a permanent part of RRAI and must be maintained automatically as the platform evolves.
