@@ -9,7 +9,8 @@
     "start": "node --enable-source-maps ./dist/index.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "node --test src/lib/knowledge-loader.test.mjs",
-    "test:integration": "node --test --import tsx/esm src/routes/logicgate.test.ts"
+    "test:integration": "node --test --import tsx/esm src/routes/logicgate.test.ts",
+    "evaluate:retrieval": "node --import tsx/esm src/scripts/evaluate-retrieval.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.100.1",

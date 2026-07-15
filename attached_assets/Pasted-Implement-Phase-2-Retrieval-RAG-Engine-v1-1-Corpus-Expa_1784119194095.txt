@@ -1,0 +1,695 @@
+Implement Phase 2 — Retrieval & RAG Engine v1.1:
+
+Corpus Expansion, Retrieval Evaluation and Quality Hardening
+
+Objective
+
+Complete and validate the first production-ready version of the RRAI Retrieval & RAG Engine.
+
+Retrieval & RAG Engine v1 has successfully established:
+
+* Deterministic Markdown chunking
+* A persistent derived knowledge index
+* PostgreSQL full-text search
+* Hybrid metadata ranking
+* Context budgeting
+* Lens-first filtering
+* Retrieval provenance
+* Admin diagnostics
+
+However, the current runtime index contains only:
+
+* 5 chunks from knowledge/Risk Rising.md
+* 5 chunks from knowledge/LogicGate.md
+
+This proves the retrieval mechanics, but not the usefulness or completeness of the RRAI knowledge corpus.
+
+This task must:
+
+1. Classify and index the wider governed knowledge repository.
+2. Validate retrieval quality with a repeatable evaluation suite.
+3. Prevent weak or irrelevant fallback results from entering prompts.
+4. Establish measurable acceptance criteria for retrieval quality.
+5. Confirm that lens and one-way-valve controls remain intact as the corpus expands.
+
+Do not begin the Learning Engine until this task is complete.
+
+⸻
+
+1. Inspect the full knowledge repository
+
+Review:
+
+* knowledge/
+* The knowledge manifest
+* Existing architecture and knowledge-governance documents
+* Existing GRC domain knowledge
+* TPRM knowledge files
+* Competitor knowledge
+* RFP/RFI knowledge
+* LogicGate product and module knowledge
+* Risk Rising delivery and company knowledge
+* Presentation Engine knowledge, if present
+* Any proposal, implementation or commercial knowledge currently intended for runtime use
+
+Produce an inventory containing:
+
+* File path
+* Title
+* Current status
+* Content completeness
+* Runtime relevance
+* Proposed partition
+* Proposed sensitivity
+* Verification state
+* Evidence tier
+* Permitted lenses
+* LLM eligibility
+* Whether it should be indexed now
+* Any duplication or conflict
+
+Do not automatically index every Markdown file.
+
+Architecture, engineering, implementation and internal governance documents should only enter runtime retrieval where their use is explicitly justified.
+
+⸻
+
+2. Expand the knowledge manifest
+
+Register the approved runtime knowledge assets in the existing governed manifest.
+
+At minimum assess and, where suitable, include:
+
+Risk Rising
+
+* Company profile
+* Delivery capabilities
+* Support model
+* Implementation approach
+* Team and ownership boundaries
+* Commercial positioning, under the correct commercial classification
+
+LogicGate
+
+* Platform overview
+* Modules
+* Product capabilities
+* AI capabilities
+* Implementation considerations
+* Known limitations
+* Approved commercial or product positioning
+
+GRC domain knowledge
+
+* Governance, risk and compliance
+* Risk management
+* Controls and compliance
+* Cybersecurity
+* Third-party risk management
+* Policy management
+* Audit
+* Incident and issue management
+* Business continuity
+* Regulatory compliance
+
+Sales and opportunity knowledge
+
+Only where permitted:
+
+* Discovery methodology
+* Qualification
+* Opportunity assessment
+* Proposal methodology
+* RFP/RFI approach
+* Customer lifecycle concepts
+
+Competitor knowledge
+
+* Approved competitor profiles
+* Product comparison information
+* Evidence-backed differentiators
+* Known uncertainty and review dates
+
+Do not manufacture missing content simply to enlarge the index.
+
+Where an important file remains a placeholder or is too weak for runtime use:
+
+* Exclude it from indexing.
+* Report the knowledge gap.
+* Add it to a prioritised knowledge-completion list.
+
+⸻
+
+3. Validate metadata classifications
+
+For every indexed asset confirm:
+
+* Partition
+* Sensitivity
+* Verification state
+* Evidence tier
+* Permitted lenses
+* LLM eligibility
+* Owner
+* Last reviewed date
+
+Apply default-deny behaviour where metadata is missing or invalid.
+
+The index must inherit the parent asset’s classification.
+
+A chunk must never receive broader permissions than its parent asset.
+
+Add manifest validation rules covering:
+
+* Duplicate asset IDs
+* Duplicate file paths
+* Missing files
+* Unknown partitions
+* Unknown sensitivity levels
+* Invalid lens values
+* Missing verification state
+* Missing owner
+* Invalid dates
+* LLM-enabled assets without adequate classification
+
+⸻
+
+4. Reindex the expanded corpus
+
+Run a full governed reindex after the manifest is updated.
+
+Report:
+
+* Assets reviewed
+* Assets accepted for runtime indexing
+* Assets excluded
+* Total chunks
+* Chunks by asset
+* Chunks by partition
+* Chunks by sensitivity
+* Chunks by evidence tier
+* Indexing duration
+* Warnings and failures
+
+Confirm incremental indexing still:
+
+* Skips unchanged chunks
+* Updates changed chunks
+* Removes stale chunks
+* Preserves stable content hashes
+
+Do not treat a successful database insert as proof of retrieval quality.
+
+⸻
+
+5. Remove unsafe empty-query fallback behaviour
+
+Review the current behaviour:
+
+“Fallback to evidence-tier ranking when FTS finds nothing.”
+
+This fallback may return authoritative but irrelevant content merely because no lexical match exists.
+
+Change the retrieval policy so that:
+
+* No-match queries do not automatically receive unrelated governed chunks.
+* Evidence authority may adjust the ranking of relevant candidates, but must not create relevance.
+* Results below a configurable minimum relevance threshold are excluded.
+* The assistant may receive no static knowledge results when nothing relevant is found.
+* A no-result condition is recorded in the retrieval trace.
+* The prompt instructs the assistant not to imply that missing evidence was found.
+
+A safe deterministic fallback may use:
+
+* Exact acronym expansion
+* Controlled synonym matching
+* Tag matching
+* Heading matching
+* Query token normalisation
+
+Do not fall back to arbitrary high-authority chunks.
+
+⸻
+
+6. Query normalisation and domain vocabulary
+
+Add a governed deterministic vocabulary for common RRAI terminology and acronyms.
+
+At minimum support:
+
+* GRC
+* TPRM
+* RFP
+* RFI
+* ERM
+* TAM
+* QBR
+* BRD
+* SOW / SoW
+* UAT
+* BCP
+* AI
+* Risk Cloud
+* Controls Compliance
+* Third-party risk
+* Policy management
+* Incident management
+* Internal audit
+
+The vocabulary may map:
+
+* Acronyms to expanded phrases
+* Approved synonyms
+* Product names to common variants
+* UK and US spelling variations where useful
+
+Keep this in a central governed configuration.
+
+Do not perform unrestricted query expansion that could change the meaning of a request.
+
+Do not use opportunity-specific commercial words to enrich Analyst queries.
+
+⸻
+
+7. Retrieval thresholds
+
+Introduce explicit centralised thresholds, including:
+
+* Minimum lexical relevance
+* Minimum final score
+* Maximum chunks
+* Maximum chunks per asset
+* Maximum total context budget
+* Duplicate similarity threshold
+* Maximum proportion of context from one asset
+
+Record the retrieval policy version.
+
+Update it from:
+
+retrieval-policy-v1
+
+to an appropriate new version, for example:
+
+retrieval-policy-v1.1
+
+Persist the policy version in every retrieval trace.
+
+⸻
+
+8. Result diversity
+
+Prevent one large or repetitive asset from dominating the context.
+
+Implement:
+
+* Maximum chunks per asset
+* Near-duplicate suppression
+* Heading-path diversity
+* Asset diversity where multiple strong sources exist
+* A penalty for repeated substantially similar content
+
+Do not force diversity when one source is clearly the only relevant authority.
+
+Relevance and authority remain primary.
+
+⸻
+
+9. Evidence conflict handling
+
+Create deterministic conflict metadata where retrieved sources materially disagree.
+
+The retrieval engine does not need to resolve the dispute.
+
+It must:
+
+* Preserve the competing fragments.
+* Identify their asset IDs and evidence tiers.
+* Mark the result set as containing potential conflict.
+* Pass a concise conflict instruction to prompt assembly.
+* Instruct the assistant to distinguish authoritative fact, current operational understanding and unverified claims.
+
+Do not use an LLM to decide source truth during retrieval.
+
+⸻
+
+10. Build a governed evaluation set
+
+Create a repeatable retrieval evaluation fixture.
+
+Use a governed file such as:
+
+evaluation/retrieval-evaluation-v1.json
+
+or an equivalent repository location consistent with current conventions.
+
+Include at least 40 evaluation queries across:
+
+Risk Rising
+
+* Delivery capabilities
+* Support model
+* Implementation ownership
+* Service model
+* Team capability
+
+LogicGate
+
+* Platform modules
+* TPRM capabilities
+* Policy management
+* AI capabilities
+* Implementation model
+* Product limitations
+
+GRC domains
+
+* Controls
+* Audit
+* Cyber risk
+* Policy
+* Incident management
+* Business continuity
+* Regulatory compliance
+* TPRM
+
+RFP/RFI
+
+* Response methodology
+* Evidence handling
+* Requirement ownership
+* Quality review
+
+Competitors
+
+* Comparison questions
+* Differentiation questions
+* Evidence limitations
+
+Lens-boundary tests
+
+* Analyst query with commercial opportunity linked
+* Commercial query using permitted opportunity context
+* Delivery query using approved delivery context
+* Restricted-source exclusion
+* Cross-organisation exclusion
+
+Each case must define:
+
+* Query
+* Lens
+* Conversation type
+* Expected asset IDs or topics
+* Acceptable alternative assets
+* Prohibited assets
+* Prohibited partitions
+* Minimum acceptable top-k behaviour
+* Whether an empty result is acceptable
+* Notes explaining the expected result
+
+⸻
+
+11. Evaluation runner
+
+Create a deterministic command such as:
+
+pnpm --filter @workspace/api-server run evaluate:retrieval
+
+The evaluation must report:
+
+* Total cases
+* Top-1 accuracy
+* Recall@3
+* Recall@5
+* Mean reciprocal rank
+* Empty-result rate
+* Irrelevant-result rate
+* Prohibited-asset violations
+* Prohibited-partition violations
+* Restricted-source violations
+* Average selected chunks
+* Average context size
+* Average search latency
+* P95 search latency
+
+The runner must exit non-zero when a hard security boundary is violated.
+
+It should also exit non-zero when agreed minimum quality thresholds are not met.
+
+Set initial acceptance criteria explicitly.
+
+Recommended initial gates:
+
+* Prohibited-partition violations: 0
+* Restricted-source violations: 0
+* Cross-organisation violations: 0
+* Recall@5: at least 85%
+* Top-1 accuracy: at least 70%
+* Irrelevant-result rate: below 10%
+* P95 local search latency: below an agreed practical threshold
+
+Adjust quality thresholds only when justified by the actual evaluation corpus.
+
+Do not lower security thresholds.
+
+⸻
+
+12. Retrieval trace hardening
+
+Ensure every assistant retrieval trace records:
+
+* Original query
+* Normalised query
+* Applied vocabulary expansions
+* Lens
+* Retrieval-policy version
+* Candidate asset IDs
+* Candidate chunk count
+* Selected chunk IDs
+* Scores and safe score breakdown
+* Assets excluded before search
+* Results excluded below threshold
+* Duplicates removed
+* Results omitted due to budget
+* No-result status
+* Conflict indicator
+* Search latency
+* Context size estimate
+
+Do not store complete confidential content in traces.
+
+⸻
+
+13. Admin diagnostics
+
+Enhance the existing admin retrieval diagnostics to show:
+
+* Corpus size
+* Assets by classification
+* Chunks by asset
+* Last index result
+* Manifest validation status
+* Evaluation summary
+* Query normalisation
+* Candidate count
+* Threshold decisions
+* Selected results
+* Safe score explanation
+* No-result reason
+
+Do not expose raw restricted or confidential content.
+
+Do not add an ordinary-user retrieval-debugging interface.
+
+⸻
+
+14. Assistant behaviour when no evidence is retrieved
+
+Update prompt assembly so the assistant can distinguish:
+
+* Relevant governed evidence retrieved
+* Permitted runtime memory retrieved
+* No relevant governed evidence found
+* Relevant evidence excluded by policy
+* Evidence conflict present
+
+The assistant must not imply that it found supporting knowledge when retrieval returned none.
+
+It may:
+
+* Answer from general reasoning where permitted.
+* Clearly label assumptions.
+* Say that the governed repository did not contain relevant evidence.
+* Ask for source material where necessary.
+
+Do not reveal hidden or prohibited source details.
+
+⸻
+
+15. Tests
+
+Add tests covering:
+
+Manifest
+
+* Valid expanded manifest passes.
+* Duplicate asset ID fails.
+* Missing source file fails or warns according to status.
+* Invalid partition fails.
+* Invalid sensitivity fails.
+* Missing ownership fails.
+* Chunk cannot broaden parent permissions.
+
+Search quality
+
+* Relevant results exceed threshold.
+* Irrelevant evidence-tier fallback does not occur.
+* No-match query returns no static chunks.
+* Acronym expansion works.
+* Heading and title boosts work.
+* UK/US spelling variants work where configured.
+* Per-asset chunk cap works.
+* Duplicate suppression works.
+* Context budget is respected.
+* Query normalisation is deterministic.
+
+Security
+
+* Analyst candidate corpus contains no commercial or delivery assets.
+* Restricted assets never become candidates.
+* Cross-organisation runtime memory is excluded.
+* LLM-disabled assets never become candidates.
+* Unknown classification is default-denied.
+* Evaluation runner fails on a simulated prohibited-source result.
+
+Evaluation
+
+* Fixture schema validates.
+* Metrics calculate correctly.
+* Security violation causes non-zero exit.
+* Quality threshold failure causes non-zero exit.
+* Valid evaluation run passes.
+
+Regression
+
+* All 124 existing tests pass.
+* Conversation streaming remains functional.
+* Retrieval traces remain linked to assistant messages.
+* LogicGate and RFP workflows remain functional.
+* Full workspace typecheck remains clean.
+
+⸻
+
+16. Documentation
+
+Update the relevant retrieval and engineering documentation with:
+
+* Runtime corpus scope
+* Asset admission rules
+* Manifest validation
+* Query normalisation
+* Minimum relevance thresholds
+* No-result behaviour
+* Ranking diversity
+* Evaluation methodology
+* Quality gates
+* Reindex process
+* How to add a new knowledge asset safely
+
+Clearly document that:
+
+* More indexed content is not automatically better.
+* Every indexed asset must be classified and approved.
+* Routing occurs before search.
+* Security violations are build-breaking failures.
+* Evidence authority does not substitute for relevance.
+* An empty result is preferable to an irrelevant or prohibited result.
+
+⸻
+
+Boundaries
+
+Do not implement:
+
+* Embeddings unless required to meet measured retrieval quality
+* Learning Engine
+* Automatic knowledge creation
+* Knowledge promotion
+* External web search
+* Attachment ingestion
+* Object storage
+* Document generation
+* Presentation generation
+* Human approval workflow
+* Agent orchestration
+* Major UI redesign
+
+Do not weaken existing lens, partition, sensitivity or organisation controls.
+
+⸻
+
+Validation
+
+Run:
+
+* Manifest validation
+* Full corpus reindex
+* Retrieval evaluation suite
+* OpenAPI codegen
+* Full TypeScript typecheck
+* Existing 124 tests
+* New manifest and evaluation tests
+* API build
+* Frontend build
+* Full application startup
+
+Manually verify:
+
+1. Ask a Risk Rising service question.
+2. Confirm relevant Risk Rising chunks are selected.
+3. Ask a LogicGate module question.
+4. Confirm relevant module content is selected.
+5. Ask a TPRM question.
+6. Confirm approved TPRM knowledge is selected.
+7. Ask an unrelated nonsense query.
+8. Confirm irrelevant authoritative chunks are not supplied.
+9. Ask an Analyst question with a commercial opportunity linked.
+10. Confirm commercial content is excluded before search.
+11. Ask a Commercial opportunity question.
+12. Confirm authorised opportunity memory is available separately.
+13. Inspect query normalisation and scores.
+14. Run the full evaluation command.
+15. Confirm all security violations are zero.
+16. Confirm the quality thresholds pass.
+
+⸻
+
+Delivery report
+
+Perform the implementation rather than only producing a plan.
+
+Then report:
+
+* Knowledge inventory produced
+* Assets added to the manifest
+* Assets excluded and why
+* Knowledge gaps identified
+* Total indexed assets and chunks
+* Chunk distribution by classification
+* Manifest validation result
+* Retrieval fallback changes
+* Query vocabulary added
+* Threshold and diversity policy
+* Evaluation fixture size
+* Evaluation metrics
+* Security-boundary results
+* Average and P95 latency
+* Retrieval trace changes
+* Admin diagnostic changes
+* Tests added
+* Final test total
+* Final typecheck result
+* Final build result
+* Known retrieval limitations
+* Whether the Retrieval Engine is ready to support the Learning Engine
+* Branch name and commit reference

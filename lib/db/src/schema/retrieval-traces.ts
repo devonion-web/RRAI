@@ -18,6 +18,7 @@
  */
 
 import {
+  boolean,
   index,
   integer,
   jsonb,
@@ -82,8 +83,14 @@ export const retrievalTracesTable = pgTable(
 
     // ── Search metadata (nullable — not present in pre-retrieval-engine traces) ─
 
-    /** The search query sent to the retrieval engine. */
+    /** The original search query sent to the retrieval engine. */
     searchQuery: text("search_query"),
+    /** The normalised query after vocabulary expansion. */
+    normalisedQuery: text("normalised_query"),
+    /** Labels of vocabulary entries applied during query normalisation. */
+    vocabExpansions: text("vocab_expansions").array(),
+    /** Retrieval policy version in effect (e.g. "retrieval-policy-v1.1"). */
+    retrievalPolicyVersion: varchar("retrieval_policy_version", { length: 64 }),
     /** Retrieval engine version (e.g. "retrieval-v1"). */
     searchVersion: varchar("search_version", { length: 64 }),
     /** Chunking policy version in effect (e.g. "chunk-v1"). */
@@ -103,8 +110,18 @@ export const retrievalTracesTable = pgTable(
     verificationStatesUsed: text("verification_states_used").array(),
     /** Number of candidate chunks not included because they exceeded the context budget. */
     omittedDueToBudget: integer("omitted_due_to_budget"),
+    /** Number of candidates excluded because their final score was below the minimum threshold. */
+    resultsExcludedBelowThreshold: integer("results_excluded_below_threshold"),
+    /** Number of near-duplicate chunks removed during diversity enforcement. */
+    duplicatesRemoved: integer("duplicates_removed"),
     /** Estimated total characters of knowledge content sent in this request. */
     contextCharEstimate: integer("context_char_estimate"),
+    /** True if the retrieval engine found no matching results above threshold. */
+    noResult: boolean("no_result"),
+    /** True if retrieved sources contain potential evidential conflict. */
+    conflictDetected: boolean("conflict_detected"),
+    /** Search latency in milliseconds. */
+    searchLatencyMs: integer("search_latency_ms"),
 
     retrievedAt: timestamp("retrieved_at", { withTimezone: true }).notNull().defaultNow(),
   },

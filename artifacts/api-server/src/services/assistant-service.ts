@@ -389,6 +389,9 @@ export async function streamAssistantResponse(input: StreamMessageInput): Promis
       excludedSources: retrievalResult.excludedSources,
       // Search metadata
       searchQuery: userContent,
+      normalisedQuery: searchOutput?.normalisedQuery ?? null,
+      vocabExpansions: searchOutput?.vocabExpansions ?? null,
+      retrievalPolicyVersion: searchOutput?.retrievalPolicyVersion ?? null,
       searchVersion: searchOutput?.searchVersion ?? SEARCH_VERSION,
       chunkPolicyVersion: CHUNK_POLICY_VERSION,
       candidateCount: searchOutput?.candidateCount ?? 0,
@@ -401,7 +404,12 @@ export async function streamAssistantResponse(input: StreamMessageInput): Promis
         ? [...new Set(searchOutput.results.map((r) => r.verificationState))]
         : null,
       omittedDueToBudget: searchOutput?.omittedDueToBudget ?? 0,
+      resultsExcludedBelowThreshold: searchOutput?.resultsExcludedBelowThreshold ?? null,
+      duplicatesRemoved: searchOutput?.duplicatesRemoved ?? null,
       contextCharEstimate: knowledgeCharsIncluded,
+      noResult: searchOutput?.noResult ?? null,
+      conflictDetected: searchOutput?.conflictDetected ?? null,
+      searchLatencyMs: searchOutput?.searchLatencyMs ?? null,
     }).catch((err) => {
       // Non-fatal — log but do not fail the response
       logger.error({ err, conversationId: conversation.id }, "assistant-service: failed to persist retrieval trace");

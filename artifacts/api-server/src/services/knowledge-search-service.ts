@@ -5,47 +5,49 @@
  * The routing decision is applied BEFORE search, not after.
  *
  * Search pipeline:
- *  1. Build query from user request (+ optional context enrichment)
- *  2. Restrict to permitted asset IDs and partitions (from routing decision)
- *  3. Apply sensitivity ceiling filter
- *  4. PostgreSQL full-text search (tsvector + tsquery)
- *  5. Hybrid scoring:
+ *  1. Build query from user request
+ *  2. Apply governed vocabulary expansion (acronyms, product names, synonyms)
+ *  3. Restrict to permitted asset IDs and partitions (from routing decision)
+ *  4. Apply sensitivity ceiling filter
+ *  5. PostgreSQL full-text search (tsvector + tsquery)
+ *  6. Hybrid scoring:
  *       - FTS rank (ts_rank)
  *       - Heading/title match boost
  *       - Tag match boost
  *       - Evidence tier weight
  *       - Verification state weight
- *       - Duplicate penalty (identical headingPath within results)
- *  6. Apply context budget (chars) and max result count
- *  7. Return scored results with provenance metadata
+ *       - Near-duplicate heading path penalty
+ *  7. Apply MIN_FINAL_SCORE threshold — exclude weak or irrelevant results
+ *  8. Apply diversity: MAX_CHUNKS_PER_ASSET cap and MAX_ASSET_FRACTION cap
+ *  9. Apply context budget (chars) and max result count
+ * 10. Detect evidential conflicts in result set
+ * 11. Safe tag-based fallback ONLY if FTS + vocab expansion find nothing
+ * 12. Return scored results with full provenance metadata
  *
- * The service is deterministic and testable without calling an LLM.
+ * The unsafe evidence-tier fallback (returning unrelated authoritative chunks)
+ * has been removed. No-match queries return an empty result with noResult:true.
  *
  * Search version: retrieval-v1
  * Chunk policy version: chunk-v1
- *
- * Vector search: pgvector extension is installed but not used in v1 (no embedding
- * provider configured). Column exists for future hybrid search enhancement.
+ * Retrieval policy version: retrieval-policy-v1.1
  */
 
-import { inArray, and, or, eq, sql } from "drizzle-orm";
+import { inArray, and, sql } from "drizzle-orm";
 import { db } from "@workspace/db";
 import { knowledgeChunksTable } from "@workspace/db/schema";
 import type { ManifestAsset } from "../lib/knowledge-manifest";
 import { CHUNK_POLICY_VERSION } from "./knowledge-chunking-service";
+import {
+  RETRIEVAL_POLICY_VERSION,
+  RETRIEVAL_THRESHOLDS,
+  DOMAIN_VOCABULARY,
+  SAFE_FALLBACK_TAG_MAP,
+  SCORING_WEIGHTS,
+} from "../config/retrieval-policy";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 export const SEARCH_VERSION = "retrieval-v1";
-
-/** Maximum number of chunks to return before budget filtering. */
-const MAX_CANDIDATES = 20;
-/** Maximum number of chunks to include in context after budget filtering. */
-const DEFAULT_MAX_RESULTS = 10;
-/** Minimum FTS score to include a result (filters out near-zero matches). */
-const MIN_FTS_SCORE = 0.0001;
-/** Characters per approximate token. */
-const CHARS_PER_TOKEN = 4;
 
 // ── Sensitivity level ordering ────────────────────────────────────────────────
 
@@ -62,22 +64,6 @@ function sensitivityAllowed(chunkLevel: string, ceiling: string): boolean {
   return chunkOrd <= ceilingOrd;
 }
 
-// ── Evidence tier scoring ─────────────────────────────────────────────────────
-
-const EVIDENCE_TIER_WEIGHT: Record<string, number> = {
-  governed: 0.25,
-  established: 0.20,
-  current: 0.10,
-  observed: 0.05,
-  unverified: 0.0,
-};
-
-const VERIFICATION_STATE_WEIGHT: Record<string, number> = {
-  approved: 0.15,
-  draft: 0.05,
-  superseded: -0.10,
-};
-
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 export interface SearchInput {
@@ -91,9 +77,9 @@ export interface SearchInput {
   sensitivityCeiling: string;
   /** Asset manifest records keyed by ID — for title/tag enrichment. */
   permittedAssets: ManifestAsset[];
-  /** Max chunks to return (default 10). */
+  /** Max chunks to return (default from policy). */
   maxResults?: number;
-  /** Character budget for knowledge content (default 25000). */
+  /** Character budget for knowledge content (default from policy). */
   charBudget?: number;
   /** Optional conversation type for context enrichment. */
   conversationType?: string | null;
@@ -129,70 +115,94 @@ export interface SearchResult {
   tags: string[];
 }
 
+export interface ConflictRecord {
+  headingTopic: string;
+  assetIds: string[];
+  evidenceTiers: string[];
+}
+
 export interface SearchOutput {
+  /** Original user query. */
   query: string;
+  /** Query after vocabulary expansion. */
+  normalisedQuery: string;
+  /** Fully enriched query used for FTS (includes lens context signals). */
   enrichedQuery: string;
+  /** Labels of vocabulary entries applied. */
+  vocabExpansions: string[];
   results: SearchResult[];
   excluded: Array<{ assetId: string; reason: string }>;
   searchVersion: string;
   chunkPolicyVersion: string;
+  retrievalPolicyVersion: string;
   candidateCount: number;
   omittedDueToBudget: number;
+  /** Candidates excluded because their hybrid score was below MIN_FINAL_SCORE. */
+  resultsExcludedBelowThreshold: number;
+  /** Near-duplicates removed during diversity enforcement. */
+  duplicatesRemoved: number;
   totalCharsSelected: number;
+  /** True when no results met the relevance threshold. */
+  noResult: boolean;
+  /** True when retrieved sources contain potential evidential conflict. */
+  conflictDetected: boolean;
+  /** Brief description of conflict(s) — for prompt assembly instruction only. */
+  conflictDescription?: string;
+  /** Conflicts detected (for trace logging). */
+  conflicts: ConflictRecord[];
+  /** Search latency in milliseconds. */
+  searchLatencyMs: number;
 }
 
-// ── Query enrichment ──────────────────────────────────────────────────────────
+// ── Query normalisation and vocabulary expansion ──────────────────────────────
+
+interface NormalisationResult {
+  normalisedQuery: string;
+  enrichedQuery: string;
+  appliedExpansions: string[];
+}
 
 /**
- * Deterministically enrich the search query with context signals.
- * No LLM — only keyword extraction and normalisation.
+ * Apply the governed domain vocabulary to the query.
  *
- * Enrichment signals (v1):
- *  - Normalise GRC acronyms to their expanded form (improves recall)
- *  - No contamination of Analyst queries with excluded commercial context
+ * Expansions are ADDITIVE — the original term is preserved so FTS can match
+ * it directly. Expansions add additional tokens that improve recall.
+ *
+ * No LLM — fully deterministic.
  */
-function enrichQuery(userQuery: string, lens?: string, conversationType?: string | null): string {
-  let enriched = userQuery.trim();
+function normaliseQuery(userQuery: string, _lens?: string): NormalisationResult {
+  let normalised = userQuery.trim();
+  const appliedExpansions: string[] = [];
+  const appendedTokens: string[] = [];
 
-  // Acronym expansion for known domain terms — improves recall
-  const acronymExpansions: Array<[RegExp, string]> = [
-    [/\bGRC\b/g, "GRC governance risk compliance"],
-    [/\bTPRM\b/g, "TPRM third party risk management vendor risk"],
-    [/\bRFP\b/g, "RFP request for proposal"],
-    [/\bRFI\b/g, "RFI request for information"],
-    [/\bSoW\b/gi, "SoW statement of work"],
-    [/\bIAM\b/g, "IAM identity access management"],
-    [/\bSOC\s*2\b/gi, "SOC2 compliance certification"],
-    [/\bISO\s*27001\b/gi, "ISO27001 information security management"],
-    [/\bDORA\b/g, "DORA digital operational resilience act"],
-    [/\bNIS2\b/g, "NIS2 network information systems directive"],
-    [/\bBCP\b/g, "BCP business continuity planning"],
-    [/\bBCM\b/g, "BCM business continuity management"],
-  ];
-
-  for (const [pattern, expansion] of acronymExpansions) {
-    if (pattern.test(enriched)) {
-      pattern.lastIndex = 0; // reset stateful regex
-      enriched = enriched + " " + expansion;
+  for (const entry of DOMAIN_VOCABULARY) {
+    entry.term.lastIndex = 0;
+    if (entry.term.test(normalised)) {
+      appendedTokens.push(entry.expansion);
+      appliedExpansions.push(entry.label);
     }
   }
 
-  return enriched.trim();
+  const enriched = appendedTokens.length > 0
+    ? `${normalised} ${appendedTokens.join(" ")}`
+    : normalised;
+
+  return {
+    normalisedQuery: normalised,
+    enrichedQuery: enriched.trim(),
+    appliedExpansions,
+  };
 }
 
 // ── Heading match boost ───────────────────────────────────────────────────────
 
-/**
- * Boost a chunk if the search query terms appear in its heading path.
- * Heading matches indicate high topic relevance.
- */
 function computeHeadingBoost(headingPath: string, queryTerms: string[]): number {
   const lower = headingPath.toLowerCase();
   let matches = 0;
   for (const term of queryTerms) {
     if (term.length >= 3 && lower.includes(term.toLowerCase())) matches++;
   }
-  return Math.min(0.3, matches * 0.1);
+  return Math.min(SCORING_WEIGHTS.HEADING_BOOST_MAX, matches * SCORING_WEIGHTS.HEADING_BOOST_PER_TERM);
 }
 
 // ── Tag boost ─────────────────────────────────────────────────────────────────
@@ -205,7 +215,122 @@ function computeTagBoost(chunkTags: string[], queryTerms: string[]): number {
       matches++;
     }
   }
-  return Math.min(0.2, matches * 0.08);
+  return Math.min(SCORING_WEIGHTS.TAG_BOOST_MAX, matches * SCORING_WEIGHTS.TAG_BOOST_PER_TAG);
+}
+
+// ── Conflict detection ────────────────────────────────────────────────────────
+
+/**
+ * Detect potential evidential conflict in the result set.
+ *
+ * Conflict is flagged when two or more chunks:
+ *  - Share the same top-level heading topic (first segment of headingPath), AND
+ *  - Come from different assets, AND
+ *  - Have different evidence tiers (indicating different authority levels)
+ *
+ * The retrieval engine does not resolve conflicts — it preserves both fragments
+ * and flags the result set so prompt assembly can instruct the model appropriately.
+ */
+function detectConflicts(results: SearchResult[]): ConflictRecord[] {
+  const topicMap = new Map<string, { assetIds: Set<string>; evidenceTiers: Set<string> }>();
+
+  for (const r of results) {
+    // Extract top-level heading (first ` > ` segment)
+    const topic = r.headingPath.split(" > ")[0]?.trim() ?? r.headingPath;
+    if (!topic) continue;
+
+    const entry = topicMap.get(topic) ?? { assetIds: new Set(), evidenceTiers: new Set() };
+    entry.assetIds.add(r.assetId);
+    entry.evidenceTiers.add(r.evidenceTier);
+    topicMap.set(topic, entry);
+  }
+
+  const conflicts: ConflictRecord[] = [];
+  for (const [topic, { assetIds, evidenceTiers }] of topicMap.entries()) {
+    // Conflict: multiple sources for the same topic with different evidence tiers
+    if (assetIds.size > 1 && evidenceTiers.size > 1) {
+      conflicts.push({
+        headingTopic: topic,
+        assetIds: [...assetIds],
+        evidenceTiers: [...evidenceTiers],
+      });
+    }
+  }
+
+  return conflicts;
+}
+
+// ── Safe tag-based fallback ───────────────────────────────────────────────────
+
+/**
+ * Safe fallback when FTS finds no results.
+ *
+ * Maps query keywords to governed tags from SAFE_FALLBACK_TAG_MAP.
+ * Only retrieves chunks actually tagged for the queried domain — never
+ * returns unrelated high-authority content.
+ *
+ * This is intentionally conservative: if the query cannot be matched to any
+ * known domain tag, it returns empty rather than fabricating relevance.
+ */
+async function safeTagFallback(
+  userQuery: string,
+  permittedAssetIds: string[],
+  permittedPartitions: string[],
+  maxResults: number,
+): Promise<Array<{
+  id: string;
+  assetId: string;
+  chunkIndex: number;
+  headingPath: string;
+  content: string;
+  tokenEstimate: number;
+  partition: string;
+  sensitivity: string;
+  verificationState: string;
+  evidenceTier: string;
+  tags: string[];
+  ftsRank: number;
+}>> {
+  const queryLower = userQuery.toLowerCase();
+  const matchedTags = new Set<string>();
+
+  for (const [keyword, tags] of Object.entries(SAFE_FALLBACK_TAG_MAP)) {
+    if (queryLower.includes(keyword)) {
+      for (const tag of tags) matchedTags.add(tag);
+    }
+  }
+
+  if (matchedTags.size === 0) {
+    return [];
+  }
+
+  const tagArray = [...matchedTags];
+
+  const rows = await db
+    .select({
+      id: knowledgeChunksTable.id,
+      assetId: knowledgeChunksTable.assetId,
+      chunkIndex: knowledgeChunksTable.chunkIndex,
+      headingPath: knowledgeChunksTable.headingPath,
+      content: knowledgeChunksTable.content,
+      tokenEstimate: knowledgeChunksTable.tokenEstimate,
+      partition: knowledgeChunksTable.partition,
+      sensitivity: knowledgeChunksTable.sensitivity,
+      verificationState: knowledgeChunksTable.verificationState,
+      evidenceTier: knowledgeChunksTable.evidenceTier,
+      tags: knowledgeChunksTable.tags,
+    })
+    .from(knowledgeChunksTable)
+    .where(
+      and(
+        inArray(knowledgeChunksTable.assetId, permittedAssetIds),
+        inArray(knowledgeChunksTable.partition, permittedPartitions),
+        sql`${knowledgeChunksTable.tags} && ${tagArray}`,
+      ),
+    )
+    .limit(maxResults);
+
+  return rows.map((r) => ({ ...r, ftsRank: 0 }));
 }
 
 // ── Main search function ──────────────────────────────────────────────────────
@@ -215,17 +340,22 @@ function computeTagBoost(chunkTags: string[], queryTerms: string[]): number {
  *
  * Security invariant: only chunks belonging to permittedAssetIds and
  * permittedPartitions are ever evaluated. Routing occurs before search.
+ *
+ * No-match policy: if neither FTS nor safe tag fallback finds relevant content,
+ * returns an empty result set with noResult:true. The calling service must
+ * NOT fall back to arbitrary high-authority chunks.
  */
 export async function searchKnowledge(input: SearchInput): Promise<SearchOutput> {
+  const startMs = Date.now();
+
   const {
     userQuery,
     permittedAssetIds,
     permittedPartitions,
     sensitivityCeiling,
     permittedAssets,
-    maxResults = DEFAULT_MAX_RESULTS,
-    charBudget = 25_000,
-    conversationType,
+    maxResults = RETRIEVAL_THRESHOLDS.MAX_RESULTS,
+    charBudget = RETRIEVAL_THRESHOLDS.MAX_CONTEXT_CHARS,
     activeLens,
   } = input;
 
@@ -234,29 +364,19 @@ export async function searchKnowledge(input: SearchInput): Promise<SearchOutput>
   // ── Guard: empty corpus ────────────────────────────────────────────────────
 
   if (permittedAssetIds.length === 0) {
-    return {
-      query: userQuery,
-      enrichedQuery: userQuery,
-      results: [],
-      excluded,
-      searchVersion: SEARCH_VERSION,
-      chunkPolicyVersion: CHUNK_POLICY_VERSION,
-      candidateCount: 0,
-      omittedDueToBudget: 0,
-      totalCharsSelected: 0,
-    };
+    return emptyOutput(userQuery, userQuery, [], startMs);
   }
 
-  // ── Query enrichment ───────────────────────────────────────────────────────
+  // ── Vocabulary normalisation ───────────────────────────────────────────────
 
-  const enrichedQuery = enrichQuery(userQuery, activeLens, conversationType);
+  const { normalisedQuery, enrichedQuery, appliedExpansions } = normaliseQuery(userQuery, activeLens);
 
   // Build query terms for heading/tag boosting
   const queryTerms = enrichedQuery
     .toLowerCase()
     .split(/\s+/)
     .filter((t) => t.length >= 3)
-    .slice(0, 20);
+    .slice(0, 30);
 
   // ── Build asset title map ──────────────────────────────────────────────────
 
@@ -265,16 +385,9 @@ export async function searchKnowledge(input: SearchInput): Promise<SearchOutput>
     assetTitleMap[a.id] = a.title;
   }
 
-  // ── FTS query construction ─────────────────────────────────────────────────
-  // Use plainto_tsquery which handles natural language, multi-word, and
-  // stopword removal. We also try websearch_to_tsquery for better phrase support.
-  // If the query produces no FTS results, fall back to a LIKE-based retrieval
-  // of the top chunks by evidence tier.
+  // ── FTS search ─────────────────────────────────────────────────────────────
 
-  // Build the tsquery — plainto_tsquery handles multi-word gracefully
-  const tsQuery = enrichedQuery.replace(/'/g, "''"); // sanitise single quotes
-
-  // ── Execute FTS search ─────────────────────────────────────────────────────
+  const tsQuery = enrichedQuery.replace(/'/g, "''");
 
   let rows: Array<{
     id: string;
@@ -290,6 +403,8 @@ export async function searchKnowledge(input: SearchInput): Promise<SearchOutput>
     tags: string[];
     ftsRank: number;
   }> = [];
+
+  let usedTagFallback = false;
 
   try {
     rows = await db.execute(sql`
@@ -317,44 +432,41 @@ export async function searchKnowledge(input: SearchInput): Promise<SearchOutput>
         AND to_tsvector('english', coalesce(heading_path, '') || ' ' || content)
             @@ plainto_tsquery('english', ${tsQuery})
       ORDER BY "ftsRank" DESC
-      LIMIT ${MAX_CANDIDATES}
+      LIMIT ${RETRIEVAL_THRESHOLDS.MAX_CANDIDATES}
     `) as unknown as typeof rows;
   } catch {
-    // FTS index might not be ready — fall through to fallback
+    // FTS index not ready — attempt safe tag fallback below
   }
 
-  // ── Fallback: if FTS returns nothing, include top chunks by evidence tier ──
+  // ── Safe tag-based fallback (not arbitrary high-authority chunks) ──────────
+  //
+  // Only used when FTS finds nothing. Maps query keywords to governed content
+  // tags — returns empty if no tag match exists.
 
-  let usedFallback = false;
   if (rows.length === 0) {
-    usedFallback = true;
-    const fallbackRows = await db
-      .select({
-        id: knowledgeChunksTable.id,
-        assetId: knowledgeChunksTable.assetId,
-        chunkIndex: knowledgeChunksTable.chunkIndex,
-        headingPath: knowledgeChunksTable.headingPath,
-        content: knowledgeChunksTable.content,
-        tokenEstimate: knowledgeChunksTable.tokenEstimate,
-        partition: knowledgeChunksTable.partition,
-        sensitivity: knowledgeChunksTable.sensitivity,
-        verificationState: knowledgeChunksTable.verificationState,
-        evidenceTier: knowledgeChunksTable.evidenceTier,
-        tags: knowledgeChunksTable.tags,
-      })
-      .from(knowledgeChunksTable)
-      .where(
-        and(
-          inArray(knowledgeChunksTable.assetId, permittedAssetIds),
-          inArray(knowledgeChunksTable.partition, permittedPartitions),
-        ),
-      )
-      .limit(maxResults);
-
-    rows = fallbackRows.map((r) => ({ ...r, ftsRank: 0 }));
+    try {
+      rows = await safeTagFallback(
+        normalisedQuery,
+        permittedAssetIds,
+        permittedPartitions,
+        RETRIEVAL_THRESHOLDS.MAX_CANDIDATES,
+      );
+      usedTagFallback = rows.length > 0;
+    } catch {
+      rows = [];
+    }
   }
 
   const candidateCount = rows.length;
+
+  // If nothing found at all — return empty, record no-result
+  if (candidateCount === 0) {
+    return {
+      ...emptyOutput(userQuery, normalisedQuery, appliedExpansions, startMs),
+      enrichedQuery,
+      noResult: true,
+    };
+  }
 
   // ── Apply sensitivity ceiling ──────────────────────────────────────────────
 
@@ -369,9 +481,10 @@ export async function searchKnowledge(input: SearchInput): Promise<SearchOutput>
     return true;
   });
 
-  // ── Hybrid scoring ────────────────────────────────────────────────────────
+  // ── Hybrid scoring ─────────────────────────────────────────────────────────
 
   const seenHeadingPaths = new Set<string>();
+  let duplicatesRemoved = 0;
 
   const scored: SearchResult[] = sensitivityFiltered.map((r) => {
     const title = assetTitleMap[r.assetId] ?? r.assetId;
@@ -379,14 +492,17 @@ export async function searchKnowledge(input: SearchInput): Promise<SearchOutput>
 
     const headingBoost = computeHeadingBoost(r.headingPath, queryTerms);
     const tagBoost = computeTagBoost(r.tags, queryTerms);
-    const evidenceTierWeight = EVIDENCE_TIER_WEIGHT[r.evidenceTier] ?? 0;
-    const verificationWeight = VERIFICATION_STATE_WEIGHT[r.verificationState] ?? 0;
+    const evidenceTierWeight = SCORING_WEIGHTS.EVIDENCE_TIER[r.evidenceTier] ?? 0;
+    const verificationWeight = SCORING_WEIGHTS.VERIFICATION_STATE[r.verificationState] ?? 0;
 
-    // Duplicate penalty: same headingPath already seen in results
-    const duplicatePenalty = seenHeadingPaths.has(r.headingPath) ? -0.15 : 0;
+    // Near-duplicate penalty: same headingPath already seen in result candidates
+    let duplicatePenalty = 0;
+    if (seenHeadingPaths.has(r.headingPath)) {
+      duplicatePenalty = SCORING_WEIGHTS.DUPLICATE_HEADING_PENALTY;
+      duplicatesRemoved++;
+    }
     seenHeadingPaths.add(r.headingPath);
 
-    // Filter below minimum FTS threshold (but allow fallback results)
     const total = ftsRank + headingBoost + tagBoost + evidenceTierWeight + verificationWeight + duplicatePenalty;
 
     return {
@@ -415,43 +531,156 @@ export async function searchKnowledge(input: SearchInput): Promise<SearchOutput>
     };
   });
 
-  // Sort by score descending (FTS already ordered, but hybrid scoring may reorder)
+  // Sort by score descending
   scored.sort((a, b) => b.score - a.score);
 
-  // Remove very weak results (only when FTS was used — not fallback)
-  const filtered = usedFallback
-    ? scored
-    : scored.filter((r) => r.score > 0 || r.scoreBreakdown.ftsRank > MIN_FTS_SCORE);
+  // ── MIN_FINAL_SCORE threshold ──────────────────────────────────────────────
+  //
+  // Tag fallback results bypass the FTS score gate (ftsRank = 0) but still
+  // need a minimum metadata-derived score to be included.
+  // FTS results must also clear the minimum threshold.
 
-  // ── Context budget enforcement ────────────────────────────────────────────
+  let resultsExcludedBelowThreshold = 0;
+  const aboveThreshold = scored.filter((r) => {
+    const passes = usedTagFallback
+      ? r.score >= RETRIEVAL_THRESHOLDS.MIN_FINAL_SCORE
+      : r.scoreBreakdown.ftsRank >= RETRIEVAL_THRESHOLDS.MIN_FTS_SCORE &&
+        r.score >= RETRIEVAL_THRESHOLDS.MIN_FINAL_SCORE;
+    if (!passes) resultsExcludedBelowThreshold++;
+    return passes;
+  });
+
+  if (aboveThreshold.length === 0) {
+    return {
+      ...emptyOutput(userQuery, normalisedQuery, appliedExpansions, startMs),
+      enrichedQuery,
+      noResult: true,
+      candidateCount,
+      resultsExcludedBelowThreshold,
+      duplicatesRemoved,
+      excluded,
+      searchLatencyMs: Date.now() - startMs,
+    };
+  }
+
+  // ── Diversity enforcement ─────────────────────────────────────────────────
+  //
+  // MAX_CHUNKS_PER_ASSET: prevent one large asset from dominating context.
+  // MAX_ASSET_FRACTION: cap the proportion of context chars from one asset.
+  //
+  // Both caps are applied during result selection below (budget phase).
+
+  const assetChunkCounts: Record<string, number> = {};
+
+  // ── Context budget + diversity selection ─────────────────────────────────
 
   const selected: SearchResult[] = [];
   let totalChars = 0;
-  let omitted = 0;
+  let omittedDueToBudget = 0;
 
-  for (const result of filtered) {
+  for (const result of aboveThreshold) {
     if (selected.length >= maxResults) {
-      omitted++;
+      omittedDueToBudget++;
       continue;
     }
+
+    // Per-asset chunk cap
+    const assetChunksUsed = assetChunkCounts[result.assetId] ?? 0;
+    if (assetChunksUsed >= RETRIEVAL_THRESHOLDS.MAX_CHUNKS_PER_ASSET) {
+      omittedDueToBudget++;
+      continue;
+    }
+
+    // Asset fraction cap (applied only when we have some context already)
+    if (totalChars > 0) {
+      const projectedAssetChars =
+        selected
+          .filter((s) => s.assetId === result.assetId)
+          .reduce((sum, s) => sum + s.content.length, 0) + result.content.length;
+      const projectedTotal = totalChars + result.content.length;
+      if (
+        projectedTotal > 0 &&
+        projectedAssetChars / projectedTotal > RETRIEVAL_THRESHOLDS.MAX_ASSET_FRACTION
+      ) {
+        omittedDueToBudget++;
+        continue;
+      }
+    }
+
+    // Character budget
     if (totalChars + result.content.length > charBudget) {
-      omitted++;
+      omittedDueToBudget++;
       continue;
     }
+
     selected.push(result);
     totalChars += result.content.length;
+    assetChunkCounts[result.assetId] = (assetChunkCounts[result.assetId] ?? 0) + 1;
+  }
+
+  // ── Conflict detection ────────────────────────────────────────────────────
+
+  const conflicts = detectConflicts(selected);
+  const conflictDetected = conflicts.length > 0;
+  let conflictDescription: string | undefined;
+
+  if (conflictDetected) {
+    const topics = conflicts.map((c) => c.headingTopic).join("; ");
+    conflictDescription =
+      `Multiple sources with different authority levels address: ${topics}. ` +
+      `Distinguish clearly between authoritative fact, current operational understanding, and unverified claims.`;
   }
 
   return {
     query: userQuery,
+    normalisedQuery,
     enrichedQuery,
+    vocabExpansions: appliedExpansions,
     results: selected,
     excluded,
     searchVersion: SEARCH_VERSION,
     chunkPolicyVersion: CHUNK_POLICY_VERSION,
+    retrievalPolicyVersion: RETRIEVAL_POLICY_VERSION,
     candidateCount,
-    omittedDueToBudget: omitted,
+    omittedDueToBudget,
+    resultsExcludedBelowThreshold,
+    duplicatesRemoved,
     totalCharsSelected: totalChars,
+    noResult: false,
+    conflictDetected,
+    conflictDescription,
+    conflicts,
+    searchLatencyMs: Date.now() - startMs,
+  };
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+function emptyOutput(
+  query: string,
+  normalisedQuery: string,
+  vocabExpansions: string[],
+  startMs: number,
+): SearchOutput {
+  return {
+    query,
+    normalisedQuery,
+    enrichedQuery: normalisedQuery,
+    vocabExpansions,
+    results: [],
+    excluded: [],
+    searchVersion: SEARCH_VERSION,
+    chunkPolicyVersion: CHUNK_POLICY_VERSION,
+    retrievalPolicyVersion: RETRIEVAL_POLICY_VERSION,
+    candidateCount: 0,
+    omittedDueToBudget: 0,
+    resultsExcludedBelowThreshold: 0,
+    duplicatesRemoved: 0,
+    totalCharsSelected: 0,
+    noResult: true,
+    conflictDetected: false,
+    conflicts: [],
+    searchLatencyMs: Date.now() - startMs,
   };
 }
 

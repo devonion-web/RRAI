@@ -38,6 +38,12 @@ export interface CreateTraceInput {
   }>;
   // ── Search metadata (optional — present only when retrieval engine is used) ─
   searchQuery?: string | null;
+  /** Query after vocabulary normalisation. */
+  normalisedQuery?: string | null;
+  /** Labels of vocabulary entries applied. */
+  vocabExpansions?: string[] | null;
+  /** Retrieval policy version in effect. */
+  retrievalPolicyVersion?: string | null;
   searchVersion?: string | null;
   chunkPolicyVersion?: string | null;
   candidateCount?: number | null;
@@ -46,7 +52,17 @@ export interface CreateTraceInput {
   evidenceTiersUsed?: string[] | null;
   verificationStatesUsed?: string[] | null;
   omittedDueToBudget?: number | null;
+  /** Number of candidates excluded below the minimum score threshold. */
+  resultsExcludedBelowThreshold?: number | null;
+  /** Number of near-duplicate chunks removed. */
+  duplicatesRemoved?: number | null;
   contextCharEstimate?: number | null;
+  /** True if the retrieval engine found no results above threshold. */
+  noResult?: boolean | null;
+  /** True if retrieved sources contain potential evidential conflict. */
+  conflictDetected?: boolean | null;
+  /** Search latency in milliseconds. */
+  searchLatencyMs?: number | null;
 }
 
 /** Create a retrieval trace record. Append-only — never updates existing records. */
@@ -66,6 +82,9 @@ export async function createTrace(input: CreateTraceInput) {
       excludedSources: input.excludedSources,
       // Search metadata
       searchQuery: input.searchQuery ?? null,
+      normalisedQuery: input.normalisedQuery ?? null,
+      vocabExpansions: input.vocabExpansions ?? null,
+      retrievalPolicyVersion: input.retrievalPolicyVersion ?? null,
       searchVersion: input.searchVersion ?? null,
       chunkPolicyVersion: input.chunkPolicyVersion ?? null,
       candidateCount: input.candidateCount ?? null,
@@ -74,7 +93,12 @@ export async function createTrace(input: CreateTraceInput) {
       evidenceTiersUsed: input.evidenceTiersUsed ?? null,
       verificationStatesUsed: input.verificationStatesUsed ?? null,
       omittedDueToBudget: input.omittedDueToBudget ?? null,
+      resultsExcludedBelowThreshold: input.resultsExcludedBelowThreshold ?? null,
+      duplicatesRemoved: input.duplicatesRemoved ?? null,
       contextCharEstimate: input.contextCharEstimate ?? null,
+      noResult: input.noResult ?? null,
+      conflictDetected: input.conflictDetected ?? null,
+      searchLatencyMs: input.searchLatencyMs ?? null,
     })
     .returning();
   return row;

@@ -6,6 +6,7 @@
 - [OpenAPI YAML structure](openapi-yaml-structure.md) — components can only have one `parameters:`, `schemas:`, and `responses:` block; duplicate keys cause orval to silently fail with "Failed to resolve input".
 - [Integration test runner](integration-test-runner.md) — use `node --test --import tsx/esm <file.ts>` for TS tests; plain `--experimental-strip-types` fails on directory imports in workspace libs.
 - [Org membership bootstrap](org-membership-bootstrap.md) — RRAI_ORG_OPEN=true / RRAI_ORG_DOMAIN / RRAI_ADMIN_EMAILS control auto-grant on login; no env var = no auto-grant (user can log in but gets 403 on org-scoped routes).
+- [RAG Engine v1.1 retrieval hardening](rag-retrieval-v1-1.md) — retrieval-policy.ts is the single config source; no unsafe fallback; new trace columns; conflict detection; evaluation runner.
 - [Express 5 params typing](express5-params.md) — req.params["id"] is string | string[] in Express 5; use `String(Array.isArray(raw) ? raw[0] : raw ?? "")` pattern throughout routes.
 - [Conversation SSE streaming](conversation-sse-streaming.md) — SSE pipeline: persist user msg → create pending assistant msg → stream → finalise; context budget 60k chars; lens tone injected via system prompt; never expose raw provider errors.
 - [AR5 workspace home routing](ar5-workspace-home.md) — WorkspaceHome replaces RaiDashboard as default landing; activeConversation state in App.tsx routes to ConversationView; modules still accessible via activeModule state.
