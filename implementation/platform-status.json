@@ -1,0 +1,137 @@
+{
+  "git": {
+    "branch": "feature/development-orchestrator-foundation",
+    "commitHash": "88bccb1982b2a10ca9648c1e6b21103ef1ace13e",
+    "commitShort": "88bccb1",
+    "commitDate": "2026-07-15 15:11:12 +0000",
+    "commitMsg": "Improve platform status generation and validation processes",
+    "commitCount": "82",
+    "remoteUrl": "https://github.com/devonion-web/RRAI.git"
+  },
+  "health": [
+    {
+      "area": "Architecture",
+      "status": "Implemented",
+      "summary": "OIDC + PostgreSQL sessions + org membership + role enforcement",
+      "lastEvaluated": "2026-07-15 15:11:12 +0000"
+    },
+    {
+      "area": "Knowledge",
+      "status": "Implemented",
+      "summary": "13 assets, 186 chunks, RAG v1.1 — Recall@5 100.0%",
+      "lastEvaluated": "2026-07-15 15:11:12 +0000"
+    },
+    {
+      "area": "Database",
+      "status": "Implemented",
+      "summary": "21 tables across 6 schema files, Drizzle ORM",
+      "lastEvaluated": "2026-07-15 15:11:12 +0000"
+    },
+    {
+      "area": "API",
+      "status": "Partial",
+      "summary": "106 routes across 7 route files — no OpenAPI spec yet",
+      "lastEvaluated": "2026-07-15 15:11:12 +0000"
+    },
+    {
+      "area": "Testing",
+      "status": "Implemented",
+      "summary": "9 test files, last pass: 19/19",
+      "lastEvaluated": "2026-07-15 15:11:12 +0000"
+    },
+    {
+      "area": "Build",
+      "status": "Implemented",
+      "summary": "Zero TypeScript errors, CI pipeline present",
+      "lastEvaluated": "2026-07-15 15:11:12 +0000"
+    },
+    {
+      "area": "GitHub",
+      "status": "Not connected",
+      "summary": "Source-control overview not wired in Phase 1",
+      "lastEvaluated": "N/A"
+    }
+  ],
+  "counts": {
+    "tables": 21,
+    "routes": 106,
+    "knowledgeAssets": 13,
+    "testFiles": 9,
+    "evalCases": 53
+  },
+  "quality": {
+    "typescriptErrors": 0,
+    "lastTestPass": "19/19",
+    "recall5": "100.0%",
+    "top1": "77.4%"
+  },
+  "modules": [
+    {
+      "id": "delivery",
+      "title": "Delivery Specialist",
+      "status": "coming_soon"
+    },
+    {
+      "id": "development",
+      "title": "Development",
+      "status": "active"
+    },
+    {
+      "id": "knowledge",
+      "title": "Knowledge Specialist",
+      "status": "coming_soon"
+    },
+    {
+      "id": "logicgate",
+      "title": "LogicGate Specialist",
+      "status": "active"
+    },
+    {
+      "id": "marketing",
+      "title": "Marketing Specialist",
+      "status": "coming_soon"
+    },
+    {
+      "id": "proposal",
+      "title": "Proposal Specialist",
+      "status": "coming_soon"
+    },
+    {
+      "id": "rfp",
+      "title": "RFP Response Drafter",
+      "status": "active"
+    }
+  ],
+  "nextAction": {
+    "title": "Review 11 draft knowledge assets",
+    "reason": "Draft assets are excluded from full LLM supply and reduce retrieval accuracy. Expert review and approval directly improves RAG quality.",
+    "priority": "high",
+    "effort": "1–2 days"
+  },
+  "ci": {
+    "present": true,
+    "steps": [
+      "Checkout",
+      "Setup Node.js",
+      "Setup pnpm",
+      "Get pnpm store directory",
+      "Cache pnpm store",
+      "Install dependencies",
+      "Code generation (OpenAPI → client + Zod schemas)",
+      "TypeScript typecheck (zero errors required)",
+      "Platform status check (documents must be current)",
+      "Run tests",
+      "Production build"
+    ]
+  },
+  "services": [
+    "assistant-service.ts",
+    "context-retrieval-service.ts",
+    "conversations-service.ts",
+    "knowledge-chunking-service.ts",
+    "knowledge-indexing-service.ts",
+    "knowledge-search-service.ts",
+    "lens-routing-service.ts",
+    "opportunities-service.ts"
+  ]
+}

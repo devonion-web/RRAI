@@ -106,6 +106,60 @@ export async function createApproval(data: InsertApproval): Promise<Approval> {
   return rows[0];
 }
 
+// ── Activity timeline ─────────────────────────────────────────────────────────
+
+export type ActivityEvent = {
+  id: string;
+  type: string;
+  title: string;
+  description: string;
+  timestamp: string;
+  taskId?: string | null;
+  actorLabel?: string;
+};
+
+/**
+ * Returns a merged, timestamp-sorted activity feed from development tasks and
+ * audit events. Newest events first. Used by the Development Workspace dashboard.
+ */
+export async function listActivity(limit = 30): Promise<ActivityEvent[]> {
+  const [tasks, auditRows] = await Promise.all([
+    db
+      .select()
+      .from(developmentTasksTable)
+      .orderBy(desc(developmentTasksTable.updatedAt))
+      .limit(20),
+    db
+      .select()
+      .from(developmentAuditEventsTable)
+      .orderBy(desc(developmentAuditEventsTable.createdAt))
+      .limit(limit),
+  ]);
+
+  const taskEvents: ActivityEvent[] = tasks.map((t) => ({
+    id: `task-${t.id}`,
+    type: t.status === "proposed" ? "task_created" : "task_updated",
+    title: t.title,
+    description: `Status: ${t.status.replace(/_/g, " ")}`,
+    timestamp: (t.updatedAt ?? t.createdAt).toISOString(),
+    taskId: t.id,
+  }));
+
+  const auditEvents: ActivityEvent[] = auditRows.map((e) => ({
+    id: `audit-${e.id}`,
+    type: e.eventType,
+    title: `${e.entityType.replace(/_/g, " ")} — ${e.eventType.replace(/_/g, " ")}`,
+    description: e.actorLabel ?? "system",
+    timestamp: e.createdAt.toISOString(),
+    taskId: e.developmentTaskId ?? null,
+    actorLabel: e.actorLabel ?? undefined,
+  }));
+
+  return [...taskEvents, ...auditEvents]
+    .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
+    .slice(0, limit);
+}
+
 // ── Audit events (append-only — no update/delete functions are exposed) ───────
 
 export async function appendAuditEvent(event: {

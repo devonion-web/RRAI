@@ -1,6 +1,6 @@
 <!--
 GENERATED PLATFORM EVIDENCE
-Derived from repository inspection at commit c23c100 (branch: feature/development-orchestrator-foundation)
+Derived from repository inspection at commit 88bccb1 (branch: feature/development-orchestrator-foundation)
 Generator: pnpm --filter @workspace/scripts run generate:platform-status
 
 This document is NOT a governing architecture document.
@@ -23,10 +23,10 @@ Do not edit manually. Regenerate to update.
 | Platform | RRAI — Risk AI |
 | Owner | Risk Rising |
 | Branch | `feature/development-orchestrator-foundation` |
-| Commit | `c23c100` |
-| Commit Message | Add query client provider to enable data fetching |
-| Commit Date | 2026-07-15 14:53:15 +0000 |
-| Commit Count | 81 |
+| Commit | `88bccb1` |
+| Commit Message | Improve platform status generation and validation processes |
+| Commit Date | 2026-07-15 15:11:12 +0000 |
+| Commit Count | 82 |
 | Remote | https://github.com/devonion-web/RRAI.git |
 
 ---
@@ -125,8 +125,8 @@ Planned:
 | Area | Count |
 | --- | --- |
 | Database tables | 21 across 6 schema files |
-| API routes | 104 across 7 route files (all prefixed `/api`) |
-| Admin routes | 12 |
+| API routes | 106 across 7 route files (all prefixed `/api`) |
+| Admin routes | 14 |
 | Knowledge assets | 13 (12 active, 2 approved, 11 draft) |
 | Indexed chunks | 186 (last reindex) |
 | Test files | 9 |
@@ -163,4 +163,4 @@ Planned:
 
 ---
 
-_Derived from repository at commit `c23c100` on branch `feature/development-orchestrator-foundation`._
+_Derived from repository at commit `88bccb1` on branch `feature/development-orchestrator-foundation`._

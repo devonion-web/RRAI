@@ -1,6 +1,6 @@
 <!--
 GENERATED PLATFORM EVIDENCE
-Derived from repository inspection at commit c23c100 (branch: feature/development-orchestrator-foundation)
+Derived from repository inspection at commit 88bccb1 (branch: feature/development-orchestrator-foundation)
 Generator: pnpm --filter @workspace/scripts run generate:platform-status
 
 This document is NOT a governing architecture document.
@@ -25,7 +25,7 @@ Do not edit manually. Regenerate to update.
 | rai frontend build | ✅ Pass (requires PORT env — workflow-provided) |
 | CI pipeline | ✅ Present (`.github/workflows/ci.yml`) |
 | Branch | `feature/development-orchestrator-foundation` |
-| Commit | `c23c100` — Add query client provider to enable data fetching |
+| Commit | `88bccb1` — Improve platform status generation and validation processes |
 
 ---
 

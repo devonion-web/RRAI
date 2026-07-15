@@ -1,6 +1,6 @@
 <!--
 GENERATED PLATFORM EVIDENCE
-Derived from repository inspection at commit c23c100 (branch: feature/development-orchestrator-foundation)
+Derived from repository inspection at commit 88bccb1 (branch: feature/development-orchestrator-foundation)
 Generator: pnpm --filter @workspace/scripts run generate:platform-status
 
 This document is NOT a governing architecture document.

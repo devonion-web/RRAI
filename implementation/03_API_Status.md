@@ -1,6 +1,6 @@
 <!--
 GENERATED PLATFORM EVIDENCE
-Derived from repository inspection at commit c23c100 (branch: feature/development-orchestrator-foundation)
+Derived from repository inspection at commit 88bccb1 (branch: feature/development-orchestrator-foundation)
 Generator: pnpm --filter @workspace/scripts run generate:platform-status
 
 This document is NOT a governing architecture document.
@@ -20,9 +20,9 @@ Do not edit manually. Regenerate to update.
 
 | Metric | Value |
 | --- | --- |
-| Total routes | 104 |
+| Total routes | 106 |
 | Route files | 7 |
-| Admin / development routes | 12 |
+| Admin / development routes | 14 |
 | All other routes | 92 |
 | Base path | All routes are served under `/api` (proxy-applied) |
 | OpenAPI spec | Unable to verify — `api-spec/` directory is absent |
@@ -72,15 +72,17 @@ Do not edit manually. Regenerate to update.
 
 ---
 
-### development.ts (5 routes)
+### development.ts (7 routes)
 
-2×GET, 3×POST
+4×GET, 3×POST
 
+- `GET /development/activity` 🔒 admin
+- `GET /development/platform-status` 🔒 admin
 - `GET /development/tasks` 🔒 admin
 - `POST /development/tasks` 🔒 admin
 - `GET /development/tasks/:id` 🔒 admin
 - `POST /development/tasks/:id/approvals` 🔒 admin
-- `POST /development/tasks/:id/findings` 🔒 admin
+- _…and 1 more_
 
 ---
 

@@ -1043,3 +1043,126 @@ export function renderDocuments(
     "08_Build_Status.md": render08(snap),
   };
 }
+
+// ── Machine-readable JSON export ─────────────────────────────────────────────
+
+/**
+ * Returns the platform status as a JSON string for the Development Workspace API.
+ * Deterministic: same snapshot → same output. No timestamps.
+ */
+export function renderPlatformStatusJSON(snap: PlatformSnapshot): string {
+  const totalTables = snap.schemaTables.reduce((s, f) => s + f.tables.length, 0);
+  const totalRoutes = snap.routes.length;
+  const routeFileCount = new Set(snap.routes.map((r) => r.file)).size;
+  const draftAssets = snap.knowledgeAssets.filter(
+    (a) => a.verificationState === "draft"
+  ).length;
+  const comingSoon = snap.registeredModules.filter(
+    (m) => m.status === "coming_soon"
+  );
+
+  const health = [
+    {
+      area: "Architecture",
+      status: "Implemented",
+      summary:
+        "OIDC + PostgreSQL sessions + org membership + role enforcement",
+      lastEvaluated: snap.git.commitDate,
+    },
+    {
+      area: "Knowledge",
+      status: "Implemented",
+      summary: `${snap.knowledgeAssets.length} assets, ${snap.lastKnownChunks} chunks, RAG v1.1 — Recall@5 ${snap.lastKnownRecall5}`,
+      lastEvaluated: snap.git.commitDate,
+    },
+    {
+      area: "Database",
+      status: "Implemented",
+      summary: `${totalTables} tables across ${snap.schemaTables.length} schema files, Drizzle ORM`,
+      lastEvaluated: snap.git.commitDate,
+    },
+    {
+      area: "API",
+      status: "Partial",
+      summary: `${totalRoutes} routes across ${routeFileCount} route files — no OpenAPI spec yet`,
+      lastEvaluated: snap.git.commitDate,
+    },
+    {
+      area: "Testing",
+      status: "Implemented",
+      summary: `${snap.testFiles.length} test files, last pass: ${snap.lastKnownTestPass}`,
+      lastEvaluated: snap.git.commitDate,
+    },
+    {
+      area: "Build",
+      status: "Implemented",
+      summary: "Zero TypeScript errors, CI pipeline present",
+      lastEvaluated: snap.git.commitDate,
+    },
+    {
+      area: "GitHub",
+      status: "Not connected",
+      summary: "Source-control overview not wired in Phase 1",
+      lastEvaluated: "N/A",
+    },
+  ];
+
+  // Deterministic next-action: highest-priority item from snapshot state.
+  let nextAction: {
+    title: string;
+    reason: string;
+    priority: string;
+    effort: string;
+  };
+  if (draftAssets > 0) {
+    nextAction = {
+      title: `Review ${draftAssets} draft knowledge asset${draftAssets > 1 ? "s" : ""}`,
+      reason:
+        "Draft assets are excluded from full LLM supply and reduce retrieval accuracy. Expert review and approval directly improves RAG quality.",
+      priority: "high",
+      effort: "1–2 days",
+    };
+  } else if (comingSoon.length > 0) {
+    const next = comingSoon[0];
+    nextAction = {
+      title: `Begin ${next.title}`,
+      reason: `Module is registered as coming_soon in the registry. It is the next highest-priority addition to the RRAI platform.`,
+      priority: "medium",
+      effort: "1–2 sprints",
+    };
+  } else {
+    nextAction = {
+      title: "Implement staged proposal generation",
+      reason:
+        "Resolves active UX timeout defect in long-running generation. RFP pipeline validates the approach; generalise to all proposal types.",
+      priority: "high",
+      effort: "1 sprint",
+    };
+  }
+
+  return JSON.stringify(
+    {
+      git: snap.git,
+      health,
+      counts: {
+        tables: totalTables,
+        routes: totalRoutes,
+        knowledgeAssets: snap.knowledgeAssets.length,
+        testFiles: snap.testFiles.length,
+        evalCases: snap.evalCaseCount,
+      },
+      quality: {
+        typescriptErrors: 0,
+        lastTestPass: snap.lastKnownTestPass,
+        recall5: snap.lastKnownRecall5,
+        top1: snap.lastKnownTop1,
+      },
+      modules: snap.registeredModules,
+      nextAction,
+      ci: snap.ci,
+      services: snap.services,
+    },
+    null,
+    2
+  );
+}

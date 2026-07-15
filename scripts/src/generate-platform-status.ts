@@ -2,8 +2,9 @@
 /**
  * generate-platform-status.ts — Thin orchestrator.
  *
- * Gathers a deterministic snapshot of repository state and writes
- * governed status documents 00–08 to implementation/.
+ * Gathers a deterministic snapshot of repository state and writes:
+ *   - implementation/00–08_*.md  (governed status documents)
+ *   - implementation/platform-status.json  (machine-readable for the API)
  *
  * This script NEVER modifies implementation/99_Build_History.md.
  * Use `record:build-history` to append a history entry explicitly.
@@ -15,7 +16,7 @@
 import { existsSync, mkdirSync, writeFileSync } from "fs";
 import { join } from "path";
 import { gatherSnapshot, ROOT } from "./lib/gather.js";
-import { renderDocuments, STATUS_DOCUMENTS } from "./lib/render.js";
+import { renderDocuments, renderPlatformStatusJSON, STATUS_DOCUMENTS } from "./lib/render.js";
 
 const IMPL_DIR = join(ROOT, "implementation");
 if (!existsSync(IMPL_DIR)) mkdirSync(IMPL_DIR, { recursive: true });
@@ -37,6 +38,10 @@ for (const filename of STATUS_DOCUMENTS) {
   writeFileSync(join(IMPL_DIR, filename), docs[filename], "utf8");
   console.log(`  ✅ ${filename}`);
 }
+
+console.log("\n📦 Writing machine-readable JSON…");
+writeFileSync(join(IMPL_DIR, "platform-status.json"), renderPlatformStatusJSON(snap), "utf8");
+console.log(`  ✅ platform-status.json`);
 
 console.log(
   "\n✅ Done. 99_Build_History.md was not modified.\n" +

@@ -1,3 +1,5 @@
+import { existsSync, readFileSync } from "fs";
+import { resolve } from "path";
 import { Router, type IRouter, type Request, type Response } from "express";
 import {
   insertDevelopmentTaskSchema,
@@ -13,6 +15,45 @@ const router: IRouter = Router();
 // All /development/* routes require the "admin" role.
 // 401 for unauthenticated requests, 403 for non-admins.
 router.use("/development{/*splat}", requireRole("admin"));
+
+// Path to the generated platform-status.json (written by generate:platform-status).
+// process.cwd() = artifacts/api-server when run via pnpm filter.
+const PLATFORM_STATUS_JSON = resolve(
+  process.cwd(),
+  "../../implementation/platform-status.json"
+);
+
+// GET /api/development/platform-status
+// Read-only. Returns the latest generated platform status snapshot.
+router.get("/development/platform-status", async (req: Request, res: Response): Promise<void> => {
+  if (!existsSync(PLATFORM_STATUS_JSON)) {
+    res.status(503).json({
+      error: "Platform status not yet generated.",
+      instructions:
+        "Run: pnpm --filter @workspace/scripts run generate:platform-status",
+    });
+    return;
+  }
+  try {
+    const data: unknown = JSON.parse(readFileSync(PLATFORM_STATUS_JSON, "utf8"));
+    res.json(data);
+  } catch (err) {
+    req.log.error({ err }, "Failed to read platform-status.json");
+    res.status(500).json({ error: "Failed to read platform status" });
+  }
+});
+
+// GET /api/development/activity
+// Read-only. Returns a merged, newest-first activity timeline.
+router.get("/development/activity", async (req: Request, res: Response): Promise<void> => {
+  try {
+    const events = await repo.listActivity();
+    res.json({ events });
+  } catch (err) {
+    req.log.error({ err }, "Failed to list development activity");
+    res.status(500).json({ error: "Failed to list activity", events: [] });
+  }
+});
 
 // GET /api/development/tasks
 router.get("/development/tasks", async (req: Request, res: Response): Promise<void> => {

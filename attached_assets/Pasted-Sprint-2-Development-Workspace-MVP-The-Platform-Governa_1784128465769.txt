@@ -1,0 +1,191 @@
+Sprint 2 — Development Workspace MVP
+
+The Platform Governance & Synchronisation Engine v1.1 is approved.
+
+Do not modify any architecture documents.
+
+Do not modify database schema.
+
+Do not add AI orchestration.
+
+Do not add GitHub write automation.
+
+This sprint is UI and orchestration only.
+
+Objective
+
+Transform the Development workspace into the primary operating dashboard for developing RRAI.
+
+The Development workspace should become the first screen the Product Owner opens each day.
+
+Requirements
+
+Use the generated Platform Status JSON/API as the data source.
+
+Do not parse Markdown.
+
+Create these dashboard sections.
+
+1. Platform Health
+
+Display cards for:
+
+- Architecture
+- Knowledge
+- Database
+- API
+- Testing
+- Build
+- GitHub
+
+Each displays:
+
+Status
+Summary
+Last evaluated
+
+Use existing platform status evidence.
+
+2. Recommended Next Action
+
+Single prominent card.
+
+Display:
+
+Title
+
+Reason
+
+Priority
+
+Estimated effort
+
+Open Task button
+
+Initially use deterministic recommendation logic.
+
+No AI reasoning.
+
+3. Waiting For Me
+
+Display approval queue.
+
+Initially include:
+
+Development approvals
+
+Merge approvals
+
+Release approvals
+
+Show empty state correctly.
+
+4. Current Development
+
+Display:
+
+Current branch
+
+Latest commit
+
+Open PR count
+
+Tests
+
+Build
+
+Database
+
+Use Platform Status API.
+
+5. Activity Timeline
+
+Chronological timeline.
+
+Show:
+
+Task created
+
+Task updated
+
+Review recorded
+
+Approval
+
+Branch
+
+PR
+
+Build
+
+Audit event
+
+Newest first.
+
+6. Navigation
+
+Keep existing tabs.
+
+Do not redesign the navigation.
+
+Architecture tab remains architecture.
+
+Roadmap becomes the development task list.
+
+Overview becomes the new dashboard.
+
+7. Empty states
+
+Every widget must have meaningful empty states.
+
+Never show blank panels.
+
+8. Visual style
+
+Use existing RRAI design tokens.
+
+No redesign.
+
+No animations.
+
+No charts.
+
+Cards only.
+
+9. API
+
+Only consume existing platform-status endpoints.
+
+If an endpoint is missing,
+
+add a read-only endpoint.
+
+No write endpoints.
+
+10. Validation
+
+Run:
+
+Typecheck
+
+Build
+
+Tests
+
+Return:
+
+Changed files
+
+Screens implemented
+
+New endpoints
+
+Build results
+
+Screenshots
+
+Commit hash
+
+Stop.
+
+Do not begin Sprint 3.
