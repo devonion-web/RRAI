@@ -3,10 +3,10 @@
 | | |
 |---|---|
 | **Document** | `01_RRAI_Platform_Architecture_v1_0.md` |
-| **Repository layer** | 01 — Operating Model |
-| **Sits directly beneath** | `00_RRAI_Master_Context_v2_0.md` |
-| **Status** | **Version 1.0 — approved implementation architecture.** Complements, does not replace, the Master Context. |
-| **Authority** | Subordinate to the Master Context. Where this document and the Master Context conflict, the Master Context prevails. |
+| **Repository layer** | 02 — Platform Architecture |
+| **Sits directly beneath** | Strategy layer (`strategy/`), which is itself subordinate to `00_RRAI_Master_Context_v2_0.md` |
+| **Status** | **Version 1.0 — approved implementation architecture.** Complements, does not replace, the Master Context or the Strategy layer. |
+| **Authority** | Subordinate to the Master Context and the Strategy layer. Where this document conflicts with either, the higher document prevails. |
 
 ---
 
@@ -20,7 +20,7 @@ It holds the following relationship to the Master Context:
 - It **does not replace, reinterpret or weaken** the Master Context. It adds no principle, relaxes no commitment, and narrows no protection.
 - Where this document and the Master Context **conflict, the Master Context prevails**, and this document is treated as defective on the point of conflict until amended.
 
-This document sits at repository layer 01 (Operating Model), directly beneath the Master Context (layer 00). It governs how the runtime implements the constitution; it is in turn served by the operating frameworks, knowledge and templates beneath it. A change to the Master Context cascades into this document; a change to this document cascades into everything beneath it (Section 17).
+This document sits at repository layer 02 (Platform Architecture), beneath the Master Context (layer 00) and the Strategy layer (layer 01). It governs how the runtime implements the constitution; it is in turn served by the operating frameworks, knowledge and templates beneath it. A change to the Master Context or the Strategy layer cascades into this document; a change to this document cascades into everything beneath it (Section 17).
 
 ## 2. Scope and Non-Goals
 

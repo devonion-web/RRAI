@@ -9,10 +9,10 @@ The governing document for the engineering working area. It defines how the RRAI
 | | |
 |---|---|
 | **Document** | `engineering/00_RRAI_Development_Operating_Model.md` |
-| **Repository position** | Governing document of the engineering working area. Operating-Model layer (01) in the §7 authority model. |
-| **Sits directly beneath** | `00_RRAI_Master_Context_v2_0.md` and `01_RRAI_Platform_Architecture_v1_0.md` |
+| **Repository position** | Governing document of the engineering working area. Layer 03 (Engineering) in the §7 authority model. |
+| **Sits directly beneath** | `00_RRAI_Master_Context_v2_0.md`, Strategy layer (`strategy/`), and `01_RRAI_Platform_Architecture_v1_0.md` |
 | **Status** | **Version 1.0 — approved development operating contract.** |
-| **Authority** | Subordinate to the Master Context and the Platform Architecture. Where this document conflicts with either, the higher document prevails. It is the highest authority *within* the engineering working area. |
+| **Authority** | Subordinate to the Master Context, the Strategy layer, and the Platform Architecture. Where this document conflicts with any of these, the higher document prevails. It is the highest authority *within* the engineering working area. |
 
 ---
 
@@ -40,7 +40,7 @@ The Master Context (00) is the constitution. This document **implements its comm
 
 ### 1.4 Relationship to the Platform Architecture
 
-The Platform Architecture (01) defines **what the runtime is** — its elements, dependencies and where its guarantees are enforced. This document defines **how that architecture is changed over time**. The two are complementary and must not be confused: the Platform Architecture governs the running system; this document governs the process that produces it. Any change to the running system's *design* is an architectural change governed by §7; this document governs how such a change is proposed, approved, implemented and released, never what the architecture should say.
+The Platform Architecture (02) defines **what the runtime is** — its elements, dependencies and where its guarantees are enforced. This document defines **how that architecture is changed over time**. The two are complementary and must not be confused: the Platform Architecture governs the running system; this document governs the process that produces it. Any change to the running system's *design* is an architectural change governed by §7; this document governs how such a change is proposed, approved, implemented and released, never what the architecture should say.
 
 ### 1.5 Scope
 
@@ -56,7 +56,8 @@ Authority flows downward and is absolute in that direction:
 
 ```
 00  Master Context               (constitution — why and what, in principle)
-01  Platform Architecture        (what the runtime is)
+01  Strategy                     (product philosophy — what RRAI is for and by what principles)
+02  Platform Architecture        (what the runtime is)
 ──  Development Operating Model   (this document — how the platform is changed)
     ↓  engineering procedure, standards, guides, and all implemented change
 ```
@@ -300,6 +301,6 @@ This document is versioned. Each approved amendment produces a new version, and 
 
 ---
 
-*This document implements `00_RRAI_Master_Context_v2_0.md` and is governed by `01_RRAI_Platform_Architecture_v1_0.md`. Where any of the three conflict, the higher document prevails. It defines how RRAI is changed; it does not define what RRAI is, nor how any particular thing is built.*
+*This document implements `00_RRAI_Master_Context_v2_0.md` and is governed by the Strategy layer (`strategy/`) and `01_RRAI_Platform_Architecture_v1_0.md`. Where any of these conflict, the higher document prevails. It defines how RRAI is changed; it does not define what RRAI is, nor how any particular thing is built.*
 
 *Risk Rising  •  Internal  •  Development operating contract  •  Version 1.0*

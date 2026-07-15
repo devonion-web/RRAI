@@ -108,7 +108,7 @@ _Populate as you build._
 ## Governance (RRAI repository foundation)
 
 - RRAI is one platform with multiple lenses.
-- `architecture/00_RRAI_Master_Context_v2_0.md` is the highest-authority document. `architecture/01_RRAI_Platform_Architecture_v1_0.md` is the approved implementation architecture immediately beneath it. Where governed documents conflict, the higher-authority document prevails. The root `RRAI Constitution.md` is a redirect only — it is not the authority.
+- `architecture/00_RRAI_Master_Context_v2_0.md` is the highest-authority document. The `strategy/` layer is directly beneath it. `architecture/01_RRAI_Platform_Architecture_v1_0.md` is the approved implementation architecture, subordinate to Strategy. Where governed documents conflict, the higher-authority document prevails. The root `RRAI Constitution.md` is a redirect only — it is not the authority.
 - Do not redesign architecture while implementing a lower-level task. Inspect the governing files and current implementation before changing established behaviour.
 - Master Knowledge Assets (`knowledge/master-assets/`) are governed source material. Generated chunks, summaries, embeddings and indexes (`knowledge/generated/`) are derived artefacts and never become the source of truth.
 - Runtime Memory (conversations, opportunity/session state) is separate from governed Knowledge.

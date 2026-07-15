@@ -1,0 +1,117 @@
+Repository Architecture Update — Introduce the Strategy Layer
+
+This is a repository architecture change only.
+
+Do not write the contents of the new governed documents.
+
+Do not change application code.
+
+Do not change database schema.
+
+Do not modify any runtime behaviour.
+
+The purpose of this task is to introduce a new repository layer called "strategy" which will become the product philosophy layer for RRAI.
+
+The three governed documents will be supplied afterwards by the Product Owner.
+
+────────────────────────────────────────
+OBJECTIVE
+────────────────────────────────────────
+
+Create a new top-level repository layer:
+
+strategy/
+
+containing placeholder governed documents:
+
+00_RRAI_Product_Philosophy.md
+
+01_RRAI_Product_Principles.md
+
+02_RRAI_Executive_Workbench.md
+
+Each placeholder should contain only:
+
+• document title
+• purpose
+• authority
+• "Content to be approved"
+
+No substantive content.
+
+────────────────────────────────────────
+REPOSITORY AUTHORITY
+────────────────────────────────────────
+
+Review the repository and update all governance references where appropriate.
+
+The intended authority order becomes:
+
+00 Master Context
+01 Strategy
+02 Platform Architecture
+03 Product
+04 Capabilities
+05 Knowledge
+06 Engineering
+07 Implementation
+
+Do NOT change the authority of the Master Context.
+
+The Strategy layer is subordinate to the Master Context.
+
+Platform Architecture becomes subordinate to Strategy.
+
+Engineering and Product remain subordinate to Platform Architecture.
+
+────────────────────────────────────────
+UPDATE REFERENCES
+────────────────────────────────────────
+
+Review and update repository documentation where necessary, including but not limited to:
+
+README
+
+CONTRIBUTING
+
+replit.md
+
+repository architecture documentation
+
+governance documentation
+
+engineering guidance
+
+Only update references required to introduce the new Strategy layer.
+
+Do not rewrite existing documents.
+
+────────────────────────────────────────
+ARCHITECTURE REVIEW
+────────────────────────────────────────
+
+Review the existing repository structure and determine whether introducing the Strategy layer creates any authority conflicts.
+
+Report every conflict.
+
+Do not silently resolve conflicts.
+
+────────────────────────────────────────
+OUTPUT
+────────────────────────────────────────
+
+Return:
+
+1. Files created
+
+2. Files modified
+
+3. Updated authority hierarchy
+
+4. Any authority conflicts discovered
+
+5. Any repository improvements you recommend before the three strategy documents are added
+
+Do not generate the three documents.
+
+Stop after the repository has been prepared.

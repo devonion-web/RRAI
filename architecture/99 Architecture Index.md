@@ -321,17 +321,21 @@ Architecture should never be bypassed.
 # Repository Structure
 
 ```
-architecture/
+architecture/       ← Master Context (00_RRAI_Master_Context) — highest authority
+                      Platform Architecture (01_RRAI_Platform_Architecture) — layer 02
+
+strategy/           ← Strategy layer (01) — subordinate to Master Context,
+                      governs Platform Architecture and everything beneath it
 
 product/
-
-engineering/
-
-implementation/
 
 capabilities/
 
 knowledge/
+
+engineering/
+
+implementation/
 
 templates/
 
