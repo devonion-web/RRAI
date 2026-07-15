@@ -1,0 +1,666 @@
+Implement Architecture Remediation #6:
+
+Lens Routing, Partition Enforcement and Retrieval Boundaries
+
+Objective
+
+Implement the first enforceable version of RRAI’s lens architecture.
+
+The platform now has:
+
+* Authenticated users
+* Organisation-scoped data
+* Persistent opportunities
+* Persistent conversations
+* Governed operational knowledge
+* An active lens stored on each conversation
+
+However, the active lens currently influences presentation and tone only. It does not yet enforce retrieval boundaries, partition access or the RRAI one-way valve.
+
+This remediation must make the active lens operational and server-enforced.
+
+The goal is to ensure that every assistant request:
+
+1. Has one explicit active lens.
+2. Resolves a permitted retrieval scope.
+3. Applies partition and sensitivity filters before context reaches the model.
+4. Records what context was used.
+5. Prevents prohibited commercial or delivery information from entering Analyst outputs.
+
+This is the minimum enforceable lens and retrieval-control layer.
+
+Do not implement full semantic RAG or the learning loop in this task.
+
+⸻
+
+First: inspect the governed architecture
+
+Before changing code, review the relevant repository documents, including:
+
+* 00_RRAI_Master_Context_v2_0.md
+* 01_RRAI_Platform_Architecture.md
+* Lens-related architecture files
+* Knowledge Architecture
+* Memory Architecture
+* Prompt Architecture
+* One-way-valve definitions
+* Sensitivity and partition definitions
+* Human accountability and audit requirements
+
+Also inspect:
+
+* Conversation schema and activeLens
+* assistant-service
+* Prompt assembly
+* Governed knowledge loader
+* Opportunity context assembly
+* Organisation membership and roles
+* Audit events
+* Existing knowledge files and metadata
+* Any current sensitivity or partition fields
+
+Do not invent a conflicting taxonomy.
+
+Use the canonical definitions already approved by the repository.
+
+⸻
+
+1. Canonical lens model
+
+Support exactly the current constitutional lenses:
+
+* analyst
+* intelligence
+* commercial
+* delivery
+
+Create one central typed lens-policy definition.
+
+Do not scatter lens rules across route handlers or frontend components.
+
+For every lens define:
+
+* Purpose
+* Permitted knowledge partitions
+* Permitted memory partitions
+* Maximum sensitivity
+* Permitted context sources
+* Prohibited context sources
+* Default response posture
+* Whether opportunity context may be used
+* Whether commercial details may be used
+* Whether delivery-operational details may be used
+
+The frontend label is not authoritative.
+
+The server must resolve the active lens from the persisted conversation record.
+
+⸻
+
+2. Canonical partition model
+
+Implement the canonical partitions defined by the architecture.
+
+At minimum support:
+
+* neutral
+* intelligence
+* commercial
+* delivery
+* restricted
+
+Apply the following baseline rule:
+
+* neutral may be served to all permitted lenses.
+* intelligence may be served according to the approved intelligence and analyst policies.
+* commercial may only be served to permitted commercial contexts.
+* delivery may only be served to permitted delivery contexts.
+* restricted must never be served to model context.
+
+Do not rely on filenames alone to determine partitions.
+
+Create explicit metadata or a governed registry.
+
+⸻
+
+3. Sensitivity model
+
+Implement the canonical sensitivity levels:
+
+* public
+* internal
+* confidential
+* highly_restricted
+
+Sensitivity must act as an independent access axis.
+
+Where partition and sensitivity rules differ, the more restrictive rule must win.
+
+Do not send highly_restricted content to the model in this phase unless the architecture explicitly permits it and the current user, organisation and lens all satisfy the rule.
+
+Default-deny unknown or malformed sensitivity values.
+
+⸻
+
+4. Knowledge asset registry
+
+Create a governed machine-readable registry for knowledge assets.
+
+A suitable location may be:
+
+knowledge/knowledge-manifest.yaml
+
+or:
+
+knowledge/knowledge-manifest.json
+
+Equivalent structure is acceptable if consistent with the repository.
+
+Each governed knowledge asset must have metadata including:
+
+* Asset ID
+* Repository-relative path
+* Title
+* Partition
+* Sensitivity
+* Verification state
+* Status
+* Permitted lenses, where an explicit override is needed
+* Owner
+* Last reviewed date
+* Whether the asset may be supplied to an LLM
+* Optional tags
+
+Do not duplicate the full document contents in the manifest.
+
+The manifest is a classification and discovery layer.
+
+At minimum classify:
+
+* knowledge/Risk Rising.md
+* knowledge/LogicGate.md
+* Existing GRC domain files
+* Competitor files
+* Any active presentation, proposal or operational knowledge currently used at runtime
+
+Unknown or unregistered knowledge files must not be automatically supplied to the model.
+
+⸻
+
+5. Memory-source classification
+
+Classify runtime memory sources before prompt assembly.
+
+At minimum support:
+
+* Conversation messages
+* Linked opportunity summary
+* Opportunity working state
+* Contacts
+* Organisation context
+* User context
+* Generated artefacts
+* Future learning state
+
+Create a central policy that maps each memory source to:
+
+* Partition
+* Sensitivity
+* Verification state
+* Permitted lenses
+* Whether it can be included by default
+* Whether it requires explicit user action
+
+Do not treat the whole opportunity object as universally retrievable.
+
+For example:
+
+* General customer name and stage may be commercial.
+* Pricing and negotiation details are commercial and confidential.
+* Delivery plans may be delivery and confidential.
+* Neutral organisational facts may be available more broadly.
+* Restricted or sensitive personal information must not be included.
+
+Use field-level selection where practical.
+
+Do not inject full JSON records blindly into prompts.
+
+⸻
+
+6. Lens routing service
+
+Create a reusable server-side lens-routing service.
+
+For example:
+
+artifacts/api-server/src/services/lens-routing-service.ts
+
+It should accept:
+
+* Authenticated user
+* Organisation
+* Conversation
+* Active lens
+* Requested operation
+* Available knowledge assets
+* Available memory sources
+
+It should return a structured routing decision such as:
+
+{
+  activeLens,
+  permittedKnowledgeAssets,
+  permittedMemorySources,
+  sensitivityCeiling,
+  prohibitedReasons,
+  responsePosture
+}
+
+Do not return raw content from the routing service.
+
+The routing service determines permission. A separate retrieval or context service loads approved content.
+
+The service must be deterministic and testable without calling an LLM.
+
+⸻
+
+7. Retrieval boundary service
+
+Create a context retrieval and filtering service.
+
+For example:
+
+artifacts/api-server/src/services/context-retrieval-service.ts
+
+It should:
+
+1. Receive the lens-routing decision.
+2. Load only registered and permitted knowledge assets.
+3. Select permitted opportunity and organisation fields.
+4. Select the permitted conversation history.
+5. Exclude prohibited partitions and sensitivities.
+6. Return structured context blocks.
+7. Record provenance for every returned block.
+
+Each context block should include metadata such as:
+
+{
+  sourceType,
+  sourceId,
+  title,
+  partition,
+  sensitivity,
+  verificationState,
+  content
+}
+
+The model prompt should receive only the filtered content, not the full underlying records.
+
+⸻
+
+8. Enforce the one-way valve
+
+Implement the first runtime enforcement of the one-way valve.
+
+The key mandatory rule is:
+
+Commercial and delivery information must not flow into Analyst outputs.
+
+For Analyst lens requests:
+
+* Do not include commercial opportunity content.
+* Do not include pricing.
+* Do not include sales strategy.
+* Do not include negotiation details.
+* Do not include delivery-specific confidential context.
+* Do not include commercial conversation history merely because it exists in the same organisation.
+* Do not include knowledge assets classified as commercial or delivery.
+
+Neutral and appropriately classified intelligence sources may be included.
+
+If an Analyst conversation is linked to an opportunity, linking alone must not permit commercial retrieval.
+
+The assistant may acknowledge that additional context exists but is unavailable under the active lens.
+
+Do not silently switch lenses.
+
+Do not silently relax the policy.
+
+⸻
+
+9. Lens changes
+
+The user may change a conversation’s active lens through the existing validated endpoint.
+
+When changing lens:
+
+* Validate the requested lens.
+* Persist the change.
+* Audit the change.
+* Apply the new policy only to subsequent assistant requests.
+* Do not rewrite historical messages.
+* Keep the active lens visibly displayed.
+* Warn where changing the lens materially changes available context.
+
+Do not allow the frontend to submit a different temporary lens with each message.
+
+The persisted conversation lens is authoritative.
+
+⸻
+
+10. Prompt assembly integration
+
+Update assistant-service so prompt assembly uses:
+
+1. The persisted active lens.
+2. The lens-routing decision.
+3. The filtered retrieval result.
+4. A lens-specific system posture.
+5. Provenance-aware context blocks.
+6. The permitted recent message window.
+
+Remove any direct prompt injection of:
+
+* Full opportunity records
+* All governed knowledge indiscriminately
+* Unfiltered organisation data
+* Unclassified files
+
+Do not build prompts inside route handlers.
+
+The prompt assembly should clearly separate:
+
+* System instruction
+* Lens policy
+* Retrieved governed knowledge
+* Retrieved memory
+* Conversation history
+* Current user message
+
+⸻
+
+11. Lens-specific response posture
+
+Implement initial server-owned response postures.
+
+Analyst
+
+* Independent analytical posture
+* Evidence-led
+* No commercial persuasion
+* No delivery commitments
+* Surface uncertainty and conflicting evidence
+
+Intelligence
+
+* Research and synthesis posture
+* Evidence-led
+* May compare market, competitor and domain information
+* Must distinguish verified facts from inference
+
+Commercial
+
+* Customer and opportunity focused
+* May use authorised opportunity, pricing and sales context
+* Must not invent commitments or terms
+* Customer-facing output may require later approval
+
+Delivery
+
+* Implementation and operational posture
+* May use authorised project, delivery and solution context
+* Must not create binding commitments
+* Must distinguish approved plans from working assumptions
+
+Do not duplicate full prompt content in code where governed prompt files are appropriate.
+
+Create concise operational lens prompt fragments in the governed prompt layer and load them using the established prompt-management pattern.
+
+⸻
+
+12. Provenance and traceability
+
+For every assistant response, persist retrieval trace metadata.
+
+At minimum record:
+
+* Conversation ID
+* Assistant message ID
+* Active lens
+* Knowledge asset IDs used
+* Memory source types used
+* Partitions included
+* Sensitivity levels included
+* Sources excluded and policy reason
+* Routing-policy version
+* Retrieval timestamp
+
+Do not store full sensitive context in audit logs.
+
+Store identifiers and classification metadata only.
+
+The trace should make it possible to answer:
+
+Why did the assistant have access to this information?
+
+and:
+
+Why was a source excluded?
+
+⸻
+
+13. Database changes
+
+Add only the schema needed to support this remediation.
+
+Potential additions may include:
+
+* Knowledge asset registry table, if not using a repository manifest
+* Retrieval trace table
+* Routing-policy version field
+* Message context metadata
+* Conversation policy metadata
+
+Prefer the repository manifest for governed static knowledge and PostgreSQL for runtime retrieval traces.
+
+Do not move all knowledge content into the database in this task.
+
+⸻
+
+14. API behaviour
+
+The existing conversation-message endpoint should continue to work.
+
+Extend response or event metadata only where useful.
+
+The frontend does not need to display full retrieval traces by default.
+
+A safe development/admin endpoint may expose retrieval trace metadata for debugging, provided:
+
+* It is admin-only.
+* It never exposes prohibited raw content.
+* It uses server-side authorisation.
+
+Do not expose hidden source content to normal users.
+
+⸻
+
+15. Frontend changes
+
+Keep UI changes minimal.
+
+Required:
+
+* Continue displaying the active lens.
+* Add a concise explanation of what the selected lens controls.
+* When a lens change narrows or expands context access, show a brief notice.
+* Where context was unavailable due to lens policy, allow the assistant response to explain this clearly.
+* Do not expose internal partitions or sensitivity labels to ordinary users unless useful and understandable.
+
+An admin-only diagnostic view may show:
+
+* Lens
+* Knowledge asset IDs used
+* Source categories used
+* Exclusion reasons
+
+Do not turn the conversation screen into an architecture dashboard.
+
+⸻
+
+16. Tests
+
+Add comprehensive tests for deterministic routing and filtering.
+
+Lens policy
+
+* Analyst permits neutral sources.
+* Analyst permits approved intelligence sources where allowed.
+* Analyst rejects commercial sources.
+* Analyst rejects delivery sources.
+* Restricted sources are rejected for every lens.
+* Sensitivity ceiling overrides a permissive partition.
+* Unknown partition is rejected.
+* Unknown sensitivity is rejected.
+* Unknown lens is rejected.
+
+Knowledge retrieval
+
+* Registered permitted asset loads.
+* Unregistered asset does not load.
+* Asset with prohibited partition does not load.
+* Asset with excessive sensitivity does not load.
+* Asset marked unavailable to LLM does not load.
+* Missing asset fails safely.
+* Provenance metadata is returned.
+
+Memory retrieval
+
+* Commercial opportunity fields are available to Commercial lens.
+* Commercial opportunity fields are not available to Analyst lens.
+* Delivery context is available only to permitted Delivery requests.
+* Full opportunity JSON is never blindly injected.
+* Cross-organisation records remain inaccessible.
+* Conversation history respects the current conversation and organisation.
+
+One-way valve
+
+* A commercial conversation cannot leak its opportunity context into a separate Analyst conversation.
+* Linking an Analyst conversation to an opportunity does not permit commercial retrieval.
+* Switching from Commercial to Analyst removes commercial context from subsequent requests.
+* Historical messages remain stored but prohibited context is not reintroduced through prompt history.
+* Restricted sources never reach prompt assembly.
+
+Traceability
+
+* Assistant response records the active lens.
+* Used asset IDs are recorded.
+* Exclusion reasons are recorded.
+* No full sensitive source content is stored in the trace.
+
+Existing functionality
+
+* Conversation streaming continues to work.
+* Messages remain persistent.
+* Opportunity linkage still works.
+* Lens change persists.
+* LogicGate and RFP workflows continue to work.
+* Authentication and organisation scoping still pass.
+
+⸻
+
+17. Policy versioning
+
+Assign the first runtime lens-policy version, for example:
+
+lens-policy-v1
+
+Store the version with retrieval traces.
+
+Future policy changes must be identifiable without rewriting historical traces.
+
+Do not build a full policy administration UI.
+
+⸻
+
+18. Validation
+
+Run:
+
+* Database migration, where required
+* Knowledge-manifest validation
+* OpenAPI codegen
+* Full TypeScript typecheck
+* Existing tests
+* New lens-routing tests
+* New retrieval-boundary tests
+* Frontend build
+* API build
+* Full application startup
+
+Manually verify:
+
+1. Create a Commercial conversation linked to an opportunity.
+2. Ask about the customer’s pricing and opportunity position.
+3. Confirm authorised commercial context is used.
+4. Create an Analyst conversation.
+5. Link the same opportunity.
+6. Ask an analytical question.
+7. Confirm pricing and sales strategy are not supplied to the model.
+8. Change the Commercial conversation to Analyst.
+9. Confirm subsequent requests no longer receive commercial context.
+10. Confirm the active lens remains visible.
+11. Confirm retrieval traces show used and excluded source categories.
+12. Confirm restricted test content is never supplied.
+13. Confirm another organisation cannot access the sources.
+14. Confirm existing conversation streaming and persistence still work.
+
+⸻
+
+Boundaries
+
+Do not implement:
+
+* Vector embeddings
+* Semantic search
+* Full RAG
+* External web research
+* Learning outcomes
+* Knowledge promotion
+* Human approval workflow
+* Document or presentation generation
+* Object storage
+* Full field-level permission administration
+* Customer-configurable lens policies
+* Major UI redesign
+
+Do not claim full one-way-valve implementation beyond the runtime retrieval and prompt-assembly controls delivered here.
+
+⸻
+
+Delivery report
+
+Perform the implementation rather than only producing a plan.
+
+Then report:
+
+* Canonical lens-policy structure
+* Partition and sensitivity models
+* Knowledge manifest location and assets classified
+* Memory-source classification
+* Routing service added
+* Retrieval service added
+* Prompt assembly changes
+* One-way-valve rules enforced
+* Lens prompt files added
+* Database and traceability changes
+* API changes
+* Frontend changes
+* Tests added
+* Manual cross-lens validation result
+* Final typecheck result
+* Final test result
+* Final build result
+* Known limitations
+* Recommended next remediation
+* Branch name and commit reference

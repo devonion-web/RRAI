@@ -1,0 +1,230 @@
+# RRAI Knowledge Manifest
+#
+# Authority: governed — subordinate to 00_RRAI_Master_Context_v2_0.md
+# Purpose:   Machine-readable registry classifying every knowledge asset.
+#            The server uses this manifest to determine which assets may be
+#            supplied to an LLM and under which lens/sensitivity conditions.
+#
+# Rules:
+#   - Only assets listed here may be supplied to the model.
+#   - Unknown or unregistered files must never reach prompt assembly.
+#   - `supplied_to_llm: false` assets are indexed but never sent to the model.
+#   - `status: placeholder` assets are always excluded from model context.
+#   - Partition and sensitivity filters are applied independently; the more
+#     restrictive rule wins.
+#
+# Partitions:
+#   neutral      — available to all permitted lenses
+#   intelligence — available to analyst + intelligence + commercial + delivery
+#   commercial   — available to commercial + delivery only
+#   delivery     — available to delivery only
+#   restricted   — never supplied to the model
+#
+# Sensitivity levels (ascending restriction):
+#   public | internal | confidential | highly_restricted
+#
+# Policy version: lens-policy-v1
+
+manifest_version: "1"
+policy_version: "lens-policy-v1"
+knowledge_dir: "knowledge"
+
+assets:
+  - id: "rr-operational"
+    path: "Risk Rising.md"
+    title: "Risk Rising — Operational Knowledge"
+    partition: "neutral"
+    sensitivity: "internal"
+    verification_state: "approved"
+    status: "active"
+    supplied_to_llm: true
+    owner: "Risk Rising"
+    last_reviewed: "2026-07-01"
+    tags:
+      - "organisation"
+      - "methodology"
+      - "services"
+      - "values"
+    notes: >
+      Describes Risk Rising's mission, values, services, methodology and
+      expertise. Vendor-neutral in the Analyst lens (organisation identity and
+      domain expertise only). Used in all lenses.
+
+  - id: "logicgate-knowledge"
+    path: "LogicGate.md"
+    title: "LogicGate — Platform Knowledge"
+    partition: "neutral"
+    sensitivity: "internal"
+    verification_state: "approved"
+    status: "active"
+    supplied_to_llm: true
+    owner: "Risk Rising"
+    last_reviewed: "2026-07-01"
+    tags:
+      - "vendor"
+      - "platform"
+      - "partner"
+    notes: >
+      LogicGate platform capability, features and use cases. Classified as
+      neutral so it is accessible as attributed reference in the Analyst lens
+      (vendor-neutral, point-in-time positions). In Commercial/Delivery lenses
+      the lens posture permits partner-aligned usage of the same content.
+      The partition does not change; the posture does.
+
+  - id: "grc-domain"
+    path: "GRC.md"
+    title: "GRC — Domain Knowledge"
+    partition: "neutral"
+    sensitivity: "public"
+    verification_state: "draft"
+    status: "placeholder"
+    supplied_to_llm: false
+    owner: "Risk Rising"
+    last_reviewed: "2026-07-01"
+    tags:
+      - "domain"
+      - "grc"
+    notes: "Placeholder — not yet populated. Excluded from model context until active."
+
+  - id: "competitors-intelligence"
+    path: "Competitors.md"
+    title: "Competitors — Market Intelligence"
+    partition: "intelligence"
+    sensitivity: "internal"
+    verification_state: "draft"
+    status: "placeholder"
+    supplied_to_llm: false
+    owner: "Risk Rising"
+    last_reviewed: "2026-07-01"
+    tags:
+      - "intelligence"
+      - "competitors"
+      - "market"
+    notes: "Placeholder — not yet populated. Excluded from model context until active."
+
+  - id: "industries-knowledge"
+    path: "Industries.md"
+    title: "Industries — Sector Knowledge"
+    partition: "neutral"
+    sensitivity: "public"
+    verification_state: "draft"
+    status: "placeholder"
+    supplied_to_llm: false
+    owner: "Risk Rising"
+    last_reviewed: "2026-07-01"
+    tags:
+      - "domain"
+      - "industries"
+    notes: "Placeholder — not yet populated."
+
+  - id: "internal-audit-domain"
+    path: "Internal Audit.md"
+    title: "Internal Audit — Domain Knowledge"
+    partition: "neutral"
+    sensitivity: "public"
+    verification_state: "draft"
+    status: "placeholder"
+    supplied_to_llm: false
+    owner: "Risk Rising"
+    last_reviewed: "2026-07-01"
+    tags:
+      - "domain"
+      - "audit"
+
+  - id: "cyber-security-domain"
+    path: "Cyber Security.md"
+    title: "Cyber Security — Domain Knowledge"
+    partition: "neutral"
+    sensitivity: "public"
+    verification_state: "draft"
+    status: "placeholder"
+    supplied_to_llm: false
+    owner: "Risk Rising"
+    last_reviewed: "2026-07-01"
+    tags:
+      - "domain"
+      - "cyber"
+
+  - id: "third-party-risk-domain"
+    path: "Third Party Risk.md"
+    title: "Third-Party Risk — Domain Knowledge"
+    partition: "neutral"
+    sensitivity: "public"
+    verification_state: "draft"
+    status: "placeholder"
+    supplied_to_llm: false
+    owner: "Risk Rising"
+    last_reviewed: "2026-07-01"
+    tags:
+      - "domain"
+      - "tprm"
+
+  - id: "operational-risk-domain"
+    path: "Operational Risk.md"
+    title: "Operational Risk — Domain Knowledge"
+    partition: "neutral"
+    sensitivity: "public"
+    verification_state: "draft"
+    status: "placeholder"
+    supplied_to_llm: false
+    owner: "Risk Rising"
+    last_reviewed: "2026-07-01"
+    tags:
+      - "domain"
+      - "operational-risk"
+
+  - id: "policy-management-domain"
+    path: "Policy Management.md"
+    title: "Policy Management — Domain Knowledge"
+    partition: "neutral"
+    sensitivity: "public"
+    verification_state: "draft"
+    status: "placeholder"
+    supplied_to_llm: false
+    owner: "Risk Rising"
+    last_reviewed: "2026-07-01"
+    tags:
+      - "domain"
+      - "policy"
+
+  - id: "compliance-domain"
+    path: "Compliance.md"
+    title: "Compliance — Domain Knowledge"
+    partition: "neutral"
+    sensitivity: "public"
+    verification_state: "draft"
+    status: "placeholder"
+    supplied_to_llm: false
+    owner: "Risk Rising"
+    last_reviewed: "2026-07-01"
+    tags:
+      - "domain"
+      - "compliance"
+
+  - id: "regulations-domain"
+    path: "Regulations.md"
+    title: "Regulations — Reference"
+    partition: "neutral"
+    sensitivity: "public"
+    verification_state: "draft"
+    status: "placeholder"
+    supplied_to_llm: false
+    owner: "Risk Rising"
+    last_reviewed: "2026-07-01"
+    tags:
+      - "domain"
+      - "regulations"
+
+  - id: "knowledge-governance"
+    path: "Knowledge Governance.md"
+    title: "Knowledge Governance Framework"
+    partition: "restricted"
+    sensitivity: "internal"
+    verification_state: "draft"
+    status: "placeholder"
+    supplied_to_llm: false
+    owner: "Risk Rising"
+    last_reviewed: "2026-07-01"
+    notes: >
+      Internal governance document. Restricted partition — never supplied to
+      the model regardless of lens.

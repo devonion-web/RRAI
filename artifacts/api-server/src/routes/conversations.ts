@@ -263,4 +263,57 @@ router.post("/conversations/:id/messages", async (req: Request, res: Response) =
   }
 });
 
+// ─── GET /conversations/:id/messages/:messageId/trace — retrieval trace (admin) ───
+//
+// Returns the retrieval trace for a specific assistant message.
+// Access is restricted to admin users only.
+// Never returns raw source content — identifiers and classification only.
+
+router.get("/conversations/:id/messages/:messageId/trace", async (req: Request, res: Response) => {
+  const actor = await resolveActor(req, res);
+  if (!actor) return;
+
+  // Admin-only
+  const user = getAuthenticatedUser(req);
+  if (!user || user.role !== "admin") {
+    res.status(403).json({ error: "Admin access required" });
+    return;
+  }
+
+  try {
+    const { getTraceByMessage } = await import("../repositories/retrieval-trace-repository");
+    const rawMessageId = req.params["messageId"];
+    const messageId = String(Array.isArray(rawMessageId) ? rawMessageId[0] : rawMessageId ?? "");
+    const trace = await getTraceByMessage(messageId, actor.orgId);
+    if (!trace) {
+      res.status(404).json({ error: "Retrieval trace not found" });
+      return;
+    }
+    res.json({ trace });
+  } catch (err) {
+    handleServiceError(res, err);
+  }
+});
+
+// ─── GET /conversations/:id/traces — all traces for a conversation (admin) ───
+
+router.get("/conversations/:id/traces", async (req: Request, res: Response) => {
+  const actor = await resolveActor(req, res);
+  if (!actor) return;
+
+  const user = getAuthenticatedUser(req);
+  if (!user || user.role !== "admin") {
+    res.status(403).json({ error: "Admin access required" });
+    return;
+  }
+
+  try {
+    const { listTracesByConversation } = await import("../repositories/retrieval-trace-repository");
+    const traces = await listTracesByConversation(paramId(req), actor.orgId);
+    res.json({ traces });
+  } catch (err) {
+    handleServiceError(res, err);
+  }
+});
+
 export default router;

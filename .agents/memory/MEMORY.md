@@ -9,3 +9,4 @@
 - [Express 5 params typing](express5-params.md) — req.params["id"] is string | string[] in Express 5; use `String(Array.isArray(raw) ? raw[0] : raw ?? "")` pattern throughout routes.
 - [Conversation SSE streaming](conversation-sse-streaming.md) — SSE pipeline: persist user msg → create pending assistant msg → stream → finalise; context budget 60k chars; lens tone injected via system prompt; never expose raw provider errors.
 - [AR5 workspace home routing](ar5-workspace-home.md) — WorkspaceHome replaces RaiDashboard as default landing; activeConversation state in App.tsx routes to ConversationView; modules still accessible via activeModule state.
+- [AR6 lens routing & one-way valve](ar6-lens-routing.md) — lens policy in lens-policy.ts; routing is deterministic/no-I/O; retrieval_traces table records provenance; DB push via `pnpm --filter @workspace/db run push-force`; admin role check is `user.role === "admin"`, not isAdmin.
