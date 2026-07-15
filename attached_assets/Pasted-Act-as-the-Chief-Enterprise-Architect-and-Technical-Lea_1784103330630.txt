@@ -1,0 +1,261 @@
+Act as the Chief Enterprise Architect and Technical Lead for the RRAI platform.
+
+You are NOT acting as a software developer.
+
+You are performing a complete architectural health review of the entire RRAI application, repository and knowledge base.
+
+Your task is to determine whether the implementation still aligns with the intended RRAI architecture and identify any architectural drift, technical debt, duplicated capability or missing components.
+
+Do not simply list files.
+
+Think critically.
+
+Challenge existing design decisions.
+
+Recommend structural improvements.
+
+Your review should cover the following areas.
+
+==================================================
+1. Repository Architecture
+==================================================
+
+Review the complete repository structure.
+
+Determine whether folders, files and capabilities are organised logically.
+
+Identify:
+
+• Files in incorrect locations
+• Duplicate files
+• Obsolete files
+• Missing architectural layers
+• Missing folders
+• Naming inconsistencies
+• Repository drift
+• Areas becoming too large
+• Areas that should be split
+• Areas that should merge
+
+Recommend an improved repository structure if required.
+
+==================================================
+2. Knowledge Architecture
+==================================================
+
+Review every knowledge file.
+
+Determine:
+
+• Which files are actively used
+• Which files appear redundant
+• Which files overlap
+• Which files contradict each other
+• Missing knowledge areas
+• Missing governance
+• Missing documentation
+
+Produce a Knowledge Gap Analysis.
+
+==================================================
+3. Runtime Architecture
+==================================================
+
+Review how the application actually works.
+
+Assess:
+
+• Knowledge loading
+• Memory
+• Retrieval
+• RAG
+• Agents
+• Lens routing
+• One-way valve
+• Approval workflows
+• Document generation
+• Presentation generation
+• Learning loops
+
+Identify where implementation differs from intended architecture.
+
+==================================================
+4. Capability Review
+==================================================
+
+Review every capability.
+
+For each capability report:
+
+Current maturity
+
+Architecture quality
+
+Implementation quality
+
+Completion percentage
+
+Known issues
+
+Technical debt
+
+Future recommendations
+
+Include at least:
+
+• Analyst Lens
+• Intelligence Lens
+• Commercial Lens
+• Delivery Lens
+• RFP/RFI
+• Opportunity Memory
+• Learning Framework
+• Document Production
+• Presentation Engine
+• Knowledge Management
+
+Highlight anything missing.
+
+==================================================
+5. User Experience
+==================================================
+
+Review the UI.
+
+Identify:
+
+• Duplicate screens
+• Confusing navigation
+• Missing workflows
+• Inconsistent terminology
+• Opportunities to simplify
+
+Evaluate whether the UI reflects the intended RRAI architecture.
+
+==================================================
+6. Technical Debt
+==================================================
+
+Review:
+
+Dead code
+
+Unused components
+
+Unused routes
+
+Unused APIs
+
+Temporary code
+
+Duplicated logic
+
+Performance concerns
+
+Security concerns
+
+Maintainability
+
+==================================================
+7. Repository Governance
+==================================================
+
+Assess whether the repository is still governed correctly.
+
+Check:
+
+Folder ownership
+
+Knowledge ownership
+
+Architecture ownership
+
+Versioning
+
+Naming standards
+
+Documentation
+
+Missing READMEs
+
+Missing indexes
+
+Missing dependency documentation
+
+==================================================
+8. Future Architecture
+==================================================
+
+Recommend improvements.
+
+Do not focus on small fixes.
+
+Think strategically.
+
+Recommend how the repository should evolve over the next six months.
+
+==================================================
+OUTPUT REQUIRED
+==================================================
+
+Produce a structured Architecture Health Report.
+
+Overall Architecture Score (/10)
+
+Repository Score
+
+Knowledge Score
+
+Runtime Score
+
+UX Score
+
+Technical Debt Score
+
+Governance Score
+
+Then produce:
+
+Critical Issues (Immediate)
+
+High Priority
+
+Medium Priority
+
+Low Priority
+
+Finally produce a prioritised Architecture Roadmap showing the next 20 recommended improvements in implementation order.
+
+For every recommendation include:
+
+Reason
+
+Expected benefit
+
+Estimated effort
+
+Dependencies
+
+Business impact
+
+==================================================
+IMPORTANT
+==================================================
+
+Do not be polite.
+
+Do not assume previous decisions were correct.
+
+Challenge the architecture.
+
+If a major redesign is justified, explain why.
+
+If something has become overly complex, recommend simplification.
+
+If capabilities should move, merge or split, say so.
+
+Think like a CTO reviewing a platform before it scales to enterprise customers.
+
+Your objective is not to praise the system.
+
+Your objective is to make RRAI architecturally excellent.
