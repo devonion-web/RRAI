@@ -113,11 +113,34 @@ export interface ArchiveResult {
 export interface WorkingStatePayload { [key: string]: unknown }
 
 export interface WorkingStateEnvelope {
+  /** Full session payload, or null if no state has been saved yet. */
   state: unknown | null;
+  /** ISO date-time of the server's current updatedAt; null if no state saved yet. */
+  serverVersion: string | null;
 }
 
 export interface WorkingStateSaveResult {
   savedAt: string;
+  /** Same as savedAt — the confirmed updatedAt to send as X-Expected-Version on the next write. */
+  serverVersion: string;
+}
+
+/**
+ * Always "stale" for a 409 conflict.
+ */
+export type WorkingStateConflictError = typeof WorkingStateConflictError[keyof typeof WorkingStateConflictError];
+
+
+export const WorkingStateConflictError = {
+  stale: 'stale',
+} as const;
+
+export interface WorkingStateConflict {
+  /** Always "stale" for a 409 conflict. */
+  error: WorkingStateConflictError;
+  message?: string;
+  /** The server's current updatedAt — client should reload before retrying. */
+  serverVersion: string | null;
 }
 
 /**

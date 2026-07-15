@@ -264,23 +264,53 @@ describe("opportunity-state-repository", () => {
 
   it("upsertWorkingState creates a state record", async () => {
     const payload = { __v: 1, company: "State Co", mode: "pre", savedAt: new Date().toISOString() };
-    const state = await stateRepo.upsertWorkingState(oppId, payload, TEST_USER_ID);
-    assert.ok(state.id, "Should return a record");
-    assert.deepEqual((state.payload as Record<string, unknown>).company, "State Co");
+    const result = await stateRepo.upsertWorkingState(oppId, payload, TEST_USER_ID);
+    assert.equal(result.conflict, false, "First write should not conflict");
+    assert.ok(result.row.id, "Should return a record");
+    assert.deepEqual((result.row.payload as Record<string, unknown>).company, "State Co");
   });
 
   it("upsertWorkingState updates existing state (upsert semantics)", async () => {
     const payload1 = { __v: 1, company: "State Co", mode: "pre" };
     const payload2 = { __v: 1, company: "State Co", mode: "post" };
     await stateRepo.upsertWorkingState(oppId, payload1, TEST_USER_ID);
-    await stateRepo.upsertWorkingState(oppId, payload2, TEST_USER_ID);
+    const r2 = await stateRepo.upsertWorkingState(oppId, payload2, TEST_USER_ID);
 
+    assert.equal(r2.conflict, false, "Should not conflict when no expectedVersion supplied");
     const rows = await db
       .select()
       .from(opportunityWorkingStateTable)
       .where(eq(opportunityWorkingStateTable.opportunityId, oppId));
     assert.equal(rows.length, 1, "Should have exactly one row per opportunity+stateType");
     assert.equal((rows[0].payload as Record<string, unknown>).mode, "post");
+  });
+
+  it("upsertWorkingState returns conflict when expectedVersion is stale", async () => {
+    // First write establishes a version
+    const r1 = await stateRepo.upsertWorkingState(oppId, { mode: "pre" }, TEST_USER_ID);
+    const v1 = r1.row.updatedAt?.toISOString() ?? "";
+
+    // Second write with a deliberately old expectedVersion (epoch) should conflict
+    const staleVersion = new Date(0).toISOString(); // epoch — always older than v1
+    const r2 = await stateRepo.upsertWorkingState(oppId, { mode: "stale-attempt" }, TEST_USER_ID, staleVersion);
+    assert.equal(r2.conflict, true, "Should conflict when expectedVersion is stale");
+    // The row should still hold the v1 payload, not the stale-attempt payload
+    const rows = await db
+      .select()
+      .from(opportunityWorkingStateTable)
+      .where(eq(opportunityWorkingStateTable.opportunityId, oppId));
+    assert.notEqual((rows[0].payload as Record<string, unknown>).mode, "stale-attempt");
+    // Unused variable suppress
+    void v1;
+  });
+
+  it("upsertWorkingState succeeds when expectedVersion matches current", async () => {
+    const r1 = await stateRepo.upsertWorkingState(oppId, { mode: "v1" }, TEST_USER_ID);
+    const currentVersion = r1.row.updatedAt?.toISOString();
+
+    const r2 = await stateRepo.upsertWorkingState(oppId, { mode: "v2" }, TEST_USER_ID, currentVersion);
+    assert.equal(r2.conflict, false, "Should not conflict when expectedVersion matches");
+    assert.equal((r2.row.payload as Record<string, unknown>).mode, "v2");
   });
 });
 

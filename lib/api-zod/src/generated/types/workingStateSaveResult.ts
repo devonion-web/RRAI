@@ -8,4 +8,6 @@
 
 export interface WorkingStateSaveResult {
   savedAt: Date;
+  /** Same as savedAt — the confirmed updatedAt to send as X-Expected-Version on the next write. */
+  serverVersion: Date;
 }

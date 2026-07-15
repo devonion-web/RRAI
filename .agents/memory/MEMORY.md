@@ -6,3 +6,4 @@
 - [OpenAPI YAML structure](openapi-yaml-structure.md) — components can only have one `parameters:`, `schemas:`, and `responses:` block; duplicate keys cause orval to silently fail with "Failed to resolve input".
 - [Integration test runner](integration-test-runner.md) — use `node --test --import tsx/esm <file.ts>` for TS tests; plain `--experimental-strip-types` fails on directory imports in workspace libs.
 - [Org membership bootstrap](org-membership-bootstrap.md) — RRAI_ORG_OPEN=true / RRAI_ORG_DOMAIN / RRAI_ADMIN_EMAILS control auto-grant on login; no env var = no auto-grant (user can log in but gets 403 on org-scoped routes).
+- [Working-state persistence pattern](working-state-persistence.md) — PostgreSQL is authoritative; localStorage is recovery cache only (rr_lg_recovery_v1, 24h TTL, cleared on confirmed save); optimistic concurrency via X-Expected-Version header + 409 stale; `upsertWorkingState` returns `{ row, conflict }`.

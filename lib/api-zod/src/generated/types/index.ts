@@ -30,6 +30,8 @@ export * from './opportunityListEnvelope';
 export * from './opportunityView';
 export * from './unauthorisedResponse';
 export * from './updateOpportunityRequest';
+export * from './workingStateConflict';
+export * from './workingStateConflictError';
 export * from './workingStateEnvelope';
 export * from './workingStatePayload';
 export * from './workingStateSaveResult';

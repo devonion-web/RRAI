@@ -1,0 +1,211 @@
+Complete Architecture Remediation #3 by hardening the LogicGate persistence model.
+
+Objective
+
+Make PostgreSQL the sole authoritative source for LogicGate opportunity business state.
+
+The previous remediation correctly added persistent organisations, opportunities, contacts and working state. However, the frontend still writes full business state to localStorage and uses fire-and-forget server saves.
+
+This creates possible divergence, silent data loss and unclear source-of-truth behaviour.
+
+Correct this without redesigning the LogicGate module.
+
+1. Classify all localStorage usage
+
+Inspect every use of localStorage in the RRAI frontend, particularly within:
+
+* LogicGateModule.jsx
+* LogicGate hooks and API utilities
+* Authentication and access utilities
+* Any RFP or opportunity-related frontend
+
+Produce an internal classification:
+
+* Harmless user preference
+* Navigation convenience
+* Temporary recovery cache
+* Runtime business state
+* Identity or access data
+
+Remove localStorage as an authoritative store for all runtime business state.
+
+Runtime business state includes:
+
+* Opportunities
+* Contacts
+* Discovery content
+* Scores
+* Briefings
+* Proposal content
+* Pricing
+* Generated artefacts
+* Workflow-stage state
+* Working-state payloads
+
+2. Make server state authoritative
+
+When opening an opportunity:
+
+1. Load the opportunity and working state from the server.
+2. Treat the returned version as authoritative.
+3. Populate the frontend from that state.
+4. Do not replace valid server state with an older local copy.
+
+Where no opportunity exists yet, use an explicit unsaved draft state in memory.
+
+Do not treat the absence of a localStorage ID as evidence that no server record exists.
+
+The authenticated user’s authorised opportunity list must be the source used to find existing opportunities.
+
+3. Replace fire-and-forget saves
+
+Do not silently discard save failures.
+
+Implement a controlled save mechanism with:
+
+* Debouncing for frequent state changes
+* A clear save lifecycle:
+    * Unsaved
+    * Saving
+    * Saved
+    * Save failed
+* Retry for transient network failures
+* No infinite retry loop
+* User-visible failure state
+* Protection against stale saves overwriting newer state
+* Cleanup or flush behaviour when changing opportunity or leaving the workflow
+
+Use the existing working-state version or updated timestamp to detect stale writes.
+
+Where practical, send an expected version with the update and return 409 Conflict for stale updates.
+
+4. Optional recovery cache
+
+A local recovery cache may remain only when all of the following are true:
+
+* It is clearly named as a recovery cache.
+* It is not treated as the source of truth.
+* It includes opportunity ID, server version and cache timestamp.
+* It is only offered when it is newer than the last confirmed server save.
+* The user is told that unsaved recovery data exists.
+* Recovery never silently overwrites server data.
+* The cache is cleared after a confirmed successful save.
+* It has an expiry period.
+* It contains no authentication or role information.
+
+If this is unnecessary, remove the business-state cache entirely.
+
+5. Opportunity creation flow
+
+Ensure the frontend creates or selects a persistent server opportunity before durable working state is saved.
+
+A working-state update must not depend on a browser-only temporary ID.
+
+Prevent duplicate opportunity creation caused by:
+
+* Refresh
+* Retry
+* Double-click
+* Repeated autosave
+* Reopening the module
+
+Use idempotency or a stable server-issued ID where appropriate.
+
+6. Cross-device behaviour
+
+Validate the following:
+
+1. User creates an opportunity on Browser A.
+2. User changes discovery and proposal working state.
+3. Save is confirmed.
+4. User opens Browser B.
+5. The same opportunity and working state load from PostgreSQL.
+6. Browser B has no dependency on Browser A’s localStorage.
+
+Clearing localStorage must not remove or hide server records.
+
+7. Save conflict handling
+
+Add basic optimistic concurrency to working-state updates.
+
+At minimum:
+
+* Return the current server version with the working state.
+* Require the client to submit its expected version when updating.
+* Reject stale updates with 409.
+* Return enough information for the UI to show that a newer version exists.
+* Do not silently perform last-write-wins when a known stale update is detected.
+
+A simple reload-and-review message is acceptable for this phase. Do not build live collaborative editing.
+
+8. Tests
+
+Add or update automated tests covering:
+
+* Server state wins over an older local recovery cache.
+* A new opportunity receives a persistent server ID.
+* Autosave succeeds and reports Saved.
+* Failed save reports Save failed.
+* Retry succeeds after a transient failure.
+* A stale working-state update receives 409.
+* Clearing localStorage does not remove an opportunity.
+* A second browser session can load the opportunity.
+* Duplicate creation is prevented.
+* Recovery cache does not silently overwrite newer server state.
+* Authentication or role data is never stored in localStorage.
+
+9. Validation
+
+Run:
+
+* TypeScript typecheck
+* Existing authentication tests
+* Existing knowledge-loader tests
+* Runtime persistence integration tests
+* Frontend tests
+* Frontend build
+* API build
+* Full application startup
+
+Manually verify:
+
+* Create and save an opportunity.
+* Confirm Saved status.
+* Restart the API server.
+* Reload and confirm data remains.
+* Clear localStorage.
+* Reload and confirm data remains.
+* Open a second browser session.
+* Confirm the same authorised opportunity appears.
+* Simulate a save failure and confirm it is visible.
+* Simulate a stale update and confirm it does not silently overwrite newer state.
+
+Boundaries
+
+Do not implement:
+
+* Conversation persistence
+* Lens routing
+* RAG
+* Document object storage
+* Workspace redesign
+* Presentation runtime
+* Major LogicGate component decomposition
+
+Do not change scoring methodology or prompts.
+
+Delivery report
+
+Perform the changes, then report:
+
+* Every localStorage use found and its final classification
+* Business-state localStorage removed
+* Any recovery cache retained and why
+* Save lifecycle implementation
+* Concurrency implementation
+* API changes
+* Tests added
+* Typecheck, build and test results
+* Cross-device validation result
+* Remaining persistence limitations
+* Branch name and commit reference

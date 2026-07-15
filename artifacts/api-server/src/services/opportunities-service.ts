@@ -195,21 +195,29 @@ export async function upsertWorkingState(
   actor: ActorContext,
   opportunityId: string,
   payload: Record<string, unknown>,
+  expectedVersion?: string,
 ) {
   const opp = await oppsRepo.getOpportunity(opportunityId, actor.orgId);
   if (!opp) return null;
 
-  const state = await stateRepo.upsertWorkingState(opportunityId, payload, actor.userId);
+  const result = await stateRepo.upsertWorkingState(
+    opportunityId,
+    payload,
+    actor.userId,
+    expectedVersion,
+  );
 
-  await logAuditEvent({
-    organisationId: actor.orgId,
-    actorType: "user",
-    actorId: actor.userId,
-    eventType: "opportunity.working_state_updated",
-    entityType: "opportunity",
-    entityId: opportunityId,
-    payload: { stateType: stateRepo.LOGICGATE_STATE_TYPE },
-  });
+  if (!result.conflict) {
+    await logAuditEvent({
+      organisationId: actor.orgId,
+      actorType: "user",
+      actorId: actor.userId,
+      eventType: "opportunity.working_state_updated",
+      entityType: "opportunity",
+      entityId: opportunityId,
+      payload: { stateType: stateRepo.LOGICGATE_STATE_TYPE },
+    });
+  }
 
-  return state;
+  return result;
 }

@@ -221,21 +221,29 @@ export const GetWorkingStateParams = zod.object({
 })
 
 export const GetWorkingStateResponse = zod.object({
-  "state": zod.unknown().nullable()
+  "state": zod.unknown().nullable().describe('Full session payload, or null if no state has been saved yet.'),
+  "serverVersion": zod.coerce.date().nullable().describe('ISO date-time of the server\'s current updatedAt; null if no state saved yet.')
 })
 
 
 /**
+ * Accepts an optional `X-Expected-Version` header (ISO date-time string). When present the server rejects the write with 409 if its current `updatedAt` is strictly newer, preventing silent last-write-wins on concurrent saves.
+
  * @summary Upsert the working session state for an opportunity
  */
 export const SaveWorkingStateParams = zod.object({
   "id": zod.coerce.string()
 })
 
+export const SaveWorkingStateHeader = zod.object({
+  "X-Expected-Version": zod.date().optional().describe('ISO date-time of the client\'s last known server version. Omit on first save (unconditional write).\n')
+})
+
 export const SaveWorkingStateBody = zod.record(zod.string(), zod.unknown()).describe('Arbitrary JSON payload representing the full LogicGate session state.')
 
 export const SaveWorkingStateResponse = zod.object({
-  "savedAt": zod.coerce.date()
+  "savedAt": zod.coerce.date(),
+  "serverVersion": zod.coerce.date().describe('Same as savedAt — the confirmed updatedAt to send as X-Expected-Version on the next write.')
 })
 
 

@@ -39,6 +39,7 @@ import type {
   OpportunityView,
   UnauthorisedResponse,
   UpdateOpportunityRequest,
+  WorkingStateConflict,
   WorkingStateEnvelope,
   WorkingStatePayload,
   WorkingStateSaveResult
@@ -1052,6 +1053,8 @@ export const getSaveWorkingStateUrl = (id: string,) => {
 }
 
 /**
+ * Accepts an optional `X-Expected-Version` header (ISO date-time string). When present the server rejects the write with 409 if its current `updatedAt` is strictly newer, preventing silent last-write-wins on concurrent saves.
+
  * @summary Upsert the working session state for an opportunity
  */
 export const saveWorkingState = async (id: string,
@@ -1070,7 +1073,7 @@ export const saveWorkingState = async (id: string,
 
 
 
-export const getSaveWorkingStateMutationOptions = <TError = ErrorType<UnauthorisedResponse | ForbiddenResponse | NotFoundResponse>,
+export const getSaveWorkingStateMutationOptions = <TError = ErrorType<UnauthorisedResponse | ForbiddenResponse | NotFoundResponse | WorkingStateConflict>,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof saveWorkingState>>, TError,{id: string;data: BodyType<WorkingStatePayload>}, TContext>, request?: SecondParameter<typeof customFetch>}
 ): UseMutationOptions<Awaited<ReturnType<typeof saveWorkingState>>, TError,{id: string;data: BodyType<WorkingStatePayload>}, TContext> => {
 
@@ -1099,12 +1102,12 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
 
     export type SaveWorkingStateMutationResult = NonNullable<Awaited<ReturnType<typeof saveWorkingState>>>
     export type SaveWorkingStateMutationBody = BodyType<WorkingStatePayload>
-    export type SaveWorkingStateMutationError = ErrorType<UnauthorisedResponse | ForbiddenResponse | NotFoundResponse>
+    export type SaveWorkingStateMutationError = ErrorType<UnauthorisedResponse | ForbiddenResponse | NotFoundResponse | WorkingStateConflict>
 
     /**
  * @summary Upsert the working session state for an opportunity
  */
-export const useSaveWorkingState = <TError = ErrorType<UnauthorisedResponse | ForbiddenResponse | NotFoundResponse>,
+export const useSaveWorkingState = <TError = ErrorType<UnauthorisedResponse | ForbiddenResponse | NotFoundResponse | WorkingStateConflict>,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof saveWorkingState>>, TError,{id: string;data: BodyType<WorkingStatePayload>}, TContext>, request?: SecondParameter<typeof customFetch>}
  ): UseMutationResult<
         Awaited<ReturnType<typeof saveWorkingState>>,

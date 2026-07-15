@@ -291,8 +291,23 @@ paths:
       tags: [Opportunities]
       operationId: saveWorkingState
       summary: Upsert the working session state for an opportunity
+      description: >
+        Accepts an optional `X-Expected-Version` header (ISO date-time string).
+        When present the server rejects the write with 409 if its current
+        `updatedAt` is strictly newer, preventing silent last-write-wins on
+        concurrent saves.
       security:
         - sessionCookie: []
+      parameters:
+        - name: X-Expected-Version
+          in: header
+          required: false
+          schema:
+            type: string
+            format: date-time
+          description: >
+            ISO date-time of the client's last known server version.
+            Omit on first save (unconditional write).
       requestBody:
         required: true
         content:
@@ -312,6 +327,12 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
+        '409':
+          description: Optimistic concurrency conflict — a newer version exists on the server.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkingStateConflict'
   /mobile-auth/logout:
     post:
       tags: [Auth]
@@ -516,17 +537,42 @@ components:
       description: Arbitrary JSON payload representing the full LogicGate session state.
     WorkingStateEnvelope:
       type: object
-      required: [state]
+      required: [state, serverVersion]
       properties:
         state:
           nullable: true
+          description: Full session payload, or null if no state has been saved yet.
+        serverVersion:
+          type: string
+          format: date-time
+          nullable: true
+          description: ISO date-time of the server's current updatedAt; null if no state saved yet.
     WorkingStateSaveResult:
       type: object
-      required: [savedAt]
+      required: [savedAt, serverVersion]
       properties:
         savedAt:
           type: string
           format: date-time
+        serverVersion:
+          type: string
+          format: date-time
+          description: Same as savedAt — the confirmed updatedAt to send as X-Expected-Version on the next write.
+    WorkingStateConflict:
+      type: object
+      required: [error, serverVersion]
+      properties:
+        error:
+          type: string
+          enum: [stale]
+          description: Always "stale" for a 409 conflict.
+        message:
+          type: string
+        serverVersion:
+          type: string
+          format: date-time
+          nullable: true
+          description: The server's current updatedAt — client should reload before retrying.
   responses:
     Unauthorised:
       description: Not authenticated.

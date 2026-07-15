@@ -1367,6 +1367,9 @@ router.get("/opportunities/:id/contacts/export", async (req: Request, res: Respo
 });
 
 // GET /api/opportunities/:id/working-state — load working state
+// Returns { state: object|null, serverVersion: ISO-string|null }.
+// state is null when the opportunity exists but has no saved working state yet.
+// 404 only when the opportunity itself does not exist (or belongs to another org).
 router.get("/opportunities/:id/working-state", async (req: Request, res: Response): Promise<void> => {
   const actor = await resolveActor(req, res);
   if (!actor) return;
@@ -1378,7 +1381,10 @@ router.get("/opportunities/:id/working-state", async (req: Request, res: Respons
       res.status(404).json({ error: "Opportunity not found" });
       return;
     }
-    res.json({ state: state?.payload ?? null });
+    res.json({
+      state: state?.payload ?? null,
+      serverVersion: state?.updatedAt?.toISOString() ?? null,
+    });
   } catch (err) {
     req.log.error({ err }, "Failed to get working state");
     res.status(500).json({ error: "Failed to get working state" });
@@ -1386,6 +1392,9 @@ router.get("/opportunities/:id/working-state", async (req: Request, res: Respons
 });
 
 // PUT /api/opportunities/:id/working-state — upsert working state
+// Accepts optional X-Expected-Version header (ISO string). When present the
+// server rejects the write with 409 if its current updatedAt is strictly
+// newer, preventing silent last-write-wins on concurrent saves.
 router.put("/opportunities/:id/working-state", async (req: Request, res: Response): Promise<void> => {
   const actor = await resolveActor(req, res);
   if (!actor) return;
@@ -1396,13 +1405,26 @@ router.put("/opportunities/:id/working-state", async (req: Request, res: Respons
     res.status(400).json({ error: "Request body must be a JSON object" });
     return;
   }
+
+  const rawHeader = req.headers["x-expected-version"];
+  const expectedVersion = rawHeader ? String(Array.isArray(rawHeader) ? rawHeader[0] : rawHeader) : undefined;
+
   try {
-    const state = await opportunitiesService.upsertWorkingState(actor, id, payload);
-    if (state === null) {
+    const result = await opportunitiesService.upsertWorkingState(actor, id, payload, expectedVersion);
+    if (result === null) {
       res.status(404).json({ error: "Opportunity not found" });
       return;
     }
-    res.json({ savedAt: state.updatedAt.toISOString() });
+    if (result.conflict) {
+      res.status(409).json({
+        error: "stale",
+        message: "A newer version of this working state exists on the server.",
+        serverVersion: result.row.updatedAt?.toISOString() ?? null,
+      });
+      return;
+    }
+    const iso = result.row.updatedAt?.toISOString() ?? new Date().toISOString();
+    res.json({ savedAt: iso, serverVersion: iso });
   } catch (err) {
     req.log.error({ err }, "Failed to save working state");
     res.status(500).json({ error: "Failed to save working state" });

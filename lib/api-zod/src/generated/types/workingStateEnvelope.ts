@@ -7,5 +7,8 @@
  */
 
 export interface WorkingStateEnvelope {
+  /** Full session payload, or null if no state has been saved yet. */
   state: unknown | null;
+  /** ISO date-time of the server's current updatedAt; null if no state saved yet. */
+  serverVersion: Date | null;
 }
