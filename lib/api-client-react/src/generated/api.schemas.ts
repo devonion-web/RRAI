@@ -53,6 +53,93 @@ export interface ErrorEnvelope {
   error: string;
 }
 
+export type EventViewOutputSnapshot = { [key: string]: unknown };
+
+export interface EventView {
+  id: string;
+  type: string;
+  description: string;
+  stage: string;
+  created_at: string;
+  output_snapshot?: EventViewOutputSnapshot;
+}
+
+export interface ContactRef {
+  id: string;
+}
+
+export interface OpportunityView {
+  opportunity_id: string;
+  company: string;
+  created_at: string;
+  events: EventView[];
+  contacts: ContactRef[];
+}
+
+export interface OpportunityListEnvelope {
+  opportunities: OpportunityView[];
+}
+
+export interface CreateOpportunityRequest {
+  /** @minLength 1 */
+  company: string;
+}
+
+export interface UpdateOpportunityRequest {
+  name?: string;
+  customerName?: string;
+  status?: string;
+  stage?: string;
+  summary?: string;
+}
+
+export type AddEventRequestOutputSnapshot = { [key: string]: unknown };
+
+export interface AddEventRequest {
+  type?: string;
+  description?: string;
+  stage?: string;
+  output_snapshot?: AddEventRequestOutputSnapshot;
+}
+
+export interface ArchiveResult {
+  archived: boolean;
+  id: string;
+}
+
+/**
+ * Arbitrary JSON payload representing the full LogicGate session state.
+ */
+export interface WorkingStatePayload { [key: string]: unknown }
+
+export interface WorkingStateEnvelope {
+  state: unknown | null;
+}
+
+export interface WorkingStateSaveResult {
+  savedAt: string;
+}
+
+/**
+ * Not authenticated.
+ */
+export type UnauthorisedResponse = ErrorEnvelope;
+
+/**
+ * Authenticated but not authorised.
+ */
+export type ForbiddenResponse = ErrorEnvelope;
+
+/**
+ * Resource not found.
+ */
+export type NotFoundResponse = ErrorEnvelope;
+
+/**
+ * Invalid request body.
+ */
+export type BadRequestResponse = ErrorEnvelope;
+
 /**
  * Opaque session token — `Bearer <sid>`.
  */

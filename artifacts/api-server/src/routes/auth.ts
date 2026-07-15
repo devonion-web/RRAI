@@ -19,6 +19,8 @@ import {
   ISSUER_URL,
   type SessionData,
 } from "../lib/auth";
+import { findOrCreateOrg, upsertMembership } from "../repositories/organisations-repository";
+import { logger } from "../lib/logger";
 
 const OIDC_COOKIE_TTL = 10 * 60 * 1000;
 
@@ -112,6 +114,52 @@ async function upsertUser(claims: Record<string, unknown>) {
   return user;
 }
 
+/**
+ * Org membership bootstrap — called on every successful login.
+ *
+ * Membership grant rules (applied server-side only; client cannot influence them):
+ *
+ * 1. If RRAI_ADMIN_EMAILS contains the user's email → org role = "admin"
+ * 2. If RRAI_ORG_DOMAIN is set and user's email ends with that domain → org role = "member"
+ * 3. If RRAI_ORG_OPEN=true → any authenticated user gets org role = "member"
+ *
+ * Bootstrap org: slug = RRAI_ORG_SLUG (default "risk-rising")
+ *                name = RRAI_ORG_NAME (default "Risk Rising")
+ *
+ * If none of the above conditions match, the user is not added to the org.
+ * They will still be able to log in but will receive 403 on org-scoped endpoints.
+ */
+async function bootstrapOrgMembership(
+  userId: string,
+  email: string | null,
+  platformRole: string,
+): Promise<void> {
+  const orgSlug = process.env.RRAI_ORG_SLUG ?? "risk-rising";
+  const orgName = process.env.RRAI_ORG_NAME ?? "Risk Rising";
+  const orgDomain = (process.env.RRAI_ORG_DOMAIN ?? "").toLowerCase().trim();
+  const orgOpen = (process.env.RRAI_ORG_OPEN ?? "").toLowerCase() === "true";
+
+  const adminEmails = (process.env.RRAI_ADMIN_EMAILS ?? "")
+    .split(",")
+    .map((e) => e.trim().toLowerCase())
+    .filter(Boolean);
+
+  const emailLower = email?.toLowerCase() ?? "";
+  const isAdmin = platformRole === "admin" || (email && adminEmails.includes(emailLower));
+  const isDomainMatch = orgDomain && emailLower.endsWith(`@${orgDomain}`);
+
+  const shouldGrant = isAdmin || isDomainMatch || orgOpen;
+  if (!shouldGrant) return;
+
+  try {
+    const org = await findOrCreateOrg(orgSlug, orgName);
+    const memberRole: "admin" | "member" = isAdmin ? "admin" : "member";
+    await upsertMembership(org.id, userId, memberRole);
+  } catch (err) {
+    logger.warn({ err, userId }, "Failed to bootstrap org membership — non-fatal");
+  }
+}
+
 // GET /api/auth/user — returns the current auth state (public: no auth required)
 router.get("/auth/user", (req: Request, res: Response) => {
   res.json(
@@ -197,6 +245,7 @@ router.get("/callback", async (req: Request, res: Response) => {
   }
 
   const dbUser = await upsertUser(claims as unknown as Record<string, unknown>);
+  await bootstrapOrgMembership(dbUser.id, dbUser.email ?? null, dbUser.role);
 
   const now = Math.floor(Date.now() / 1000);
   const sessionData: SessionData = {
@@ -266,6 +315,7 @@ router.post(
       }
 
       const dbUser = await upsertUser(claims as unknown as Record<string, unknown>);
+      await bootstrapOrgMembership(dbUser.id, dbUser.email ?? null, dbUser.role);
 
       const now = Math.floor(Date.now() / 1000);
       const sessionData: SessionData = {

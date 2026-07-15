@@ -128,6 +128,190 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
+  /opportunities:
+    get:
+      tags: [Opportunities]
+      operationId: listOpportunities
+      summary: List active opportunities for the authenticated user's organisation
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: Opportunity list returned.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OpportunityListEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthorised'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+    post:
+      tags: [Opportunities]
+      operationId: createOpportunity
+      summary: Create a new opportunity
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateOpportunityRequest'
+      responses:
+        '201':
+          description: Opportunity created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OpportunityView'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorised'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /opportunities/{id}:
+    parameters:
+      - $ref: '#/components/parameters/EntityId'
+    get:
+      tags: [Opportunities]
+      operationId: getOpportunity
+      summary: Get a single opportunity with events and contact refs
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: Opportunity found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OpportunityView'
+        '401':
+          $ref: '#/components/responses/Unauthorised'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    patch:
+      tags: [Opportunities]
+      operationId: updateOpportunity
+      summary: Update an opportunity
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateOpportunityRequest'
+      responses:
+        '200':
+          description: Opportunity updated.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OpportunityView'
+        '401':
+          $ref: '#/components/responses/Unauthorised'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    delete:
+      tags: [Opportunities]
+      operationId: archiveOpportunity
+      summary: Archive an opportunity
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: Opportunity archived.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ArchiveResult'
+        '401':
+          $ref: '#/components/responses/Unauthorised'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /opportunities/{id}/events:
+    post:
+      tags: [Opportunities]
+      operationId: addOpportunityEvent
+      summary: Append an event to an opportunity
+      security:
+        - sessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/EntityId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AddEventRequest'
+      responses:
+        '201':
+          description: Event appended.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EventView'
+        '401':
+          $ref: '#/components/responses/Unauthorised'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /opportunities/{id}/working-state:
+    parameters:
+      - $ref: '#/components/parameters/EntityId'
+    get:
+      tags: [Opportunities]
+      operationId: getWorkingState
+      summary: Load the working session state for an opportunity
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: Working state returned (state is null if none saved yet).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkingStateEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthorised'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    put:
+      tags: [Opportunities]
+      operationId: saveWorkingState
+      summary: Upsert the working session state for an opportunity
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WorkingStatePayload'
+      responses:
+        '200':
+          description: State saved.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkingStateSaveResult'
+        '401':
+          $ref: '#/components/responses/Unauthorised'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
   /mobile-auth/logout:
     post:
       tags: [Auth]
@@ -156,6 +340,12 @@ components:
       in: cookie
       required: false
       description: Browser session cookie.
+      schema:
+        type: string
+    EntityId:
+      name: id
+      in: path
+      required: true
       schema:
         type: string
   schemas:
@@ -231,3 +421,134 @@ components:
       properties:
         error:
           type: string
+    EventView:
+      type: object
+      required: [id, type, description, stage, created_at]
+      properties:
+        id:
+          type: string
+        type:
+          type: string
+        description:
+          type: string
+        stage:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        output_snapshot:
+          type: object
+    ContactRef:
+      type: object
+      required: [id]
+      properties:
+        id:
+          type: string
+    OpportunityView:
+      type: object
+      required: [opportunity_id, company, created_at, events, contacts]
+      properties:
+        opportunity_id:
+          type: string
+        company:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        events:
+          type: array
+          items:
+            $ref: '#/components/schemas/EventView'
+        contacts:
+          type: array
+          items:
+            $ref: '#/components/schemas/ContactRef'
+    OpportunityListEnvelope:
+      type: object
+      required: [opportunities]
+      properties:
+        opportunities:
+          type: array
+          items:
+            $ref: '#/components/schemas/OpportunityView'
+    CreateOpportunityRequest:
+      type: object
+      required: [company]
+      properties:
+        company:
+          type: string
+          minLength: 1
+    UpdateOpportunityRequest:
+      type: object
+      properties:
+        name:
+          type: string
+        customerName:
+          type: string
+        status:
+          type: string
+        stage:
+          type: string
+        summary:
+          type: string
+    AddEventRequest:
+      type: object
+      properties:
+        type:
+          type: string
+        description:
+          type: string
+        stage:
+          type: string
+        output_snapshot:
+          type: object
+    ArchiveResult:
+      type: object
+      required: [archived, id]
+      properties:
+        archived:
+          type: boolean
+        id:
+          type: string
+    WorkingStatePayload:
+      type: object
+      additionalProperties: true
+      description: Arbitrary JSON payload representing the full LogicGate session state.
+    WorkingStateEnvelope:
+      type: object
+      required: [state]
+      properties:
+        state:
+          nullable: true
+    WorkingStateSaveResult:
+      type: object
+      required: [savedAt]
+      properties:
+        savedAt:
+          type: string
+          format: date-time
+  responses:
+    Unauthorised:
+      description: Not authenticated.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    Forbidden:
+      description: Authenticated but not authorised.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    NotFound:
+      description: Resource not found.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    BadRequest:
+      description: Invalid request body.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'

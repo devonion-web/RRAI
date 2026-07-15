@@ -50,12 +50,33 @@ export async function updateScore(body) {
   return post('/update-score', body)
 }
 
+export async function listOpportunities() {
+  return get('/opportunities')
+}
+
 export async function createOpportunity(body) {
   return post('/opportunities', body)
 }
 
 export async function getOpportunity(id) {
   return get(`/opportunities/${id}`)
+}
+
+export async function getWorkingState(opportunityId) {
+  return get(`/opportunities/${opportunityId}/working-state`)
+}
+
+export async function saveWorkingState(opportunityId, payload) {
+  const res = await fetch(`${BASE}/opportunities/${opportunityId}/working-state`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+  if (!res.ok) {
+    const text = await res.text()
+    throw new Error(text || `Request failed: ${res.status}`)
+  }
+  return res.json()
 }
 
 export async function addManualEvent(id, body) {

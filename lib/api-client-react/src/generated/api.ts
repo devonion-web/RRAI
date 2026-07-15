@@ -20,14 +20,28 @@ import type {
 } from '@tanstack/react-query';
 
 import type {
+  AddEventRequest,
+  ArchiveResult,
   AuthUserEnvelope,
+  BadRequestResponse,
   BeginBrowserLoginParams,
+  CreateOpportunityRequest,
   ErrorEnvelope,
+  EventView,
+  ForbiddenResponse,
   HandleBrowserLoginCallbackParams,
   HealthStatus,
   LogoutSuccess,
   MobileTokenExchangeRequest,
-  MobileTokenExchangeSuccess
+  MobileTokenExchangeSuccess,
+  NotFoundResponse,
+  OpportunityListEnvelope,
+  OpportunityView,
+  UnauthorisedResponse,
+  UpdateOpportunityRequest,
+  WorkingStateEnvelope,
+  WorkingStatePayload,
+  WorkingStateSaveResult
 } from './api.schemas';
 
 import { customFetch } from '../custom-fetch';
@@ -511,6 +525,594 @@ export const useExchangeMobileAuthorizationCode = <TError = ErrorType<ErrorEnvel
         TContext
       > => {
       return useMutation(getExchangeMobileAuthorizationCodeMutationOptions(options));
+    }
+
+export const getListOpportunitiesUrl = () => {
+
+
+
+
+  return `/api/opportunities`
+}
+
+/**
+ * @summary List active opportunities for the authenticated user's organisation
+ */
+export const listOpportunities = async ( options?: RequestInit): Promise<OpportunityListEnvelope> => {
+
+  return customFetch<OpportunityListEnvelope>(getListOpportunitiesUrl(),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getListOpportunitiesQueryKey = () => {
+    return [
+    `/api/opportunities`
+    ] as const;
+    }
+
+
+export const getListOpportunitiesQueryOptions = <TData = Awaited<ReturnType<typeof listOpportunities>>, TError = ErrorType<UnauthorisedResponse | ForbiddenResponse>>( options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listOpportunities>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getListOpportunitiesQueryKey();
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof listOpportunities>>> = ({ signal }) => listOpportunities({ signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof listOpportunities>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type ListOpportunitiesQueryResult = NonNullable<Awaited<ReturnType<typeof listOpportunities>>>
+export type ListOpportunitiesQueryError = ErrorType<UnauthorisedResponse | ForbiddenResponse>
+
+
+/**
+ * @summary List active opportunities for the authenticated user's organisation
+ */
+
+export function useListOpportunities<TData = Awaited<ReturnType<typeof listOpportunities>>, TError = ErrorType<UnauthorisedResponse | ForbiddenResponse>>(
+  options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listOpportunities>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getListOpportunitiesQueryOptions(options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+
+
+
+
+
+
+export const getCreateOpportunityUrl = () => {
+
+
+
+
+  return `/api/opportunities`
+}
+
+/**
+ * @summary Create a new opportunity
+ */
+export const createOpportunity = async (createOpportunityRequest: CreateOpportunityRequest, options?: RequestInit): Promise<OpportunityView> => {
+
+  return customFetch<OpportunityView>(getCreateOpportunityUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(
+      createOpportunityRequest,)
+  }
+);}
+
+
+
+
+export const getCreateOpportunityMutationOptions = <TError = ErrorType<BadRequestResponse | UnauthorisedResponse | ForbiddenResponse>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createOpportunity>>, TError,{data: BodyType<CreateOpportunityRequest>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof createOpportunity>>, TError,{data: BodyType<CreateOpportunityRequest>}, TContext> => {
+
+const mutationKey = ['createOpportunity'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof createOpportunity>>, {data: BodyType<CreateOpportunityRequest>}> = (props) => {
+          const {data} = props ?? {};
+
+          return  createOpportunity(data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type CreateOpportunityMutationResult = NonNullable<Awaited<ReturnType<typeof createOpportunity>>>
+    export type CreateOpportunityMutationBody = BodyType<CreateOpportunityRequest>
+    export type CreateOpportunityMutationError = ErrorType<BadRequestResponse | UnauthorisedResponse | ForbiddenResponse>
+
+    /**
+ * @summary Create a new opportunity
+ */
+export const useCreateOpportunity = <TError = ErrorType<BadRequestResponse | UnauthorisedResponse | ForbiddenResponse>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createOpportunity>>, TError,{data: BodyType<CreateOpportunityRequest>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof createOpportunity>>,
+        TError,
+        {data: BodyType<CreateOpportunityRequest>},
+        TContext
+      > => {
+      return useMutation(getCreateOpportunityMutationOptions(options));
+    }
+
+export const getGetOpportunityUrl = (id: string,) => {
+
+
+
+
+  return `/api/opportunities/${id}`
+}
+
+/**
+ * @summary Get a single opportunity with events and contact refs
+ */
+export const getOpportunity = async (id: string, options?: RequestInit): Promise<OpportunityView> => {
+
+  return customFetch<OpportunityView>(getGetOpportunityUrl(id),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getGetOpportunityQueryKey = (id: string,) => {
+    return [
+    `/api/opportunities/${id}`
+    ] as const;
+    }
+
+
+export const getGetOpportunityQueryOptions = <TData = Awaited<ReturnType<typeof getOpportunity>>, TError = ErrorType<UnauthorisedResponse | ForbiddenResponse | NotFoundResponse>>(id: string, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getOpportunity>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetOpportunityQueryKey(id);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getOpportunity>>> = ({ signal }) => getOpportunity(id, { signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, enabled: !!(id), ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getOpportunity>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type GetOpportunityQueryResult = NonNullable<Awaited<ReturnType<typeof getOpportunity>>>
+export type GetOpportunityQueryError = ErrorType<UnauthorisedResponse | ForbiddenResponse | NotFoundResponse>
+
+
+/**
+ * @summary Get a single opportunity with events and contact refs
+ */
+
+export function useGetOpportunity<TData = Awaited<ReturnType<typeof getOpportunity>>, TError = ErrorType<UnauthorisedResponse | ForbiddenResponse | NotFoundResponse>>(
+ id: string, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getOpportunity>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getGetOpportunityQueryOptions(id,options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+
+
+
+
+
+
+export const getUpdateOpportunityUrl = (id: string,) => {
+
+
+
+
+  return `/api/opportunities/${id}`
+}
+
+/**
+ * @summary Update an opportunity
+ */
+export const updateOpportunity = async (id: string,
+    updateOpportunityRequest: UpdateOpportunityRequest, options?: RequestInit): Promise<OpportunityView> => {
+
+  return customFetch<OpportunityView>(getUpdateOpportunityUrl(id),
+  {
+    ...options,
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(
+      updateOpportunityRequest,)
+  }
+);}
+
+
+
+
+export const getUpdateOpportunityMutationOptions = <TError = ErrorType<UnauthorisedResponse | ForbiddenResponse | NotFoundResponse>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof updateOpportunity>>, TError,{id: string;data: BodyType<UpdateOpportunityRequest>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof updateOpportunity>>, TError,{id: string;data: BodyType<UpdateOpportunityRequest>}, TContext> => {
+
+const mutationKey = ['updateOpportunity'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof updateOpportunity>>, {id: string;data: BodyType<UpdateOpportunityRequest>}> = (props) => {
+          const {id,data} = props ?? {};
+
+          return  updateOpportunity(id,data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type UpdateOpportunityMutationResult = NonNullable<Awaited<ReturnType<typeof updateOpportunity>>>
+    export type UpdateOpportunityMutationBody = BodyType<UpdateOpportunityRequest>
+    export type UpdateOpportunityMutationError = ErrorType<UnauthorisedResponse | ForbiddenResponse | NotFoundResponse>
+
+    /**
+ * @summary Update an opportunity
+ */
+export const useUpdateOpportunity = <TError = ErrorType<UnauthorisedResponse | ForbiddenResponse | NotFoundResponse>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof updateOpportunity>>, TError,{id: string;data: BodyType<UpdateOpportunityRequest>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof updateOpportunity>>,
+        TError,
+        {id: string;data: BodyType<UpdateOpportunityRequest>},
+        TContext
+      > => {
+      return useMutation(getUpdateOpportunityMutationOptions(options));
+    }
+
+export const getArchiveOpportunityUrl = (id: string,) => {
+
+
+
+
+  return `/api/opportunities/${id}`
+}
+
+/**
+ * @summary Archive an opportunity
+ */
+export const archiveOpportunity = async (id: string, options?: RequestInit): Promise<ArchiveResult> => {
+
+  return customFetch<ArchiveResult>(getArchiveOpportunityUrl(id),
+  {
+    ...options,
+    method: 'DELETE'
+
+
+  }
+);}
+
+
+
+
+export const getArchiveOpportunityMutationOptions = <TError = ErrorType<UnauthorisedResponse | ForbiddenResponse | NotFoundResponse>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof archiveOpportunity>>, TError,{id: string}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof archiveOpportunity>>, TError,{id: string}, TContext> => {
+
+const mutationKey = ['archiveOpportunity'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof archiveOpportunity>>, {id: string}> = (props) => {
+          const {id} = props ?? {};
+
+          return  archiveOpportunity(id,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type ArchiveOpportunityMutationResult = NonNullable<Awaited<ReturnType<typeof archiveOpportunity>>>
+
+    export type ArchiveOpportunityMutationError = ErrorType<UnauthorisedResponse | ForbiddenResponse | NotFoundResponse>
+
+    /**
+ * @summary Archive an opportunity
+ */
+export const useArchiveOpportunity = <TError = ErrorType<UnauthorisedResponse | ForbiddenResponse | NotFoundResponse>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof archiveOpportunity>>, TError,{id: string}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof archiveOpportunity>>,
+        TError,
+        {id: string},
+        TContext
+      > => {
+      return useMutation(getArchiveOpportunityMutationOptions(options));
+    }
+
+export const getAddOpportunityEventUrl = (id: string,) => {
+
+
+
+
+  return `/api/opportunities/${id}/events`
+}
+
+/**
+ * @summary Append an event to an opportunity
+ */
+export const addOpportunityEvent = async (id: string,
+    addEventRequest: AddEventRequest, options?: RequestInit): Promise<EventView> => {
+
+  return customFetch<EventView>(getAddOpportunityEventUrl(id),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(
+      addEventRequest,)
+  }
+);}
+
+
+
+
+export const getAddOpportunityEventMutationOptions = <TError = ErrorType<UnauthorisedResponse | ForbiddenResponse | NotFoundResponse>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof addOpportunityEvent>>, TError,{id: string;data: BodyType<AddEventRequest>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof addOpportunityEvent>>, TError,{id: string;data: BodyType<AddEventRequest>}, TContext> => {
+
+const mutationKey = ['addOpportunityEvent'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof addOpportunityEvent>>, {id: string;data: BodyType<AddEventRequest>}> = (props) => {
+          const {id,data} = props ?? {};
+
+          return  addOpportunityEvent(id,data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type AddOpportunityEventMutationResult = NonNullable<Awaited<ReturnType<typeof addOpportunityEvent>>>
+    export type AddOpportunityEventMutationBody = BodyType<AddEventRequest>
+    export type AddOpportunityEventMutationError = ErrorType<UnauthorisedResponse | ForbiddenResponse | NotFoundResponse>
+
+    /**
+ * @summary Append an event to an opportunity
+ */
+export const useAddOpportunityEvent = <TError = ErrorType<UnauthorisedResponse | ForbiddenResponse | NotFoundResponse>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof addOpportunityEvent>>, TError,{id: string;data: BodyType<AddEventRequest>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof addOpportunityEvent>>,
+        TError,
+        {id: string;data: BodyType<AddEventRequest>},
+        TContext
+      > => {
+      return useMutation(getAddOpportunityEventMutationOptions(options));
+    }
+
+export const getGetWorkingStateUrl = (id: string,) => {
+
+
+
+
+  return `/api/opportunities/${id}/working-state`
+}
+
+/**
+ * @summary Load the working session state for an opportunity
+ */
+export const getWorkingState = async (id: string, options?: RequestInit): Promise<WorkingStateEnvelope> => {
+
+  return customFetch<WorkingStateEnvelope>(getGetWorkingStateUrl(id),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getGetWorkingStateQueryKey = (id: string,) => {
+    return [
+    `/api/opportunities/${id}/working-state`
+    ] as const;
+    }
+
+
+export const getGetWorkingStateQueryOptions = <TData = Awaited<ReturnType<typeof getWorkingState>>, TError = ErrorType<UnauthorisedResponse | ForbiddenResponse | NotFoundResponse>>(id: string, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getWorkingState>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetWorkingStateQueryKey(id);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getWorkingState>>> = ({ signal }) => getWorkingState(id, { signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, enabled: !!(id), ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getWorkingState>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type GetWorkingStateQueryResult = NonNullable<Awaited<ReturnType<typeof getWorkingState>>>
+export type GetWorkingStateQueryError = ErrorType<UnauthorisedResponse | ForbiddenResponse | NotFoundResponse>
+
+
+/**
+ * @summary Load the working session state for an opportunity
+ */
+
+export function useGetWorkingState<TData = Awaited<ReturnType<typeof getWorkingState>>, TError = ErrorType<UnauthorisedResponse | ForbiddenResponse | NotFoundResponse>>(
+ id: string, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getWorkingState>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getGetWorkingStateQueryOptions(id,options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+
+
+
+
+
+
+export const getSaveWorkingStateUrl = (id: string,) => {
+
+
+
+
+  return `/api/opportunities/${id}/working-state`
+}
+
+/**
+ * @summary Upsert the working session state for an opportunity
+ */
+export const saveWorkingState = async (id: string,
+    workingStatePayload: WorkingStatePayload, options?: RequestInit): Promise<WorkingStateSaveResult> => {
+
+  return customFetch<WorkingStateSaveResult>(getSaveWorkingStateUrl(id),
+  {
+    ...options,
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(
+      workingStatePayload,)
+  }
+);}
+
+
+
+
+export const getSaveWorkingStateMutationOptions = <TError = ErrorType<UnauthorisedResponse | ForbiddenResponse | NotFoundResponse>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof saveWorkingState>>, TError,{id: string;data: BodyType<WorkingStatePayload>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof saveWorkingState>>, TError,{id: string;data: BodyType<WorkingStatePayload>}, TContext> => {
+
+const mutationKey = ['saveWorkingState'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof saveWorkingState>>, {id: string;data: BodyType<WorkingStatePayload>}> = (props) => {
+          const {id,data} = props ?? {};
+
+          return  saveWorkingState(id,data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type SaveWorkingStateMutationResult = NonNullable<Awaited<ReturnType<typeof saveWorkingState>>>
+    export type SaveWorkingStateMutationBody = BodyType<WorkingStatePayload>
+    export type SaveWorkingStateMutationError = ErrorType<UnauthorisedResponse | ForbiddenResponse | NotFoundResponse>
+
+    /**
+ * @summary Upsert the working session state for an opportunity
+ */
+export const useSaveWorkingState = <TError = ErrorType<UnauthorisedResponse | ForbiddenResponse | NotFoundResponse>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof saveWorkingState>>, TError,{id: string;data: BodyType<WorkingStatePayload>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof saveWorkingState>>,
+        TError,
+        {id: string;data: BodyType<WorkingStatePayload>},
+        TContext
+      > => {
+      return useMutation(getSaveWorkingStateMutationOptions(options));
     }
 
 export const getLogoutMobileSessionUrl = () => {

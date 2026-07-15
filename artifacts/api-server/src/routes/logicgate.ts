@@ -1,9 +1,12 @@
-import { Router, type IRouter } from "express";
+import { Router, type IRouter, type Request, type Response } from "express";
 import multer from "multer";
 import { callClaude, callClaudeJSON, callClaudeJSONStreamed, callClaudeTextStreamed } from "../lib/anthropic";
 import { logger } from "../lib/logger";
 import { loadLogicGateKnowledge } from "../lib/knowledge-loader";
-import { requireAuthenticatedUser } from "../middlewares/routeAuth";
+import { requireAuthenticatedUser, getAuthenticatedUser } from "../middlewares/routeAuth";
+import * as opportunitiesService from "../services/opportunities-service";
+import * as oppsRepo from "../repositories/opportunities-repository";
+import * as contactsRepo from "../repositories/contacts-repository";
 
 const router: IRouter = Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
@@ -17,43 +20,27 @@ router.use("/generate-sow", requireAuthenticatedUser);
 router.use("/generate-email", requireAuthenticatedUser);
 router.use("/score-opportunity", requireAuthenticatedUser);
 router.use("/opportunities{/*splat}", requireAuthenticatedUser);
+router.use("/contacts{/*splat}", requireAuthenticatedUser);
 
-// ─── In-memory stores ─────────────────────────────────────────────────────────
-
-interface Opportunity {
-  opportunity_id: string;
-  company: string;
-  created_at: string;
-  events: OpportunityEvent[];
-  contacts: Contact[];
-}
-
-interface OpportunityEvent {
-  id: string;
-  type: string;
-  description: string;
-  stage: string;
-  created_at: string;
-  output_snapshot?: Record<string, unknown>;
-}
-
-interface Contact {
-  id: string;
-  name: string;
-  title?: string;
-  email?: string;
-  phone?: string;
-  linkedin?: string;
-  notes?: string;
-  opportunity_id?: string;
-  created_at: string;
-}
-
-const opportunityStore = new Map<string, Opportunity>();
-const contactStore = new Map<string, Contact>();
-
-function makeId(): string {
-  return `${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
+// ─── Actor context helper ─────────────────────────────────────────────────────
+// Resolves the authenticated user + their primary org. Returns null (and sends
+// 403) if the user has no org membership. Routes must call this before any
+// DB operation that is scoped by organisation.
+async function resolveActor(
+  req: Request,
+  res: Response,
+): Promise<{ userId: string; orgId: string } | null> {
+  const user = getAuthenticatedUser(req);
+  if (!user) {
+    res.status(401).json({ error: "Unauthorised" });
+    return null;
+  }
+  const orgId = await opportunitiesService.resolveUserOrg(user.id);
+  if (!orgId) {
+    res.status(403).json({ error: "No organisation membership — contact your administrator" });
+    return null;
+  }
+  return { userId: user.id, orgId };
 }
 
 // ─── Static data ──────────────────────────────────────────────────────────────
@@ -1082,25 +1069,59 @@ If no contacts are found, return { "contacts": [] }.`;
   }
 });
 
-router.post("/contacts", (req, res): void => {
-  const contacts = req.body as unknown[];
-  if (!Array.isArray(contacts)) {
-    res.status(400).json({ error: "Expected array of contacts" });
+router.post("/contacts", async (req: Request, res: Response): Promise<void> => {
+  const actor = await resolveActor(req, res);
+  if (!actor) return;
+
+  const rawBody = req.body as unknown;
+  // Accept both array (legacy) and { contacts: [...], opportunityId } shapes
+  let rawContacts: unknown[];
+  let opportunityId: string | undefined;
+  if (Array.isArray(rawBody)) {
+    rawContacts = rawBody;
+  } else if (rawBody && typeof rawBody === "object") {
+    const body = rawBody as Record<string, unknown>;
+    rawContacts = Array.isArray(body.contacts) ? (body.contacts as unknown[]) : [];
+    opportunityId = body.opportunityId ? String(body.opportunityId) : undefined;
+    // Also check if opportunityId lives on the first contact (legacy)
+    if (!opportunityId && rawContacts[0]) {
+      const first = rawContacts[0] as Record<string, unknown>;
+      if (first.opportunity_id) opportunityId = String(first.opportunity_id);
+    }
+  } else {
+    res.status(400).json({ error: "Expected array or { contacts, opportunityId } body" });
     return;
   }
-  const saved = contacts.map((c) => {
-    const contact = { ...(c as Record<string, unknown>), id: makeId(), created_at: new Date().toISOString() } as Contact;
-    contactStore.set(contact.id, contact);
-    return contact;
-  });
-  res.json({ saved });
+
+  if (!Array.isArray(rawContacts) || rawContacts.length === 0) {
+    res.status(400).json({ error: "Expected at least one contact" });
+    return;
+  }
+
+  try {
+    const saved = await opportunitiesService.saveContacts(
+      actor,
+      opportunityId,
+      rawContacts as Record<string, unknown>[],
+    );
+    res.json({ saved: saved.map(contactsRepo.toLegacyContactView) });
+  } catch (err) {
+    req.log.error({ err }, "contacts save failed");
+    res.status(500).json({ error: "Failed to save contacts" });
+  }
 });
 
-router.post("/contacts/:id/enrich", async (req, res): Promise<void> => {
+router.post("/contacts/:id/enrich", async (req: Request, res: Response): Promise<void> => {
+  const actor = await resolveActor(req, res);
+  if (!actor) return;
+
   const raw = Array.isArray(req.params["id"]) ? req.params["id"][0] : req.params["id"];
   const id = String(raw);
   const { company } = req.body as Record<string, unknown>;
-  const contact = contactStore.get(id) || ({ name: "Unknown" } as Contact);
+
+  const dbContact = await contactsRepo.getContact(id, actor.orgId);
+  const contactName = dbContact?.name ?? "Unknown";
+  const contactTitle = dbContact?.jobTitle ?? undefined;
 
   const system = `You are a B2B contact research specialist.
 
@@ -1118,11 +1139,15 @@ Return ONLY valid JSON:
   try {
     const data = await callClaudeJSON<{ enriched: Record<string, unknown> }>(
       system,
-      `Contact: ${contact.name}${contact.title ? `, ${contact.title}` : ""}\nCompany: ${String(company || "Unknown")}`
+      `Contact: ${contactName}${contactTitle ? `, ${contactTitle}` : ""}\nCompany: ${String(company || "Unknown")}`
     );
-    const updated = { ...contact, enriched: data.enriched };
-    contactStore.set(id, updated);
-    res.json(updated);
+
+    const existingMeta = ((dbContact?.metadata as Record<string, unknown>) ?? {});
+    const updated = await contactsRepo.updateContact(id, actor.orgId, {
+      metadata: { ...existingMeta, enriched: data.enriched },
+    });
+
+    res.json(updated ? contactsRepo.toLegacyContactView(updated) : { id, enriched: data.enriched });
   } catch (err) {
     req.log.error({ err }, "contacts/enrich failed");
     res.status(500).json({ error: (err as Error).message });
@@ -1161,81 +1186,227 @@ router.post("/extract-files", upload.array("files", 10), async (req, res): Promi
 
 // ─── Routes: opportunities ────────────────────────────────────────────────────
 
-router.post("/opportunities", (req, res): void => {
+// GET /api/opportunities — list all active opportunities for the user's org
+router.get("/opportunities", async (req: Request, res: Response): Promise<void> => {
+  const actor = await resolveActor(req, res);
+  if (!actor) return;
+  try {
+    const opps = await opportunitiesService.listOpportunities(actor);
+    const events = await Promise.all(opps.map((o) => oppsRepo.listEvents(o.id)));
+    const views = opps.map((o, i) =>
+      oppsRepo.toLegacyView(o, events[i], []),
+    );
+    res.json({ opportunities: views });
+  } catch (err) {
+    req.log.error({ err }, "Failed to list opportunities");
+    res.status(500).json({ error: "Failed to list opportunities" });
+  }
+});
+
+// POST /api/opportunities — create a new opportunity
+router.post("/opportunities", async (req: Request, res: Response): Promise<void> => {
+  const actor = await resolveActor(req, res);
+  if (!actor) return;
+
   const { company } = req.body as { company: string };
   if (!company?.trim()) {
     res.status(400).json({ error: "company is required" });
     return;
   }
-  const opp: Opportunity = {
-    opportunity_id: makeId(),
-    company: company.trim(),
-    created_at: new Date().toISOString(),
-    events: [],
-    contacts: [],
-  };
-  opportunityStore.set(opp.opportunity_id, opp);
-  res.status(201).json(opp);
+  try {
+    const opp = await opportunitiesService.createOpportunity(actor, { company: company.trim() });
+    res.status(201).json(oppsRepo.toLegacyView(opp, [], []));
+  } catch (err) {
+    req.log.error({ err }, "Failed to create opportunity");
+    res.status(500).json({ error: "Failed to create opportunity" });
+  }
 });
 
-router.get("/opportunities/:id", (req, res): void => {
-  const raw = Array.isArray(req.params["id"]) ? req.params["id"][0] : req.params["id"];
-  const opp = opportunityStore.get(String(raw));
-  if (!opp) {
-    res.status(404).json({ error: "Opportunity not found" });
-    return;
+// GET /api/opportunities/:id — get a single opportunity with events + contact refs
+router.get("/opportunities/:id", async (req: Request, res: Response): Promise<void> => {
+  const actor = await resolveActor(req, res);
+  if (!actor) return;
+
+  const id = String(Array.isArray(req.params["id"]) ? req.params["id"][0] : req.params["id"]);
+  try {
+    const opp = await opportunitiesService.getOpportunity(actor, id);
+    if (!opp) {
+      res.status(404).json({ error: "Opportunity not found" });
+      return;
+    }
+    const [events, contacts] = await Promise.all([
+      oppsRepo.listEvents(opp.id),
+      contactsRepo.listContacts(opp.id, actor.orgId),
+    ]);
+    res.json(oppsRepo.toLegacyView(opp, events, contacts.map((c) => ({ id: c.id }))));
+  } catch (err) {
+    req.log.error({ err }, "Failed to get opportunity");
+    res.status(500).json({ error: "Failed to get opportunity" });
   }
-  res.json(opp);
 });
 
-router.post("/opportunities/:id/events", (req, res): void => {
-  const raw = Array.isArray(req.params["id"]) ? req.params["id"][0] : req.params["id"];
-  const opp = opportunityStore.get(String(raw));
-  if (!opp) {
-    res.status(404).json({ error: "Opportunity not found" });
-    return;
+// PATCH /api/opportunities/:id — update an opportunity
+router.patch("/opportunities/:id", async (req: Request, res: Response): Promise<void> => {
+  const actor = await resolveActor(req, res);
+  if (!actor) return;
+
+  const id = String(Array.isArray(req.params["id"]) ? req.params["id"][0] : req.params["id"]);
+  const { name, customerName, status, stage, summary, metadata } = req.body as Record<string, unknown>;
+  try {
+    const opp = await opportunitiesService.updateOpportunity(actor, id, {
+      name: name ? String(name) : undefined,
+      customerName: customerName ? String(customerName) : undefined,
+      status: status ? String(status) : undefined,
+      stage: stage ? String(stage) : undefined,
+      summary: summary ? String(summary) : undefined,
+      metadata: metadata ? (metadata as Record<string, unknown>) : undefined,
+    });
+    if (!opp) {
+      res.status(404).json({ error: "Opportunity not found" });
+      return;
+    }
+    res.json(opp);
+  } catch (err) {
+    req.log.error({ err }, "Failed to update opportunity");
+    res.status(500).json({ error: "Failed to update opportunity" });
   }
+});
+
+// DELETE /api/opportunities/:id — archive an opportunity
+router.delete("/opportunities/:id", async (req: Request, res: Response): Promise<void> => {
+  const actor = await resolveActor(req, res);
+  if (!actor) return;
+
+  const id = String(Array.isArray(req.params["id"]) ? req.params["id"][0] : req.params["id"]);
+  try {
+    const opp = await opportunitiesService.archiveOpportunity(actor, id);
+    if (!opp) {
+      res.status(404).json({ error: "Opportunity not found" });
+      return;
+    }
+    res.json({ archived: true, id: opp.id });
+  } catch (err) {
+    req.log.error({ err }, "Failed to archive opportunity");
+    res.status(500).json({ error: "Failed to archive opportunity" });
+  }
+});
+
+// POST /api/opportunities/:id/events — append an event
+router.post("/opportunities/:id/events", async (req: Request, res: Response): Promise<void> => {
+  const actor = await resolveActor(req, res);
+  if (!actor) return;
+
+  const id = String(Array.isArray(req.params["id"]) ? req.params["id"][0] : req.params["id"]);
   const { type, description, stage, output_snapshot } = req.body as Record<string, unknown>;
-  const event: OpportunityEvent = {
-    id: makeId(),
-    type: String(type || "note"),
-    description: String(description || ""),
-    stage: String(stage || "pre_discovery"),
-    created_at: new Date().toISOString(),
-    output_snapshot: output_snapshot as Record<string, unknown> | undefined,
-  };
-  opp.events.push(event);
-  res.status(201).json(event);
+  try {
+    const event = await opportunitiesService.addEvent(actor, id, {
+      type: type ? String(type) : undefined,
+      description: description ? String(description) : undefined,
+      stage: stage ? String(stage) : undefined,
+      output_snapshot: output_snapshot as Record<string, unknown> | undefined,
+    });
+    if (!event) {
+      res.status(404).json({ error: "Opportunity not found" });
+      return;
+    }
+    res.status(201).json({
+      id: event.id,
+      type: event.type,
+      description: event.description,
+      stage: event.stage ?? "pre_discovery",
+      created_at: event.createdAt.toISOString(),
+      output_snapshot: event.outputSnapshot ?? undefined,
+    });
+  } catch (err) {
+    req.log.error({ err }, "Failed to add event");
+    res.status(500).json({ error: "Failed to add event" });
+  }
 });
 
-router.get("/opportunities/:id/contacts", (req, res): void => {
-  const raw = Array.isArray(req.params["id"]) ? req.params["id"][0] : req.params["id"];
-  const opp = opportunityStore.get(String(raw));
-  if (!opp) {
-    res.status(404).json({ contacts: [] });
+// GET /api/opportunities/:id/contacts — list contacts
+router.get("/opportunities/:id/contacts", async (req: Request, res: Response): Promise<void> => {
+  const actor = await resolveActor(req, res);
+  if (!actor) return;
+
+  const id = String(Array.isArray(req.params["id"]) ? req.params["id"][0] : req.params["id"]);
+  try {
+    const contacts = await opportunitiesService.listContacts(actor, id);
+    if (contacts === null) {
+      res.json({ contacts: [] });
+      return;
+    }
+    res.json({ contacts: contacts.map(contactsRepo.toLegacyContactView) });
+  } catch (err) {
+    req.log.error({ err }, "Failed to list contacts");
+    res.status(500).json({ error: "Failed to list contacts" });
+  }
+});
+
+// GET /api/opportunities/:id/contacts/export — CSV export
+router.get("/opportunities/:id/contacts/export", async (req: Request, res: Response): Promise<void> => {
+  const actor = await resolveActor(req, res);
+  if (!actor) return;
+
+  const id = String(Array.isArray(req.params["id"]) ? req.params["id"][0] : req.params["id"]);
+  try {
+    const contacts = (await opportunitiesService.listContacts(actor, id)) ?? [];
+    const esc = (v?: string | null) => `"${(v || "").replace(/"/g, '""')}"`;
+    const rows = [
+      "Name,Title,Email,Phone,LinkedIn,Notes",
+      ...contacts.map((c) =>
+        [esc(c.name), esc(c.jobTitle), esc(c.email), esc(c.phone), esc(c.linkedin), esc(c.notes)].join(","),
+      ),
+    ];
+    res.setHeader("Content-Type", "text/csv");
+    res.setHeader("Content-Disposition", `attachment; filename="contacts_${id}.csv"`);
+    res.send(rows.join("\n"));
+  } catch (err) {
+    req.log.error({ err }, "Failed to export contacts");
+    res.status(500).json({ error: "Failed to export contacts" });
+  }
+});
+
+// GET /api/opportunities/:id/working-state — load working state
+router.get("/opportunities/:id/working-state", async (req: Request, res: Response): Promise<void> => {
+  const actor = await resolveActor(req, res);
+  if (!actor) return;
+
+  const id = String(Array.isArray(req.params["id"]) ? req.params["id"][0] : req.params["id"]);
+  try {
+    const state = await opportunitiesService.getWorkingState(actor, id);
+    if (state === null) {
+      res.status(404).json({ error: "Opportunity not found" });
+      return;
+    }
+    res.json({ state: state?.payload ?? null });
+  } catch (err) {
+    req.log.error({ err }, "Failed to get working state");
+    res.status(500).json({ error: "Failed to get working state" });
+  }
+});
+
+// PUT /api/opportunities/:id/working-state — upsert working state
+router.put("/opportunities/:id/working-state", async (req: Request, res: Response): Promise<void> => {
+  const actor = await resolveActor(req, res);
+  if (!actor) return;
+
+  const id = String(Array.isArray(req.params["id"]) ? req.params["id"][0] : req.params["id"]);
+  const payload = req.body as Record<string, unknown>;
+  if (!payload || typeof payload !== "object") {
+    res.status(400).json({ error: "Request body must be a JSON object" });
     return;
   }
-  const contacts = opp.contacts.map((c) => contactStore.get(c.id) ?? c).filter(Boolean);
-  res.json({ contacts });
-});
-
-router.get("/opportunities/:id/contacts/export", (req, res): void => {
-  const raw = Array.isArray(req.params["id"]) ? req.params["id"][0] : req.params["id"];
-  const opp = opportunityStore.get(String(raw));
-  const contacts = opp ? opp.contacts.map((c) => contactStore.get(c.id) ?? c).filter(Boolean) : [];
-
-  const rows = [
-    "Name,Title,Email,Phone,LinkedIn,Notes",
-    ...contacts.map((c) => {
-      const ct = c as Contact;
-      const esc = (v?: string) => `"${(v || "").replace(/"/g, '""')}"`;
-      return [esc(ct.name), esc(ct.title), esc(ct.email), esc(ct.phone), esc(ct.linkedin), esc(ct.notes)].join(",");
-    }),
-  ];
-
-  res.setHeader("Content-Type", "text/csv");
-  res.setHeader("Content-Disposition", `attachment; filename="contacts_${String(raw)}.csv"`);
-  res.send(rows.join("\n"));
+  try {
+    const state = await opportunitiesService.upsertWorkingState(actor, id, payload);
+    if (state === null) {
+      res.status(404).json({ error: "Opportunity not found" });
+      return;
+    }
+    res.json({ savedAt: state.updatedAt.toISOString() });
+  } catch (err) {
+    req.log.error({ err }, "Failed to save working state");
+    res.status(500).json({ error: "Failed to save working state" });
+  }
 });
 
 // ─── Routes: SoW ─────────────────────────────────────────────────────────────

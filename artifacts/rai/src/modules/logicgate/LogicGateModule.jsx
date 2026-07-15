@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import logo from './assets/rr-logo.png'
-import { extractFiles, generatePrep, postDiscovery, dealStrategy, generateScorecard, updateScore, createOpportunity, getOpportunity, addManualEvent, extractContacts, saveContacts, getOpportunityContacts, getContactsExportUrl, enrichContactApi, listSowProfiles, getSowProfile, generateSoW, enrichDealRisk, enrichDiscoveryQuestions, enrichProductFit, generateRichBriefing, generateEmails, generatePostDemo, generateSolutionBreakdown, generateProposalEmail, generateProposalDocument, generateProposalSection, verifyProposal, getValueDriverLibrary, getOperationalMetricsLibrary, suggestValueDrivers } from './api.js'
+import { extractFiles, generatePrep, postDiscovery, dealStrategy, generateScorecard, updateScore, createOpportunity, getOpportunity, addManualEvent, extractContacts, saveContacts, getOpportunityContacts, getContactsExportUrl, enrichContactApi, listSowProfiles, getSowProfile, generateSoW, enrichDealRisk, enrichDiscoveryQuestions, enrichProductFit, generateRichBriefing, generateEmails, generatePostDemo, generateSolutionBreakdown, generateProposalEmail, generateProposalDocument, generateProposalSection, verifyProposal, getValueDriverLibrary, getOperationalMetricsLibrary, suggestValueDrivers, getWorkingState, saveWorkingState } from './api.js'
 import {
   Document,
   Packer,
@@ -4305,20 +4305,57 @@ export default function LogicGateModule() {
   const [legacyScoringDetected, setLegacyScoringDetected] = useState(null) // null | { pre, post }
 
   useEffect(() => {
-    const saved = loadPersistedState()
-    // Treat as "has data" only if it actually contains something useful,
-    // otherwise just mark decided and move on.
+    const localSaved = loadPersistedState()
     const hasUsefulData = Boolean(
-      saved && (
-        saved.dashboard ||
-        saved.postDashboard ||
-        (saved.company && saved.company.trim()) ||
-        (saved.prep && saved.prep.trim()) ||
-        (saved.postResult && saved.postResult.trim())
+      localSaved && (
+        localSaved.dashboard ||
+        localSaved.postDashboard ||
+        (localSaved.company && localSaved.company.trim()) ||
+        (localSaved.prep && localSaved.prep.trim()) ||
+        (localSaved.postResult && localSaved.postResult.trim())
       )
     )
-    if (hasUsefulData) {
-      setPendingRestore(saved)
+
+    // If we have a persisted opportunityId, also try to load the working
+    // state from the server. Server state is preferred over localStorage
+    // because it survives browser clears and reflects all devices.
+    const oppId = localSaved?.opportunityId
+    if (oppId) {
+      getWorkingState(oppId)
+        .then((res) => {
+          // res.state is the full payload saved via PUT /working-state.
+          // It includes __v + all session fields. Prefer it if present.
+          const serverPayload = res?.state
+          if (serverPayload && typeof serverPayload === 'object') {
+            const merged = { ...localSaved, ...serverPayload }
+            const mergedHasData = Boolean(
+              merged.dashboard ||
+              merged.postDashboard ||
+              (merged.company && merged.company.trim()) ||
+              (merged.prep && merged.prep.trim()) ||
+              (merged.postResult && merged.postResult.trim())
+            )
+            if (mergedHasData) {
+              setPendingRestore(merged)
+            } else {
+              setRestoreDecided(true)
+            }
+          } else if (hasUsefulData) {
+            setPendingRestore(localSaved)
+          } else {
+            setRestoreDecided(true)
+          }
+        })
+        .catch(() => {
+          // Server unreachable or no state yet — fall back to localStorage.
+          if (hasUsefulData) {
+            setPendingRestore(localSaved)
+          } else {
+            setRestoreDecided(true)
+          }
+        })
+    } else if (hasUsefulData) {
+      setPendingRestore(localSaved)
     } else {
       setRestoreDecided(true)
     }
@@ -4761,9 +4798,13 @@ export default function LogicGateModule() {
   // or Discard. Transient state (loading, errors, modal visibility, file
   // uploads) is not persisted — only the things needed to reconstruct a
   // generated opportunity.
+  //
+  // When an opportunityId is set the same payload is also written to the
+  // server (fire-and-forget). The server copy survives browser storage
+  // clears and is shared across devices/tabs.
   useEffect(() => {
     if (!restoreDecided) return
-    persistState({
+    const payload = {
       mode,
       opportunityId,
       // Pre-discovery
@@ -4823,7 +4864,13 @@ export default function LogicGateModule() {
       // Stage-gate / status
       opportunityStatus,
       declineReason,
-    })
+    }
+    persistState(payload)
+    // Mirror to server when an opportunity record exists. Fire-and-forget —
+    // never block the UI or surface an error for a background sync failure.
+    if (opportunityId) {
+      saveWorkingState(opportunityId, payload).catch(() => {})
+    }
   }, [
     restoreDecided,
     mode, opportunityId,

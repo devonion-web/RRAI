@@ -1,0 +1,560 @@
+Implement Architecture Remediation #3 for the RRAI platform:
+
+Persistent Runtime Memory and Phase 2 Database Foundation
+
+Objective
+
+Replace the active capabilities’ in-memory and browser-only persistence with governed PostgreSQL-backed runtime memory.
+
+This task must establish the core Phase 2 runtime data model and migrate the existing LogicGate opportunity and contact state out of:
+
+* In-memory Map objects
+* Route-level state
+* Browser localStorage
+
+The immediate goal is to ensure that authenticated users do not lose active opportunity work when:
+
+* The API server restarts
+* The browser refreshes
+* The user signs in from another device
+* Local browser storage is cleared
+
+This task should create the durable foundation for later conversation persistence, organisation scoping, document persistence, lens routing, approvals and audit.
+
+Do not implement those later capabilities fully in this task.
+
+⸻
+
+First: inspect the current repository
+
+Before changing code, inspect:
+
+* reports/phase-2-database-specification.md
+* Existing Drizzle schemas and migrations
+* The new users and sessions tables
+* artifacts/api-server/src/routes/logicgate.ts
+* Any opportunityStore, contactStore, Map, cache or TTL-based storage
+* LogicGate frontend localStorage usage
+* Opportunity and contact API endpoints
+* Current request and response schemas
+* Existing audit-event tables
+* Current user identity available through req.user
+* Any organisation, customer, account, opportunity, conversation or message tables already present
+
+Do not blindly recreate tables already present.
+
+Use the Phase 2 database specification as the intended model, but reconcile it against the actual implementation and the new authentication schema.
+
+⸻
+
+Required database foundation
+
+Implement or complete the following PostgreSQL tables using Drizzle.
+
+1. Organisations
+
+At minimum:
+
+* id
+* name
+* slug
+* status
+* createdAt
+* updatedAt
+
+The organisation model must support future tenant isolation.
+
+Do not implement complex multi-organisation membership UI yet.
+
+2. Organisation memberships
+
+At minimum:
+
+* id
+* organisationId
+* userId
+* role
+* status
+* createdAt
+* updatedAt
+
+This table must associate authenticated users with organisations.
+
+Initial organisation membership roles may include:
+
+* member
+* admin
+
+Do not confuse organisation roles with platform roles.
+
+The existing platform user / admin role remains separate.
+
+3. Opportunities
+
+At minimum:
+
+* id
+* organisationId
+* createdByUserId
+* ownerUserId
+* name
+* customerName
+* status
+* stage
+* source
+* summary
+* currency
+* estimatedValue
+* probability
+* targetCloseDate
+* metadata as JSONB for existing workflow fields that are not yet normalised
+* createdAt
+* updatedAt
+* archivedAt
+
+Preserve all data currently held in the LogicGate opportunity store, even where fields need to remain in JSONB temporarily.
+
+Do not discard fields simply because they are poorly modelled today.
+
+4. Contacts
+
+At minimum:
+
+* id
+* organisationId
+* opportunityId, nullable where appropriate
+* createdByUserId
+* name
+* email
+* jobTitle
+* company
+* relationship
+* influence
+* metadata as JSONB
+* createdAt
+* updatedAt
+* archivedAt
+
+Preserve all contact information currently used by the LogicGate capability.
+
+5. Opportunity state snapshots or structured working state
+
+The LogicGate module currently stores substantial working state beyond the basic opportunity record, including items such as:
+
+* Deal scoring
+* Dashboard state
+* Discovery outputs
+* Briefings
+* Proposal content
+* Pricing
+* Generated artefacts
+* Workflow-stage state
+
+Create an appropriate persistent model for this state.
+
+Prefer one of:
+
+* A versioned opportunity_working_state table with JSONB payloads; or
+* Normalised domain tables where the current structure is already stable and clearly understood.
+
+For this remediation, prefer a safe versioned JSONB working-state model rather than prematurely normalising every field.
+
+At minimum include:
+
+* id
+* opportunityId
+* stateType
+* schemaVersion
+* payload
+* createdByUserId
+* createdAt
+* updatedAt
+
+Enforce a unique current state per opportunity and state type where appropriate.
+
+The architecture must allow later state-history or snapshot support without destructive redesign.
+
+⸻
+
+Default organisation bootstrap
+
+Authenticated users need an organisation context.
+
+Implement a safe initial bootstrap approach.
+
+For the current single-company deployment:
+
+* Create or reuse one Risk Rising organisation record.
+* Associate approved authenticated users with that organisation.
+* Use a controlled environment value or server bootstrap process where appropriate.
+
+Do not automatically place arbitrary external users into the Risk Rising organisation.
+
+Document precisely how membership is granted.
+
+Do not rely on browser-provided organisation IDs.
+
+⸻
+
+Repository and service architecture
+
+Do not place persistence logic directly inside route files.
+
+Create reusable repositories and services in appropriate locations, for example:
+
+artifacts/api-server/src/repositories/
+  organisations-repository.ts
+  opportunities-repository.ts
+  contacts-repository.ts
+  opportunity-state-repository.ts
+artifacts/api-server/src/services/
+  opportunities-service.ts
+
+Equivalent structure is acceptable if consistent with the repository.
+
+Routes should:
+
+1. Validate the request.
+2. Obtain the authenticated user.
+3. Resolve permitted organisation context.
+4. Call a service.
+5. Return the response.
+
+Routes must not directly manipulate raw database tables throughout the file.
+
+⸻
+
+Access control and ownership
+
+Every opportunity and contact query must be scoped server-side by organisation membership.
+
+The server must never trust:
+
+* userId supplied by the browser
+* organisationId supplied by the browser without access validation
+* LocalStorage ownership information
+* Opportunity ownership claims in request payloads
+
+At minimum:
+
+* Authenticated users may only read records belonging to an organisation they are authorised to access.
+* Creation records the authenticated user as creator.
+* Updates record the authenticated actor where the schema supports it.
+* Cross-organisation access returns 404 or 403 according to the established security convention.
+* Administrative platform role alone must not silently imply membership in every organisation unless explicitly designed and documented.
+
+⸻
+
+Migrate existing LogicGate API behaviour
+
+Replace all live use of:
+
+* opportunityStore
+* contactStore
+* Route-level Map objects
+* Equivalent in-memory persistent state
+
+with PostgreSQL-backed repositories.
+
+Preserve existing API behaviour where practical.
+
+Do not unnecessarily redesign the LogicGate workflow or UI.
+
+Where API response shapes must change, maintain temporary compatibility and document it.
+
+All active opportunity and contact operations must survive server restart.
+
+⸻
+
+Remove browser-only persistence as the source of truth
+
+Inspect the LogicGate frontend for all localStorage usage.
+
+Classify each usage as:
+
+* User preference
+* Safe cache
+* Runtime business record
+* Authentication or identity data
+* Generated content
+
+Business records and working opportunity state must move to the server.
+
+After this task:
+
+* localStorage must not be the authoritative source for opportunity, contact, proposal, pricing, score, briefing or generated-content state.
+* LocalStorage may remain only for harmless preferences or short-lived cache where clearly documented.
+* Server state must win during conflict.
+* Do not store authentication tokens or role information in localStorage.
+
+Implement loading, saving and update behaviour against the API.
+
+Use debounced autosave only where appropriate and safe.
+
+Provide visible save-state handling where the current UX would otherwise create ambiguity, for example:
+
+* Saving
+* Saved
+* Save failed
+
+Do not perform a complete UI redesign.
+
+⸻
+
+Existing data migration
+
+Determine whether any meaningful existing data can be migrated from:
+
+* Current database tables
+* Seed data
+* Server in-memory fixtures
+* Browser localStorage
+
+Server-side fixtures or seed data should be migrated where practical.
+
+Browser localStorage cannot be accessed centrally by the server. Provide a one-time authenticated client migration only if existing browser records are valuable and the migration can be implemented safely.
+
+A client migration must:
+
+* Ask or clearly inform the authenticated user before importing
+* Import only records that match the current schema
+* Avoid duplicate records
+* Mark migration completion
+* Never silently overwrite newer server data
+* Be removable after the transition period
+
+If there is no meaningful existing local data worth preserving, explicitly document that no client migration was added.
+
+⸻
+
+API requirements
+
+Create or update authenticated endpoints for:
+
+Opportunities
+
+At minimum:
+
+* List authorised opportunities
+* Create opportunity
+* Read opportunity
+* Update opportunity
+* Archive opportunity
+
+Contacts
+
+At minimum:
+
+* List contacts for an authorised opportunity
+* Create contact
+* Update contact
+* Archive contact
+
+Working state
+
+At minimum:
+
+* Load working state for an opportunity
+* Upsert working state for an opportunity
+
+Use the existing endpoint shapes where possible.
+
+Do not create duplicate APIs if equivalent endpoints already exist.
+
+⸻
+
+OpenAPI
+
+Update lib/api-spec/openapi.yaml for all opportunity, contact and working-state endpoints changed or introduced in this task.
+
+Include:
+
+* Request schemas
+* Response schemas
+* Authentication requirements
+* 401, 403, 404, 409 and validation responses where relevant
+
+Regenerate:
+
+* Zod schemas
+* React query/client code
+
+Use generated validation and client code where practical.
+
+Do not leave the new endpoints undocumented.
+
+⸻
+
+Audit and traceability
+
+Record at least:
+
+* Opportunity created
+* Opportunity updated
+* Opportunity archived
+* Contact created
+* Contact updated
+* Contact archived
+* Working state updated
+
+Use the authenticated user identity.
+
+Use an existing persistent audit table where suitable.
+
+Do not create a second competing audit architecture.
+
+Do not accept arbitrary actor names from the client.
+
+The audit payload must not duplicate complete sensitive business records unnecessarily.
+
+⸻
+
+Concurrency and data integrity
+
+Add basic safeguards:
+
+* Updated timestamps
+* Transactional operations where multiple records change together
+* Referential integrity
+* Organisation scoping
+* Unique constraints where appropriate
+* Optimistic concurrency or version checking for working state if simultaneous editing could overwrite newer data
+
+Do not overengineer collaborative editing yet.
+
+At minimum, prevent silent overwriting where a stale client update can be detected easily.
+
+⸻
+
+Tests
+
+Add meaningful automated tests covering:
+
+Database and repository
+
+* Create and retrieve an opportunity
+* Update and archive an opportunity
+* Create and retrieve a contact
+* Upsert and retrieve opportunity working state
+* Data survives repository/service recreation
+* Organisation scoping is applied
+
+Access control
+
+* Unauthenticated request returns 401
+* Authenticated user without organisation membership cannot read records
+* User cannot read another organisation’s opportunity
+* User cannot modify another organisation’s opportunity
+* Client-supplied user ID does not override authenticated identity
+* Client-supplied organisation ID does not bypass membership checks
+
+Runtime persistence
+
+* Opportunity remains available after API process/service restart simulation
+* Contact remains available after restart simulation
+* Working state remains available after restart simulation
+
+Frontend transition
+
+* Server state is loaded when the module opens
+* Saving updates server state
+* LocalStorage is not treated as authoritative business state
+* Failed saves are surfaced
+
+Use isolated test database records and clean them safely.
+
+⸻
+
+Performance
+
+Use indexes for common queries, including:
+
+* organisationId
+* ownerUserId
+* opportunityId
+* createdByUserId
+* active/archive status where useful
+
+Avoid loading every opportunity for every request.
+
+Implement pagination for list endpoints where practical.
+
+Do not introduce a caching layer until real query behaviour justifies it.
+
+⸻
+
+Boundaries
+
+Do not implement in this remediation:
+
+* Full conversation persistence
+* Uploaded-document object storage
+* Vector retrieval or RAG
+* Lens routing
+* One-way-valve enforcement
+* Human approval workflow
+* Presentation Engine runtime
+* Workspace redesign
+* Complete normalisation of all proposal and scoring content
+* Full CRM integration
+
+Do not refactor unrelated modules.
+
+Do not alter the AI model, prompt meaning or scoring methodology except where required to replace persistence.
+
+⸻
+
+Validation
+
+Run:
+
+* Database migration
+* Drizzle schema validation
+* TypeScript typecheck
+* Unit tests
+* Integration tests
+* Existing authentication tests
+* Existing knowledge-loader tests
+* Frontend build
+* API server startup
+* Full application startup
+
+Manually verify:
+
+1. Sign in.
+2. Create an opportunity.
+3. Add a contact.
+4. Save working state.
+5. Restart the server.
+6. Confirm the opportunity, contact and working state remain available.
+7. Sign in from a separate browser session.
+8. Confirm authorised records are available.
+9. Confirm an unauthorised user cannot access the records.
+10. Confirm clearing localStorage does not delete server records.
+11. Confirm existing LogicGate workflows still operate.
+
+⸻
+
+Delivery report
+
+Perform the implementation rather than only producing a plan.
+
+Then report:
+
+* Tables created or changed
+* Migration files
+* Repository and service files created
+* Routes changed
+* OpenAPI changes
+* Frontend persistence changes
+* LocalStorage usage removed or retained, with rationale
+* Organisation bootstrap method
+* Access-control behaviour
+* Audit integration
+* Tests added
+* Typecheck, build and test results
+* Manual restart-persistence result
+* Any existing data migrated
+* Known limitations
+* Recommended next remediation
+* Branch name and commit reference

@@ -86,6 +86,160 @@ export const ExchangeMobileAuthorizationCodeResponse = zod.object({
 
 
 /**
+ * @summary List active opportunities for the authenticated user's organisation
+ */
+export const ListOpportunitiesResponse = zod.object({
+  "opportunities": zod.array(zod.object({
+  "opportunity_id": zod.string(),
+  "company": zod.string(),
+  "created_at": zod.coerce.date(),
+  "events": zod.array(zod.object({
+  "id": zod.string(),
+  "type": zod.string(),
+  "description": zod.string(),
+  "stage": zod.string(),
+  "created_at": zod.coerce.date(),
+  "output_snapshot": zod.object({
+
+}).passthrough().optional()
+})),
+  "contacts": zod.array(zod.object({
+  "id": zod.string()
+}))
+}))
+})
+
+
+/**
+ * @summary Create a new opportunity
+ */
+
+
+
+export const CreateOpportunityBody = zod.object({
+  "company": zod.string().min(1)
+})
+
+
+/**
+ * @summary Get a single opportunity with events and contact refs
+ */
+export const GetOpportunityParams = zod.object({
+  "id": zod.coerce.string()
+})
+
+export const GetOpportunityResponse = zod.object({
+  "opportunity_id": zod.string(),
+  "company": zod.string(),
+  "created_at": zod.coerce.date(),
+  "events": zod.array(zod.object({
+  "id": zod.string(),
+  "type": zod.string(),
+  "description": zod.string(),
+  "stage": zod.string(),
+  "created_at": zod.coerce.date(),
+  "output_snapshot": zod.object({
+
+}).passthrough().optional()
+})),
+  "contacts": zod.array(zod.object({
+  "id": zod.string()
+}))
+})
+
+
+/**
+ * @summary Update an opportunity
+ */
+export const UpdateOpportunityParams = zod.object({
+  "id": zod.coerce.string()
+})
+
+export const UpdateOpportunityBody = zod.object({
+  "name": zod.string().optional(),
+  "customerName": zod.string().optional(),
+  "status": zod.string().optional(),
+  "stage": zod.string().optional(),
+  "summary": zod.string().optional()
+})
+
+export const UpdateOpportunityResponse = zod.object({
+  "opportunity_id": zod.string(),
+  "company": zod.string(),
+  "created_at": zod.coerce.date(),
+  "events": zod.array(zod.object({
+  "id": zod.string(),
+  "type": zod.string(),
+  "description": zod.string(),
+  "stage": zod.string(),
+  "created_at": zod.coerce.date(),
+  "output_snapshot": zod.object({
+
+}).passthrough().optional()
+})),
+  "contacts": zod.array(zod.object({
+  "id": zod.string()
+}))
+})
+
+
+/**
+ * @summary Archive an opportunity
+ */
+export const ArchiveOpportunityParams = zod.object({
+  "id": zod.coerce.string()
+})
+
+export const ArchiveOpportunityResponse = zod.object({
+  "archived": zod.boolean(),
+  "id": zod.string()
+})
+
+
+/**
+ * @summary Append an event to an opportunity
+ */
+export const AddOpportunityEventParams = zod.object({
+  "id": zod.coerce.string()
+})
+
+export const AddOpportunityEventBody = zod.object({
+  "type": zod.string().optional(),
+  "description": zod.string().optional(),
+  "stage": zod.string().optional(),
+  "output_snapshot": zod.object({
+
+}).passthrough().optional()
+})
+
+
+/**
+ * @summary Load the working session state for an opportunity
+ */
+export const GetWorkingStateParams = zod.object({
+  "id": zod.coerce.string()
+})
+
+export const GetWorkingStateResponse = zod.object({
+  "state": zod.unknown().nullable()
+})
+
+
+/**
+ * @summary Upsert the working session state for an opportunity
+ */
+export const SaveWorkingStateParams = zod.object({
+  "id": zod.coerce.string()
+})
+
+export const SaveWorkingStateBody = zod.record(zod.string(), zod.unknown()).describe('Arbitrary JSON payload representing the full LogicGate session state.')
+
+export const SaveWorkingStateResponse = zod.object({
+  "savedAt": zod.coerce.date()
+})
+
+
+/**
  * @summary Delete a mobile session token
  */
 export const LogoutMobileSessionHeader = zod.object({

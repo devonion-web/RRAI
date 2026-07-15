@@ -6,13 +6,30 @@
  * OpenAPI spec version: 0.1.0
  */
 
+export * from './addEventRequest';
+export * from './addEventRequestOutputSnapshot';
+export * from './archiveResult';
 export * from './authorizationSessionHeaderParameter';
 export * from './authUser';
 export * from './authUserEnvelope';
+export * from './badRequestResponse';
 export * from './beginBrowserLoginParams';
+export * from './contactRef';
+export * from './createOpportunityRequest';
 export * from './errorEnvelope';
+export * from './eventView';
+export * from './eventViewOutputSnapshot';
+export * from './forbiddenResponse';
 export * from './handleBrowserLoginCallbackParams';
 export * from './healthStatus';
 export * from './logoutSuccess';
 export * from './mobileTokenExchangeRequest';
 export * from './mobileTokenExchangeSuccess';
+export * from './notFoundResponse';
+export * from './opportunityListEnvelope';
+export * from './opportunityView';
+export * from './unauthorisedResponse';
+export * from './updateOpportunityRequest';
+export * from './workingStateEnvelope';
+export * from './workingStatePayload';
+export * from './workingStateSaveResult';
