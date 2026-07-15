@@ -20,10 +20,10 @@ RRAI is a modular AI operating platform for Risk Rising. It provides a dashboard
 ## Governing-document hierarchy
 
 1. `architecture/00_RRAI_Master_Context_v2_0.md` — highest authority (Master Context & constitution).
-2. `strategy/` — product philosophy layer, subordinate to the Master Context and above the Platform Architecture. Contains three governed documents: Product Philosophy, Product Principles, Executive Workbench.
-3. `architecture/01_RRAI_Platform_Architecture_v1_0.md` — approved implementation architecture, subordinate to Strategy.
+2. `architecture/01_RRAI_Platform_Architecture_v1_0.md` — approved implementation architecture, subordinate to the Master Context.
+3. `product/00_RRAI_Product_Philosophy.md`, `product/01_RRAI_Product_Principles.md`, `product/02_RRAI_Executive_Workbench.md` — product-governance layer, subordinate to the Master Context and Platform Architecture.
 4. `architecture/` — remaining constitutional architecture documents (numbered 00–17, plus `99 Architecture Index.md`).
-5. `product/`, `capabilities/`, `engines/`, `knowledge/`, `prompts/`, `templates/`, `engineering/`, `implementation/` — governed documentation layers beneath the architecture layer.
+5. `product/` (remaining documents), `capabilities/`, `engines/`, `knowledge/`, `prompts/`, `templates/`, `engineering/`, `implementation/` — governed documentation layers beneath the product-governance layer.
 
 Where governed documents conflict, the higher-authority document prevails. See `replit.md` for the full governance summary.
 
@@ -33,9 +33,8 @@ Where governed documents conflict, the higher-authority document prevails. See `
 |---|---|
 | `app/` | Reserved target location for the application code migration. Currently empty — code has not been moved here yet. |
 | `artifacts/` | Current application code (frontend, API server, mockup sandbox). |
-| `strategy/` | Product philosophy layer. Subordinate to Master Context; governs Platform Architecture and everything beneath it. Do not modify without explicit Product Owner approval. |
 | `architecture/` | Constitutional architecture documents. Do not modify without explicit instruction. |
-| `product/` | Executive workflows and product-level experiences. |
+| `product/` | Product governance and executive workflows. `00_RRAI_Product_Philosophy.md`, `01_RRAI_Product_Principles.md`, and `02_RRAI_Executive_Workbench.md` are the governing product documents; remaining files describe specific product areas. |
 | `capabilities/` | Reusable business-level AI capabilities. |
 | `engines/` | Lower-level reusable AI services used by capabilities and product workflows. |
 | `knowledge/` | Business/domain knowledge. `master-assets/` and `vendor/` are governed source material; `generated/` holds derived artefacts (chunks, embeddings, indexes) and must never become the source of truth. |

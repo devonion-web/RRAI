@@ -1,0 +1,149 @@
+Repository Product-Governance Update — Prepare the Product Layer
+
+This is a repository documentation and governance task only.
+
+Do not change application code.
+Do not change database schema.
+Do not change runtime behaviour.
+Do not modify AI integrations.
+Do not create a new top-level strategy/ folder.
+
+Objective
+
+Prepare the existing product/ working area to receive three new governing product documents:
+
+- product/00_RRAI_Product_Philosophy.md
+- product/01_RRAI_Product_Principles.md
+- product/02_RRAI_Executive_Workbench.md
+
+These three files will be supplied by the Product Owner after the repository is prepared.
+
+Repository authority
+
+Do not change the existing top-level authority hierarchy.
+
+The intended relationship remains:
+
+1. architecture/00_RRAI_Master_Context_v2_0.md
+2. architecture/01_RRAI_Platform_Architecture_v1_0.md
+3. product/00_RRAI_Product_Philosophy.md
+4. product/01_RRAI_Product_Principles.md
+5. product/02_RRAI_Executive_Workbench.md
+6. remaining product documents
+7. capabilities, engines, knowledge, prompts, templates, engineering and implementation as governed below the higher documents
+
+The three new product documents are subordinate to the Master Context and Platform Architecture.
+
+Within the product/ working area:
+
+- 00 Product Philosophy is the highest product authority.
+- 01 Product Principles sits beneath Product Philosophy.
+- 02 Executive Workbench sits beneath Product Principles.
+- All other product documents must conform to all three.
+
+Tasks
+
+1. Inspect the existing product/ directory
+
+Return:
+
+- every current file;
+- its apparent purpose;
+- its current numbering;
+- whether it would conflict with the proposed 00, 01 and 02 filenames;
+- whether any current file already covers product philosophy, product principles, users, jobs, deliverables, workspaces or product boundaries.
+
+Do not rename or move existing files yet unless explicitly approved below.
+
+2. Create the three placeholder files
+
+Create:
+
+product/00_RRAI_Product_Philosophy.md
+product/01_RRAI_Product_Principles.md
+product/02_RRAI_Executive_Workbench.md
+
+Each placeholder must contain only:
+
+- title;
+- document filename;
+- repository position;
+- sits beneath;
+- status: Draft placeholder — content awaiting Product Owner approval;
+- purpose;
+- authority statement;
+- a clear statement that the placeholder carries no substantive product policy until replaced by approved content.
+
+Do not invent substantive product content.
+
+3. Update repository references
+
+Review and update only the references necessary to recognise these three documents in:
+
+- README.md
+- CONTRIBUTING.md
+- replit.md
+- any repository index or product index
+- any product-area governance or repository-standard document
+- implementation status/generator logic only if it explicitly inventories governed product documents
+
+Do not rewrite unrelated sections.
+
+4. Product-area authority statement
+
+Add a concise product-area authority statement to the appropriate repository index or product index:
+
+Within product/:
+
+00 Product Philosophy
+→ 01 Product Principles
+→ 02 Executive Workbench
+→ remaining product documents
+
+Clarify that this is a working-area authority sequence and does not replace the Master Context or Platform Architecture.
+
+5. Conflict analysis
+
+Identify, but do not silently resolve:
+
+- numbering collisions;
+- duplicate product-authority claims;
+- legacy documents that describe RRAI as a generic assistant, productivity system, CRM, task manager, meeting organiser or operating system for running Risk Rising;
+- documents that conflict with the intended executive-deliverable focus;
+- references that imply product decisions are governed only by architecture.
+
+6. Preserve existing content
+
+Do not delete, archive, rename or rewrite any existing product document in this task unless required to avoid an exact filename collision.
+
+If a collision exists, stop and report it before creating the affected placeholder.
+
+7. Validation
+
+Confirm:
+
+- no strategy/ folder was created;
+- all three placeholders exist;
+- no substantive product policy was invented;
+- no application code changed;
+- no database or runtime files changed;
+- no existing product document was silently altered;
+- repository references point to the new product-governance sequence;
+- the Master Context and Platform Architecture remain the two higher authorities.
+
+8. Output
+
+Return:
+
+1. current product/ inventory;
+2. files created;
+3. files modified;
+4. product-area authority sequence;
+5. conflicts found;
+6. exact places where the supplied Claude documents should be pasted;
+7. any recommended follow-up renames or archival actions;
+8. git status;
+9. exact manual commit commands.
+
+Do not commit or push unless explicitly authorised.
+Stop after preparing the repository.

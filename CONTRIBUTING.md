@@ -14,8 +14,8 @@
 
 ## Governing-document conformance
 
-- Check `strategy/`, `architecture/`, `product/`, `capabilities/`, `engines/`, `knowledge/`, `prompts/`, `templates/`, `engineering/`, and `implementation/` before changing established behaviour — do not redesign architecture while implementing a lower-level task.
-- `architecture/00_RRAI_Master_Context_v2_0.md` is the highest-authority document. The `strategy/` layer sits directly beneath it and above the Platform Architecture. `architecture/01_RRAI_Platform_Architecture_v1_0.md` is the approved implementation architecture, subordinate to Strategy. All three take precedence over all lower-level documents. The root `RRAI Constitution.md` is a redirect only.
+- Check `architecture/`, `product/`, `capabilities/`, `engines/`, `knowledge/`, `prompts/`, `templates/`, `engineering/`, and `implementation/` before changing established behaviour — do not redesign architecture while implementing a lower-level task.
+- `architecture/00_RRAI_Master_Context_v2_0.md` is the highest-authority document. `architecture/01_RRAI_Platform_Architecture_v1_0.md` is the approved implementation architecture immediately beneath it. The three product-governing documents (`product/00_RRAI_Product_Philosophy.md`, `product/01_RRAI_Product_Principles.md`, `product/02_RRAI_Executive_Workbench.md`) sit beneath those two. All take precedence over all lower-level documents. The root `RRAI Constitution.md` is a redirect only.
 - Use UK English in all governed documentation.
 
 ## Data and secrets
