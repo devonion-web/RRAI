@@ -1,1 +1,2 @@
 - [RAI modular structure](rai-modular-structure.md) — LogicGateModule.jsx is the ported original app; new modules = one entry in config/modules.js + new component.
+- [Knowledge loader path resolution](knowledge-loader-path.md) — KNOWLEDGE_DIR must use `process.cwd() + "../../knowledge"` since pnpm sets CWD to the package dir, not workspace root.

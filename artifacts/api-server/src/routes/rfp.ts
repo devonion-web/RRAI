@@ -4,6 +4,7 @@ import mammoth from "mammoth";
 import pdfParse from "pdf-parse";
 import { readFileSync } from "fs";
 import { join } from "path";
+import { loadRiskRisingKnowledge } from "../lib/knowledge-loader";
 import { callClaudeJSON } from "../lib/anthropic";
 import { storeTextDoc, storeExcelDoc, getDocs, removeDoc, storeSize } from "../lib/docStore";
 import {
@@ -32,32 +33,7 @@ const PROMPTS_DIR = join(process.cwd(), "prompts");
 const BIDDER_CONTEXT = "LogicGate (platform, prime); Risk Rising (implementation / services partner)";
 const HOUSE_VOICE    = "outcome-first, concise, UK English, no superlatives, evidence-led";
 
-const RR_KNOWLEDGE = `## Risk Rising — Delivery Capability
-
-Risk Rising is a specialist GRC implementation and advisory consultancy. Core capabilities:
-- LogicGate Risk Cloud implementation and configuration (primary partner)
-- Panorays third-party cyber risk implementation
-- GRC programme design and advisory
-- Agile and waterfall project delivery
-- Stakeholder workshops and requirements gathering
-- Workflow and app configuration design
-- System integration and data migration support
-- User training, train-the-trainer, and change management
-- UAT support and go-live hypercare
-- Post-go-live managed service and ongoing optimisation
-- Commercial negotiation support
-
-## Ownership boundaries
-
-Risk Rising OWNS: implementation, project delivery, configuration, training, UAT, hypercare, support model, managed service, commercials, advisory, delivery governance, account management.
-
-LogicGate OWNS: functional platform features, workflow engine, dashboards, reporting, integrations catalogue, technical architecture, security posture, hosting, product roadmap, platform SLAs.
-
-## Delivery approach
-
-Typical phases: Discovery & Design → Build & Configure → Integrate → Test (SIT → UAT) → Go-live → Hypercare → Managed Service.
-Typical governance: weekly project steering, bi-weekly sponsor review, risk register maintained by RR PM.
-Typical team: Delivery Lead, Lead Consultant(s), Technical Consultant (integration), Change Manager, Project Manager.`;
+const RR_KNOWLEDGE = loadRiskRisingKnowledge();
 
 // ── Prompt parser ─────────────────────────────────────────────────────────────
 

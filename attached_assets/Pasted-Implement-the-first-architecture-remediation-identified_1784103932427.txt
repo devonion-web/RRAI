@@ -1,0 +1,183 @@
+Implement the first architecture remediation identified in the RRAI Architecture Health Report:
+
+Extract operational knowledge from application code into the governed knowledge layer
+
+Objective
+
+Remove the hardcoded Risk Rising and LogicGate knowledge from the API route files and make the running application load that knowledge from the governed repository files instead.
+
+This change must preserve current AI behaviour while correcting the architectural ownership of knowledge.
+
+Current known locations
+
+Inspect at least:
+
+* artifacts/api-server/src/routes/rfp.ts
+* artifacts/api-server/src/routes/logicgate.ts
+* knowledge/Risk Rising.md
+* knowledge/LogicGate.md
+
+Locate:
+
+* RR_KNOWLEDGE
+* LOGICGATE_CONTEXT
+* Any other inline constants containing Risk Rising company knowledge, LogicGate product knowledge, commercial positioning, implementation capability, team structure, module descriptions or operating assumptions
+
+Do not assume the health report captured every hardcoded knowledge block. Search the full API server for similar constants and embedded operational context.
+
+Required changes
+
+1. Populate the governed knowledge files
+
+Move the substantive content currently contained in hardcoded knowledge constants into:
+
+* knowledge/Risk Rising.md
+* knowledge/LogicGate.md
+
+Preserve the factual content and meaning.
+
+Structure each file clearly using Markdown headings.
+
+Include appropriate metadata at the top:
+
+# [Knowledge asset name]
+**Status:** Governed operational knowledge  
+**Authority:** Subordinate to the RRAI Master Context and Knowledge Architecture  
+**Verification state:** Approved current operational knowledge  
+**Sensitivity:** Internal  
+**Owner:** Risk Rising  
+**Last reviewed:** [current date]
+
+Do not add invented information.
+
+Do not expand the scope beyond the knowledge already used by the application unless the repository contains an approved authoritative source.
+
+2. Remove hardcoded knowledge from route files
+
+Remove the operational knowledge constants from the TypeScript route files.
+
+The route handlers must no longer contain long strings defining:
+
+* Risk Rising
+* LogicGate
+* Delivery capability
+* Product positioning
+* Team structure
+* Platform modules
+* Commercial or solution context
+
+3. Add a reusable knowledge loader
+
+Create a small reusable server-side knowledge-loading utility in an appropriate location, for example:
+
+artifacts/api-server/src/lib/knowledge-loader.ts
+
+The loader should:
+
+* Resolve governed knowledge files from the repository root
+* Load UTF-8 Markdown safely
+* Cache content in memory after first load
+* Fail clearly if a required knowledge file is missing
+* Provide typed functions such as:
+
+loadRiskRisingKnowledge()
+loadLogicGateKnowledge()
+
+Do not build a RAG system yet.
+
+Do not add vector search.
+
+Do not add database-backed knowledge in this task.
+
+This task is only to move the existing operational knowledge into the correct governed layer and load it safely at runtime.
+
+4. Preserve current runtime behaviour
+
+Update the RFP and LogicGate prompt assembly so that they use the loaded Markdown knowledge instead of inline constants.
+
+The generated AI prompts should continue to receive equivalent context.
+
+Do not change:
+
+* Prompt purpose
+* AI model
+* Scoring logic
+* Response schemas
+* User interface
+* API contract
+* Existing workflow behaviour
+
+5. Add tests
+
+Add focused tests covering:
+
+* Knowledge file loading succeeds
+* Missing required knowledge file produces a clear error
+* Risk Rising route prompt assembly includes the governed Risk Rising knowledge
+* LogicGate route prompt assembly includes the governed LogicGate knowledge
+* The route files no longer contain the removed hardcoded constants
+
+Use the repository’s existing test framework if one exists.
+
+If no test framework exists, add the lightest appropriate test configuration for the API server and document what was added.
+
+6. Add traceability
+
+At server startup, log which governed knowledge files were successfully loaded.
+
+Do not log their contents.
+
+The log should include:
+
+* Knowledge asset name
+* Repository-relative path
+* Successful load status
+
+7. Validate
+
+Run:
+
+* TypeScript typecheck
+* Relevant tests
+* Existing build checks
+
+Confirm that:
+
+* RR_KNOWLEDGE no longer exists in application code
+* LOGICGATE_CONTEXT no longer exists in application code
+* The governed knowledge files are no longer placeholders
+* The RFP workflow still receives Risk Rising context
+* The LogicGate workflow still receives LogicGate context
+* No unrelated behaviour changed
+
+Important boundaries
+
+Do not implement authentication.
+
+Do not implement the Phase 2 database schema.
+
+Do not move prompts in this task.
+
+Do not refactor the large LogicGate frontend component.
+
+Do not alter scoring logic.
+
+Do not create a general retrieval engine.
+
+Do not make unrelated repository changes.
+
+Delivery
+
+Perform the changes rather than only describing them.
+
+Then report:
+
+* Files changed
+* Knowledge blocks extracted
+* Final governed knowledge paths
+* Loader implementation path
+* Route integrations changed
+* Tests added
+* Typecheck and test results
+* Any remaining operational knowledge still embedded in code
+* Branch name and commit reference

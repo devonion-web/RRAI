@@ -2,6 +2,7 @@ import { Router, type IRouter } from "express";
 import multer from "multer";
 import { callClaude, callClaudeJSON, callClaudeJSONStreamed, callClaudeTextStreamed } from "../lib/anthropic";
 import { logger } from "../lib/logger";
+import { loadLogicGateKnowledge } from "../lib/knowledge-loader";
 
 const router: IRouter = Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
@@ -194,24 +195,7 @@ const SOW_PROFILES = [
 
 // ─── Prompt helpers ───────────────────────────────────────────────────────────
 
-const LOGICGATE_CONTEXT = `
-LogicGate Risk Cloud is a leading enterprise GRC (Governance, Risk & Compliance) platform used by mid-market and enterprise organisations to manage risk, compliance, audits, vendor risk, policies, and incidents in one connected system.
-
-Risk Rising is a LogicGate Gold Partner based in the UK. Risk Rising specialises in LogicGate implementations, GRC consulting, and enterprise risk advisory. The team sells LogicGate Risk Cloud to CISO, CRO, Head of Risk, Head of Compliance, Head of Internal Audit, and similar roles.
-
-LogicGate Risk Cloud key apps/modules:
-- Risk Management (risk register, bow-tie, heat maps)
-- Issue & Action Management
-- Policy Management & Attestation
-- Third Party Risk Management (TPRM) / Vendor Risk
-- Audit Management
-- Compliance Management (SOC 2, ISO 27001, DORA, NIS2, etc.)
-- Incident Management
-- Business Continuity Planning
-- ESG Risk
-
-Typical deal sizes: £50k–£500k+ ARR. Sales cycle: 3–9 months. Key competitors: ServiceNow GRC, OneTrust, Riskonnect, MetricStream, Archer (legacy).
-`.trim();
+const LOGICGATE_CONTEXT = loadLogicGateKnowledge();
 
 const DASHBOARD_SCHEMA = `
 Return a "dashboard" object with EXACTLY these fields (scoring_model_version must always be 2):
