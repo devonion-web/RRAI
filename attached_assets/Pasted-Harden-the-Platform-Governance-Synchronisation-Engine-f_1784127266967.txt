@@ -1,0 +1,189 @@
+Harden the Platform Governance & Synchronisation Engine for continuous use.
+
+Do not add new platform capabilities. This task is limited to making the existing generator deterministic, reviewable and safe for CI.
+
+Current generator:
+
+scripts/src/generate-platform-status.ts
+
+Current command:
+
+pnpm --filter @workspace/scripts run generate:platform-status
+
+Generated outputs:
+
+implementation/00_Platform_Status.md
+implementation/01_Architecture_Progress.md
+implementation/02_Engine_Status.md
+implementation/03_API_Status.md
+implementation/04_Database_Status.md
+implementation/05_UI_Status.md
+implementation/06_Knowledge_Status.md
+implementation/07_Test_Status.md
+implementation/08_Build_Status.md
+implementation/99_Build_History.md
+
+Requirements
+
+1. Deterministic generation
+
+Run the generator twice without changing the repository.
+
+The second run must produce no file changes.
+
+Remove or isolate volatile values that cause unnecessary diffs, including:
+
+- generation timestamps;
+- current working-tree state;
+- transient branch information;
+- environment-specific paths;
+- ordering based on filesystem traversal;
+- unstable percentages or counts.
+
+Sort all discovered files, routes, tables, modules and assets consistently.
+
+2. Separate platform state from execution state
+
+The governed status documents may include:
+
+- repository commit SHA;
+- repository branch;
+- source-file counts;
+- implemented capabilities;
+- schema and route inventory.
+
+Transient execution information must not pollute governed status files.
+
+Where build-run information is needed, place it in a clearly labelled runtime report or CI output rather than rewriting governed platform documents on every execution.
+
+3. Protect Build History
+
+`implementation/99_Build_History.md` must not append an entry every time the generator runs.
+
+Build History may change only when:
+
+- a human explicitly invokes a history-record command;
+- a release is created;
+- or a specifically authorised merge/release workflow records an entry.
+
+Create separate commands if needed:
+
+- `generate:platform-status`
+- `record:build-history`
+
+The standard status-generation command must never modify Build History.
+
+Prevent duplicate history entries for the same commit or release.
+
+4. Add validation mode
+
+Add:
+
+`pnpm --filter @workspace/scripts run check:platform-status`
+
+This command must:
+
+- generate expected status content in memory or a temporary location;
+- compare it with the committed documents;
+- exit successfully when they match;
+- exit non-zero when the committed status documents are stale;
+- print the exact stale files;
+- never modify repository files.
+
+5. CI integration
+
+Update the existing CI workflow so pull requests run:
+
+- platform-status validation;
+- existing type-checks;
+- existing tests;
+- existing builds.
+
+The CI job must not commit or push generated files.
+
+When status files are stale, CI should instruct the contributor to run:
+
+`pnpm --filter @workspace/scripts run generate:platform-status`
+
+6. Evidence classification
+
+Every generated document must clearly identify itself as:
+
+- generated platform evidence;
+- derived from repository state;
+- not a governing architecture document;
+- subordinate to the Master Context and Platform Architecture;
+- replaceable by regeneration rather than manual editing.
+
+Add a standard generated-file header to documents 00–08.
+
+Do not place that generated header in Build History if it is maintained as a controlled append-only record.
+
+7. Parsing reliability
+
+Review every parser for false positives and false negatives.
+
+In particular:
+
+- database tables must come from actual Drizzle table declarations, not arbitrary strings;
+- API routes must identify router prefixes and composed route paths correctly;
+- test discovery must exclude dependencies, build output and generated artefacts;
+- knowledge files must be sourced from the governed manifest where one exists;
+- frontend modules must distinguish registered modules from unused files;
+- percentages must show their calculation basis and must not imply unsupported precision.
+
+Where parsing is uncertain, report `Unable to verify` rather than guessing.
+
+8. Tests
+
+Add automated tests covering:
+
+- deterministic output;
+- stable sorting;
+- no Build History mutation during normal generation;
+- duplicate history-entry prevention;
+- stale-status detection;
+- correct exit codes;
+- representative route parsing;
+- representative Drizzle table parsing;
+- exclusion of ignored/generated directories.
+
+9. Development workspace integration specification
+
+Do not build UI integration yet.
+
+Produce a short implementation specification for how the Development workspace will read and display:
+
+- Platform Status;
+- Architecture Progress;
+- Engine Status;
+- Test Status;
+- Build Status.
+
+The UI must consume generated evidence without treating it as architecture authority.
+
+10. Final validation
+
+Run:
+
+- generator twice;
+- status check;
+- tests;
+- type-check;
+- build.
+
+Distinguish pre-existing failures from new failures.
+
+Return:
+
+1. deterministic-generation result;
+2. changed-file list;
+3. commands added;
+4. CI changes;
+5. tests and results;
+6. parsing limitations;
+7. Build History safeguards;
+8. Development workspace integration specification;
+9. commit hash or exact manual commit commands.
+
+Do not begin AI orchestration, GitHub automation or further database work in this task.

@@ -1,51 +1,47 @@
+<!--
+GENERATED PLATFORM EVIDENCE
+Derived from repository inspection at commit c23c100 (branch: feature/development-orchestrator-foundation)
+Generator: pnpm --filter @workspace/scripts run generate:platform-status
+
+This document is NOT a governing architecture document.
+Governing documents (authority order):
+  1. architecture/00_RRAI_Master_Context_v2_0.md
+  2. architecture/01_RRAI_Platform_Architecture_v1_0.md
+This document is subordinate to both.
+
+Do not edit manually. Regenerate to update.
+-->
 # API Status
 ## 03_API_Status.md
-Generated: 2026-07-15 13:37:27 UTC
 
 ---
 
 ## Summary
 
 | Metric | Value |
-|---|---|
+| --- | --- |
 | Total routes | 104 |
-| Admin routes | 12 |
-| Public routes | 92 |
 | Route files | 7 |
-| OpenAPI spec | ⚠️ Absent (api-spec/ not present) |
-| Base path | `/api` |
+| Admin / development routes | 12 |
+| All other routes | 92 |
+| Base path | All routes are served under `/api` (proxy-applied) |
+| OpenAPI spec | Unable to verify — `api-spec/` directory is absent |
 
 ---
 
 ## Route Groups
 
-### conversations.ts (11 routes)
-
-5×GET, 3×POST, 1×PATCH, 2×PUT
-
-- `GET /conversations`
-- `POST /conversations`
-- `GET /conversations/:id`
-- `PATCH /conversations/:id`
-- `POST /conversations/:id/archive`
-- `PUT /conversations/:id/opportunity`
-- `PUT /conversations/:id/lens`
-- `GET /conversations/:id/messages`
-- _…and 3 more_
-
----
-
 ### admin.ts (7 routes)
 
 5×GET, 2×POST
 
-- `GET /admin/knowledge/index/status` 🔒admin
-- `POST /admin/knowledge/index` 🔒admin
-- `POST /admin/knowledge/index/:assetId` 🔒admin
-- `GET /admin/knowledge/search` 🔒admin
-- `GET /admin/knowledge/manifest` 🔒admin
-- `GET /admin/knowledge/corpus` 🔒admin
-- `GET /admin/knowledge/policy` 🔒admin
+- `GET /admin/knowledge/corpus` 🔒 admin
+- `POST /admin/knowledge/index` 🔒 admin
+- `POST /admin/knowledge/index/:assetId` 🔒 admin
+- `GET /admin/knowledge/index/status` 🔒 admin
+- `GET /admin/knowledge/manifest` 🔒 admin
+- `GET /admin/knowledge/policy` 🔒 admin
+- _…and 1 more_
 
 ---
 
@@ -54,43 +50,25 @@ Generated: 2026-07-15 13:37:27 UTC
 4×GET, 2×POST
 
 - `GET /auth/user`
-- `GET /login`
 - `GET /callback`
+- `GET /login`
 - `GET /logout`
-- `POST /mobile-auth/token-exchange`
 - `POST /mobile-auth/logout`
+- `POST /mobile-auth/token-exchange`
 
 ---
 
-### rfp.ts (37 routes)
+### conversations.ts (11 routes)
 
-9×GET, 22×POST, 1×DELETE, 5×PATCH
+5×GET, 1×PATCH, 3×POST, 2×PUT
 
-- `GET /rfp/health`
-- `POST /rfp/upload-files`
-- `POST /rfp/store-text`
-- `DELETE /rfp/documents/:id`
-- `POST /rfp/packs`
-- `GET /rfp/packs/:id`
-- `GET /rfp/packs/:id/audit`
-- `POST /rfp/packs/:id/detect-sections`
-- _…and 29 more_
-
----
-
-### logicgate.ts (37 routes)
-
-10×GET, 24×POST, 1×PATCH, 1×DELETE, 1×PUT
-
-- `GET /health`
-- `POST /generate-prep`
-- `POST /post-discovery`
-- `POST /deal-strategy`
-- `POST /generate-rich-briefing`
-- `POST /generate-emails`
-- `POST /generate-post-demo`
-- `POST /generate-solution-breakdown`
-- _…and 29 more_
+- `GET /conversations`
+- `POST /conversations`
+- `GET /conversations/:id`
+- `PATCH /conversations/:id`
+- `POST /conversations/:id/archive`
+- `PUT /conversations/:id/lens`
+- _…and 5 more_
 
 ---
 
@@ -98,11 +76,11 @@ Generated: 2026-07-15 13:37:27 UTC
 
 2×GET, 3×POST
 
-- `GET /development/tasks` 🔒admin
-- `POST /development/tasks` 🔒admin
-- `GET /development/tasks/:id` 🔒admin
-- `POST /development/tasks/:id/findings` 🔒admin
-- `POST /development/tasks/:id/approvals` 🔒admin
+- `GET /development/tasks` 🔒 admin
+- `POST /development/tasks` 🔒 admin
+- `GET /development/tasks/:id` 🔒 admin
+- `POST /development/tasks/:id/approvals` 🔒 admin
+- `POST /development/tasks/:id/findings` 🔒 admin
 
 ---
 
@@ -114,38 +92,54 @@ Generated: 2026-07-15 13:37:27 UTC
 
 ---
 
-## Authentication Model
+### logicgate.ts (37 routes)
 
-- OIDC session enforced on all `/conversations/*` routes
-- Admin role (`requireRole("admin")`) enforced on `/admin/*` and `/development/*`
-- `/auth/*` and `/health` are public
-- Mobile auth token endpoint: `POST /auth/mobile-auth/token`
+1×DELETE, 10×GET, 1×PATCH, 24×POST, 1×PUT
+
+- `POST /contacts`
+- `POST /contacts/:id/enrich`
+- `POST /deal-strategy`
+- `POST /enrich/deal-risk`
+- `POST /enrich/discovery-questions`
+- `POST /enrich/product-fit`
+- _…and 31 more_
 
 ---
 
-## API Maturity
+### rfp.ts (37 routes)
 
-| Area | Maturity |
-|---|---|
-| Auth routes | Production |
-| Conversation routes | Production |
-| Knowledge admin routes | Production |
-| RFP routes | Mature (in-memory store) |
-| Development/approval routes | Beta |
-| LogicGate routes | Mature |
-| OpenAPI contract | ❌ Not present |
+1×DELETE, 9×GET, 5×PATCH, 22×POST
+
+- `DELETE /rfp/documents/:id`
+- `GET /rfp/health`
+- `POST /rfp/packs`
+- `GET /rfp/packs/:id`
+- `POST /rfp/packs/:id/assemble`
+- `GET /rfp/packs/:id/audit`
+- _…and 31 more_
+
+---
+
+## Authentication Model
+
+- OIDC session enforced on all `/conversations/*` routes
+- Admin role (`requireRole("admin")`) enforced on `/admin/*` and `/development/*` routes
+- `/auth/*` and `/health` are public
+- Mobile auth token endpoint: `POST /auth/mobile-auth/token`
+
+> **Note:** Route paths above are as declared in the route files. The proxy applies the `/api` prefix, so `/conversations` is accessible as `/api/conversations`.
 
 ---
 
 ## Missing Services
 
-- Opportunity management API (DB schema exists, surface is minimal)
+- Opportunity management API (schema exists; surface is minimal)
 - Contact management API
 - Organisation admin API (beyond membership)
-- Search/filter API for conversations
+- Conversation search / filter API
 - Webhook / event notification API
-- Vector search endpoint (planned for Phase 3)
+- Vector search endpoint (planned Phase 3)
 
 ---
 
-_No api-spec/ directory was found. A contract-first OpenAPI specification is planned as a future milestone._
+_Route counts derived from regex parsing of route file declarations. router.use middleware registrations are excluded._

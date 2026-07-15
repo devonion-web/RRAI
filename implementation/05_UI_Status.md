@@ -1,33 +1,45 @@
+<!--
+GENERATED PLATFORM EVIDENCE
+Derived from repository inspection at commit c23c100 (branch: feature/development-orchestrator-foundation)
+Generator: pnpm --filter @workspace/scripts run generate:platform-status
+
+This document is NOT a governing architecture document.
+Governing documents (authority order):
+  1. architecture/00_RRAI_Master_Context_v2_0.md
+  2. architecture/01_RRAI_Platform_Architecture_v1_0.md
+This document is subordinate to both.
+
+Do not edit manually. Regenerate to update.
+-->
 # UI Status
 ## 05_UI_Status.md
-Generated: 2026-07-15 13:37:27 UTC
 
 ---
 
 ## Summary
 
 | Area | Technology | Status |
-|---|---|---|
+| --- | --- | --- |
 | Framework | React 19 + Vite | Production |
-| Styling | Inline JS styles (navy theme) | Active |
+| Styling | Inline JS styles (Inter, navy theme) | Active |
 | Routing | Wouter | Active |
-| State management | React local state + useState | Active |
-| Font | Inter (CSS variable) | Active |
-| Module registry | config/modules.js | Active |
+| State management | React local state (useState) | Active |
+| Module registry | `artifacts/rai/src/config/modules.js` | Active |
 
 ---
 
-## Modules
+## Registered Modules (from modules.js)
 
-- **development** (`artifacts/rai/src/modules/development/`)
-- **logicgate** (`artifacts/rai/src/modules/logicgate/`)
-- **rfp** (`artifacts/rai/src/modules/rfp/`)
+Active:
+- **Development** (`development`)
+- **LogicGate Specialist** (`logicgate`)
+- **RFP Response Drafter** (`rfp`)
 
-**Planned but not implemented:**
-- Proposal Specialist
-- Marketing Specialist
-- Delivery Specialist
-- Knowledge Specialist
+Planned (coming_soon):
+- **Delivery Specialist** (`delivery`)
+- **Knowledge Specialist** (`knowledge`)
+- **Marketing Specialist** (`marketing`)
+- **Proposal Specialist** (`proposal`)
 
 ---
 
@@ -43,39 +55,34 @@ Generated: 2026-07-15 13:37:27 UTC
 
 ```
 App.tsx
-├── WorkspaceHome  (default landing — conversation list + new conversation)
+├── WorkspaceHome     (default landing — conversation list + new conversation)
 ├── ConversationView  (active conversation with SSE streaming)
 └── Module views (via activeModule state)
+    ├── Development
     ├── LogicGate Specialist
-    ├── RFP/RFI Workbench
-    └── Development [partial]
+    ├── RFP Response Drafter
 ```
 
 ---
 
 ## Admin Interface
 
-- Knowledge index status and reindex trigger
-- Per-asset indexing
-- Manifest inspection
-- Corpus status (chunk counts)
-- Retrieval policy inspection
-- Search testing interface
-
-These are currently API-only (no dedicated admin frontend beyond the API routes).
+Admin capabilities are API-only. No dedicated admin frontend exists beyond direct API access.
+Available via: `/api/admin/knowledge/*`
 
 ---
 
 ## UI Maturity
 
-| Area | Maturity |
-|---|---|
+| Area | Status |
+| --- | --- |
 | Conversation workspace | Production |
+| Development module | Production |
 | LogicGate Specialist module | Production |
-| RFP/RFI Workbench | Production |
+| RFP Response Drafter module | Production |
 | Admin interface | API-only (no UI) |
 | Opportunity management | Not present |
-| Organisation management | Not present |
+| Organisation settings | Not present |
 | Learning / approval UI | Not present |
 
 ---
@@ -86,8 +93,7 @@ These are currently API-only (no dedicated admin frontend beyond the API routes)
 2. No opportunity or contact management screens
 3. No organisation settings screen
 4. Module back-navigation uses in-App state; deep-linking not supported
-5. Mobile responsiveness not validated across all modules
 
 ---
 
-_Frontend artifact: `artifacts/rai/`. Dev server: `pnpm --filter @workspace/rai run dev` (port from PORT env)._
+_Module list sourced from `artifacts/rai/src/config/modules.js` (authoritative registry). Filesystem directory listing is supplementary only._

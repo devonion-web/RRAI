@@ -42,13 +42,26 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Code generation (OpenAPI → client + Zod schemas)
+        # api-spec package does not yet exist; continue-on-error until it is created.
         run: pnpm --filter @workspace/api-spec run codegen
+        continue-on-error: true
 
       - name: TypeScript typecheck (zero errors required)
         run: pnpm run typecheck
 
+      - name: Platform status check (documents must be current)
+        # Verifies that implementation/00–08 match the current repository state.
+        # If this step fails, regenerate and commit before merging:
+        #   pnpm --filter @workspace/scripts run generate:platform-status
+        run: pnpm --filter @workspace/scripts run check:platform-status
+
       - name: Run tests
-        run: node --test --import tsx/esm artifacts/api-server/src/routes/logicgate.test.ts
+        run: |
+          node --test --import tsx/esm artifacts/api-server/src/routes/logicgate.test.ts
+          node --test --import tsx/esm artifacts/api-server/src/routes/conversations.test.ts
+          node --test --import tsx/esm artifacts/api-server/src/services/knowledge-chunking-service.test.ts
+          node --test --import tsx/esm artifacts/api-server/src/services/knowledge-search-service.test.ts
+          node --test --import tsx/esm scripts/src/generate-platform-status.test.ts
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
 

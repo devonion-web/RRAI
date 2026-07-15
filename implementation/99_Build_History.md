@@ -168,3 +168,14 @@ Implemented the Platform Governance & Synchronisation Engine. The generator insp
 
 ---
 
+## Platform Governance Engine v1.1 — Hardened for CI
+
+**Date:** 2026-07-15  
+**Branch:** `feature/development-orchestrator-foundation`  
+**Commit:** `c23c100` (Add query client provider to enable data fetching)  
+**Commit Date:** 2026-07-15 14:53:15 +0000  
+**Tests:** 21/21  
+**Notes:** Deterministic generation; removed timestamps; added check/record-history commands; CI integration  
+
+---
+

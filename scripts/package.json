@@ -6,6 +6,9 @@
   "scripts": {
     "hello": "tsx ./src/hello.ts",
     "generate:platform-status": "tsx ./src/generate-platform-status.ts",
+    "check:platform-status": "tsx ./src/check-platform-status.ts",
+    "record:build-history": "tsx ./src/record-build-history.ts",
+    "test": "node --test --import tsx/esm src/generate-platform-status.test.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "devDependencies": {
