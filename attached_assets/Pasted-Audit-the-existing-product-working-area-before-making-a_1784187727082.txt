@@ -1,0 +1,126 @@
+Audit the existing product/ working area before making any changes.
+
+Important context:
+
+- product/ already contains 17 files.
+- Do not assume filenames 00, 01 or 02 are available.
+- Do not create placeholders yet.
+- Do not rename, move, archive, delete or rewrite any existing file.
+- Do not change application code, database schema or runtime behaviour.
+
+Objective
+
+Determine how to introduce these three new governed product documents without creating numbering collisions, duplicate authority, or broken references:
+
+- RRAI Product Philosophy
+- RRAI Product Principles
+- RRAI Executive Workbench
+
+Tasks
+
+1. Inventory the full product/ directory
+
+For every file, return:
+
+- exact filename;
+- current number/prefix;
+- apparent purpose;
+- status/version if identifiable;
+- governing-document claims;
+- documents it cites;
+- whether it appears current, legacy, duplicate or superseded.
+
+2. Numbering analysis
+
+Identify:
+
+- whether 00, 01 or 02 are already occupied;
+- the current numbering convention across all 17 files;
+- whether numbering reflects authority, sequence, chronology or only file organisation;
+- whether introducing new 00/01/02 files would force renumbering;
+- any mismatch between product numbering and the Master Context repository authority model.
+
+3. Content overlap analysis
+
+Identify any existing file that already covers:
+
+- product philosophy;
+- product mission or vision;
+- product principles;
+- users or personas;
+- jobs to be done;
+- executive deliverables;
+- workspaces;
+- product boundaries;
+- feature decision criteria;
+- AI behaviour or anti-drift rules.
+
+For each overlap, classify it as:
+
+- compatible and reusable;
+- partial overlap;
+- duplicate;
+- conflicting;
+- legacy.
+
+4. Product-drift analysis
+
+Flag any existing product document that presents RRAI as:
+
+- a personal assistant;
+- a generic chatbot;
+- a CRM;
+- a project or task-management system;
+- a meeting or calendar organiser;
+- a system for running Risk Rising generally;
+- anything broader than helping leaders perform defined executive work.
+
+5. Authority analysis
+
+Assess how the three proposed governing documents should relate to:
+
+- architecture/00_RRAI_Master_Context_v2_0.md
+- architecture/01_RRAI_Platform_Architecture_v1_0.md
+- the existing product documents.
+
+Do not change the top-level authority model.
+
+Recommend a product-area authority sequence that fits the existing repository rather than imposing a new one blindly.
+
+6. Recommend the insertion approach
+
+Return one preferred option and up to two alternatives.
+
+Possible approaches may include:
+
+- use existing unused numbers;
+- rename or renumber later under a controlled migration;
+- use descriptive filenames without numbers;
+- create a product index that establishes authority independently of filename numbering;
+- merge proposed content into an existing governing product file where that is structurally better.
+
+Do not execute the recommendation yet.
+
+7. Exact placement recommendation
+
+State the exact filenames and locations where Claude’s three documents should eventually go.
+
+If existing files need to be updated, merged, renamed or archived first, state that clearly.
+
+8. Output
+
+Return:
+
+1. all 17 product files;
+2. numbering map;
+3. overlap and contradiction register;
+4. drift findings;
+5. recommended authority model within product/;
+6. preferred insertion plan;
+7. exact future filenames;
+8. files that would later need renaming, merging or archiving;
+9. git status.
+
+Stop after the audit.
+
+Do not create or modify files.
