@@ -1,0 +1,385 @@
+Implement RFP Internal Alpha — Phase 1: Persistent Work Item Foundation
+
+This is an implementation task based on the approved Product Conformance and Usability Audit dated 16 July 2026.
+
+Read these governing documents first:
+
+- architecture/00_RRAI_Master_Context_v2_0.md
+- architecture/01_RRAI_Platform_Architecture_v1_0.md
+- product/00_RRAI_Product_Philosophy.md
+- product/01_RRAI_Product_Principles.md
+- product/02_RRAI_Executive_Workbench.md
+- engineering/00_RRAI_Development_Operating_Model.md
+
+OBJECTIVE
+
+Make the existing requirement-based RFP/RFI workflow persist across:
+
+- page refresh;
+- browser close and reopen;
+- API-server restart;
+- Replit restart;
+- login from another device by an authorised user.
+
+This phase must preserve the current user experience and reasoning flow as far as possible.
+
+Do not add new user-facing product capability beyond persistence and reliable recovery.
+
+SCOPE LIMITS
+
+Do not implement yet:
+
+- a new Define screen;
+- formal whole-Work-Item approval;
+- Reuse proposals;
+- RAG retrieval;
+- evidence-source display;
+- confidence labels;
+- server-side DOCX export;
+- collaborative editing;
+- redesign of the RFP screens;
+- changes to LogicGate or Conversation;
+- retirement of legacy section-based routes.
+
+Do not use `push-force` without first showing what it will change and confirming that it is non-destructive.
+
+BRANCH
+
+Confirm the active branch before changing anything.
+
+Use a dedicated feature branch created from the latest `develop`:
+
+feature/rfp-persistent-work-item
+
+If the branch does not exist, stop and provide the exact Shell commands required to create it.
+
+PHASE 1 IMPLEMENTATION
+
+1. Inspect the current RFP state model
+
+Before changing files, map every in-memory store and its relationships:
+
+- packs;
+- uploaded documents;
+- profiles;
+- requirements;
+- responses;
+- response blocks;
+- quality reviews;
+- audit events;
+- section-based legacy state.
+
+Identify which state is used by the current requirement-based UI and which belongs only to the legacy section-based flow.
+
+Do not migrate dead legacy state unless required to keep existing routes working.
+
+2. Create the PostgreSQL schema
+
+Create:
+
+lib/db/src/schema/rfp.ts
+
+Export it from:
+
+lib/db/src/schema/index.ts
+
+Create the minimum tables required to persist the currently active requirement-based flow:
+
+rfp_work_items
+- id
+- organisation_id where the current tenancy/auth model supports it
+- created_by_user_id where the current auth model supports it
+- name
+- buyer_name
+- lens, constrained to commercial for this workflow
+- workflow_stage
+- status
+- profile jsonb
+- created_at
+- updated_at
+- expires_at nullable
+- completed_at nullable
+
+rfp_documents
+- id
+- work_item_id
+- original_filename
+- mime_type
+- file_size_bytes
+- character_count
+- extracted_text
+- structured_content jsonb nullable
+- extraction_status
+- created_at
+
+rfp_requirements
+- id
+- work_item_id
+- requirement_code
+- display_order
+- parent_requirement_id nullable
+- title
+- source_text
+- source_document_id nullable
+- source_location jsonb nullable
+- scoring_weight nullable
+- minimum_expectations jsonb
+- considerations jsonb
+- mandated_structure nullable
+- response_responsibility
+- responsibility_rationale nullable
+- responsibility_confirmed
+- responsibility_confidence nullable
+- response_stage
+- cross_cutting_constraints jsonb
+- created_at
+- updated_at
+
+rfp_responses
+- id
+- work_item_id
+- requirement_id
+- status
+- created_at
+- updated_at
+
+rfp_response_blocks
+- id
+- response_id
+- block_key
+- block_type
+- prompt_or_expectation nullable
+- answer
+- placeholders jsonb
+- reviewed
+- validation_status nullable
+- validation_findings jsonb
+- rewrite_attempts
+- created_at
+- updated_at
+
+rfp_quality_reviews
+- id
+- work_item_id
+- requirement_id nullable
+- response_id nullable
+- response_block_id nullable
+- review_type
+- score nullable
+- passed nullable
+- findings jsonb
+- missing_items jsonb
+- recommended_actions jsonb
+- checks jsonb
+- created_at
+
+rfp_audit_events
+- id
+- work_item_id
+- requirement_id nullable
+- event_type
+- summary
+- actor_type
+- actor_id nullable
+- actor_label nullable
+- payload jsonb
+- created_at
+
+Use the current authentication and organisation models where they genuinely exist.
+
+Do not invent foreign keys to tables that are not present.
+
+Where authenticated identity cannot be represented safely, document the limitation rather than pretending enforcement exists.
+
+3. Migration artefact
+
+Create a reviewable, versioned SQL migration.
+
+Requirements:
+
+- migration must be committed with the schema;
+- migration must be non-destructive;
+- do not drop current tables;
+- do not erase Development Orchestrator data;
+- do not claim the migration succeeded until it has been applied and queried;
+- report all SQL constraints and indexes;
+- add useful indexes for work_item_id, requirement_id, status and created_at;
+- protect `rfp_audit_events` as append-only through the repository API and database-level controls where practical.
+
+If the repository’s established Drizzle process uses schema generation plus push, still create a reviewable SQL migration or baseline artefact so GitHub records the database state.
+
+4. Persistence layer
+
+Refactor the active RFP storage behind a repository abstraction.
+
+Prefer creating:
+
+artifacts/api-server/src/lib/rfpRepository.ts
+
+Do not scatter raw Drizzle queries across 41 route handlers.
+
+The repository must provide operations for:
+
+- create/get/list/update Work Items;
+- create/get/delete documents;
+- save/get profile;
+- replace/list/update requirements;
+- create/get/update responses;
+- create/update response blocks;
+- create/list quality reviews;
+- append/list audit events.
+
+Audit events must have no update or delete method.
+
+5. Preserve current route contracts
+
+Update the current requirement-based RFP routes to use the repository.
+
+Preserve existing request/response payloads where possible so the current UI does not break.
+
+Do not rewrite AI prompts or response-generation logic.
+
+For SSE routes:
+
+- keep current keepalive behaviour;
+- persist durable state at defined checkpoints;
+- always persist final successful output before emitting completion;
+- persist failure state and an audit event where appropriate;
+- do not use unsafe fire-and-forget writes for state whose loss would corrupt the Work Item.
+
+6. Document persistence
+
+For Internal Alpha, persist the extracted document text and structured XLSX data in PostgreSQL.
+
+Do not retain raw binary files unless the existing application genuinely requires them after extraction.
+
+Record:
+
+- original filename;
+- MIME type;
+- size;
+- extraction status;
+- extracted character count;
+- source relationship.
+
+Do not silently truncate documents.
+
+Where an input exceeds the current processing budget:
+
+- persist the full extracted text where reasonable;
+- record that only a bounded portion was sent for AI processing;
+- expose a warning in the existing Setup or Decompose experience;
+- audit the truncation or partial-processing event.
+
+7. Recovery
+
+Replace fragile `sessionStorage`-only recovery with persistent Work Item recovery.
+
+Requirements:
+
+- retain the active Work Item ID in `localStorage`;
+- load the Work Item from the database on module start;
+- show a clear recovery error if the Work Item no longer exists or access is denied;
+- do not fail silently;
+- preserve the user’s last valid workflow stage;
+- allow the user to start a new RFP without deleting the existing one.
+
+Add the smallest practical way for an authorised user to resume an existing Work Item, such as a recent-work list or explicit Work Item ID lookup, only if needed to prove cross-device recovery. Do not build a generic task dashboard.
+
+8. Existing data and compatibility
+
+The current in-memory data is disposable development data.
+
+Do not attempt to migrate ephemeral Map contents.
+
+Keep the legacy section-based routes functioning if possible, but do not extend or improve them.
+
+Clearly mark them as legacy internally where that does not alter their public behaviour.
+
+9. Automated tests
+
+Add repeatable tests covering at minimum:
+
+- Work Item survives repository re-instantiation;
+- uploaded document metadata and extracted text persist;
+- requirements and ownership overrides persist;
+- generated response blocks and placeholders persist;
+- review and response stages persist;
+- quality reviews persist;
+- audit events persist and are append-only;
+- API recovery after simulated server restart;
+- unauthorised access to another organisation’s Work Item is rejected where tenancy exists;
+- existing requirement-based route payloads remain compatible;
+- LogicGate and Conversation routes remain unchanged.
+
+Also perform one end-to-end smoke test:
+
+1. create RFP Work Item;
+2. upload or store sample text;
+3. decompose;
+4. create or generate a response;
+5. update a block;
+6. restart the API process;
+7. retrieve the same Work Item;
+8. confirm all state is intact.
+
+Do not use customer data in automated tests.
+
+10. Platform status
+
+After implementation:
+
+- regenerate platform status;
+- run `check:platform-status`;
+- ensure generated evidence accurately reflects the new tables and routes;
+- do not manually edit generated status documents.
+
+VALIDATION
+
+Run:
+
+- database schema generation;
+- migration application;
+- direct database verification of created tables;
+- API-server typecheck;
+- frontend typecheck;
+- relevant tests;
+- full workspace typecheck;
+- build;
+- RFP smoke test before and after API restart;
+- platform-status generation and validation.
+
+Distinguish pre-existing failures from new failures.
+
+SUCCESS CRITERIA
+
+Phase 1 is complete only when:
+
+- RFP state no longer depends on in-memory Maps for durability;
+- a server restart does not destroy an active RFP;
+- a browser close does not destroy an active RFP;
+- requirements, responses, placeholders, review states, quality reviews and audit history persist;
+- an authorised user can recover the Work Item;
+- no existing active RFP capability has regressed;
+- migration and tests are present in Git;
+- no Phase 2 or Phase 3 capability has been added.
+
+RETURN
+
+1. branch confirmation;
+2. current-state store map;
+3. implemented schema;
+4. migration filename and application result;
+5. repository/service design;
+6. routes changed;
+7. frontend recovery changes;
+8. automated tests and results;
+9. restart-recovery evidence;
+10. changed-file list;
+11. security and tenancy limitations;
+12. known defects;
+13. architecture and product conformance review;
+14. exact commit command or commit hash;
+15. PR status.
+
+Do not begin Phase 2.
