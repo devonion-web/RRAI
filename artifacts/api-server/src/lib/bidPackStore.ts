@@ -1,31 +1,89 @@
+/**
+ * bidPackStore — Phase 1: Persistent Work Item Foundation.
+ *
+ * All requirement-based operations (packs, profiles, requirements, responses,
+ * quality reviews, audit events) are now async and delegate to rfpRepository,
+ * which writes to PostgreSQL.
+ *
+ * The section/draft/revision data model (legacy section-based flow) remains
+ * synchronous and in-memory. These routes are not used by the current UI but
+ * must continue to function. Section state does NOT survive server restart —
+ * this is a known and accepted limitation for Phase 1 (same as before).
+ *
+ * The PACKS in-memory Map is kept so that legacy section routes
+ * (setSections, getSection, updateSection) can still find the pack object
+ * they need to look up section IDs. A pack created via createPack() is stored
+ * both in PostgreSQL (durable) and in the PACKS Map (session cache).
+ * After server restart, PACKS is empty; a call to getPack() will query the DB
+ * and cache the result so subsequent calls are fast.
+ */
+
 import { randomUUID } from "crypto";
+import * as repo from "./rfpRepository";
+import type {
+  RfpWorkItem,
+  RfpRequirement,
+  RfpResponse,
+  RfpResponseBlock,
+  RfpQualityReview,
+  RfpAuditEvent,
+  StoredProfile,
+} from "./rfpRepository";
+import type { DocEntry } from "./docStore";
+import { logger } from "./logger";
 
-// ── Status & event types ──────────────────────────────────────────────────────
-
-export type SectionStatus =
-  | "not_started" | "extracted" | "drafted"
-  | "in_review"   | "approved"  | "reopened";
-
-export type AuditEventType =
-  | "pack_uploaded"       | "section_detected"   | "brief_extracted"
-  | "draft_generated"     | "draft_edited"       | "placeholder_filled"    | "component_reviewed"
-  | "status_changed"      | "approved"           | "exported"              | "reopened"
-  | "profile_saved"       | "decomposed"
-  | "ownership_confirmed" | "ownership_overridden"
-  | "response_generated"  | "block_edited"       | "block_reviewed"
-  | "response_advanced"   | "response_approved"
-  | "validation_run"      | "gate_overridden"    | "block_rewritten"
-  | "stage_advanced"      | "assembled";
+// ── Shared types ───────────────────────────────────────────────────────────────
 
 export type WorkflowStage =
-  | "decompose" | "validate_decomp" | "map_ownership" | "validate_ownership"
-  | "respond"   | "validate_response" | "rewrite"     | "revalidate"
-  | "assemble"  | "export";
+  | "decompose"
+  | "validate_decomp"
+  | "map_ownership"
+  | "validate_ownership"
+  | "respond"
+  | "validate_response"
+  | "rewrite"
+  | "revalidate"
+  | "assemble"
+  | "export";
 
+export type SectionStatus =
+  | "not_started"
+  | "extracted"
+  | "drafted"
+  | "in_review"
+  | "approved"
+  | "reopened";
+
+export type ResponseStage = "pending" | "validating" | "passed" | "failed";
 export type OwnerConfidence = "low" | "medium" | "high";
 
-export type ResponseStage =
-  | "pending" | "responding" | "validating" | "rewriting" | "passed" | "failed";
+export type AuditEventType =
+  | "pack_uploaded"
+  | "section_detected"
+  | "brief_extracted"
+  | "draft_generated"
+  | "draft_edited"
+  | "placeholder_filled"
+  | "component_reviewed"
+  | "status_changed"
+  | "approved"
+  | "exported"
+  | "reopened"
+  | "profile_saved"
+  | "decomposed"
+  | "ownership_confirmed"
+  | "ownership_overridden"
+  | "response_generated"
+  | "block_edited"
+  | "block_reviewed"
+  | "response_advanced"
+  | "response_approved"
+  | "decomp_validated"
+  | "ownership_validated"
+  | "gate_overridden"
+  | "block_rewritten"
+  | "assembled"
+  | "validation_run";
 
 export interface AuditEvent {
   id: string;
@@ -38,50 +96,17 @@ export interface AuditEvent {
   createdAt: number;
 }
 
-export interface SectionRevision {
-  id: string;
-  sectionId: string;
-  components: DraftComponents;
-  complianceVerdict: string;
-  createdAt: number;
-}
-
-// ── Placeholder type ──────────────────────────────────────────────────────────
-
 export interface Placeholder {
-  id: string;           // e.g. "ph_001" — matches {{PH:ph_001}} tokens in content
-  description: string;  // human label, e.g. "day rate for senior consultant"
-  group: string | null; // component name this placeholder primarily belongs to
-  value: string | null; // filled value, null until filled
+  id: string;
+  description: string;
+  group: string | null;
+  value: string | null;
   filled: boolean;
 }
 
-// ── Extraction types ──────────────────────────────────────────────────────────
+// ── Section / Legacy types (in-memory only) ────────────────────────────────────
 
-export interface BriefRequirement  { id: string | null; text: string; priority: string | null }
-export interface BriefKeyDate      { date: string; event: string }
-export interface BriefNamedOwner   { name: string; area: string }
-
-// ── Draft types ───────────────────────────────────────────────────────────────
-
-export interface DeliveryMilestone  { phase: string; timing: string; activities: string; exit: string }
-export interface DeliveryTeamMember { role: string; responsibility: string; phases: string }
-export interface AcceptanceGate     { gate: string; entry: string; exit: string }
-export interface RiskItem           { risk: string; likelihoodImpact: string; mitigation: string; owner: string }
-
-export interface DraftComponents {
-  understanding:                string;
-  approachAndRecommendedOption: string;
-  deliveryPlan:                 { narrative: string; milestones: DeliveryMilestone[] };
-  domainComponent:              { title: string; content: string };
-  resourcing:                   { deliveryTeam: DeliveryTeamMember[]; buyerCommitment: string };
-  acceptanceGates:              AcceptanceGate[];
-  preWork:                      string[];
-  assumptions:                  string[];
-  configCustomisationThirdParty:string;
-  costs:                        string;
-  risks:                        RiskItem[];
-}
+export type DraftStatus = "draft" | "in_review" | "approved";
 
 export interface SectionDraft {
   id: string;
@@ -89,25 +114,37 @@ export interface SectionDraft {
   lens: string;
   complianceVerdict: string;
   components: DraftComponents;
-  requirementContext: Record<string, string>;  // component name → what the buyer asks for
-  reviewed: Record<string, boolean>;           // component name → reviewed by human
+  requirementContext: Record<string, string>;
+  reviewed: Record<string, boolean>;
   placeholders: Placeholder[];
   openDependencies: string[];
-  status: "draft" | "in_review" | "approved";
+  status: DraftStatus;
   createdAt: number;
   updatedAt: number;
 }
 
-// ── Pack / Section types ──────────────────────────────────────────────────────
+export interface DraftComponents {
+  understanding: string;
+  approachAndRecommendedOption: string;
+  deliveryPlan: { narrative: string; milestones: Array<Record<string, unknown>> };
+  domainComponent: { title: string; content: string };
+  resourcing: { deliveryTeam: Array<Record<string, unknown>>; buyerCommitment: string };
+  acceptanceGates: Array<Record<string, unknown>>;
+  preWork: Array<Record<string, unknown>>;
+  assumptions: string[];
+  configCustomisationThirdParty: string;
+  costs: string;
+  risks: Array<Record<string, unknown>>;
+}
 
-export interface BidPack {
-  id: string;
+export interface BriefKeyDate {
+  date: string;
+  description: string;
+}
+
+export interface BriefNamedOwner {
   name: string;
-  buyer: string;
-  createdAt: number;
-  parsedContent: string;
-  sections: BidSection[];
-  workflowStage: WorkflowStage;
+  role: string;
 }
 
 export interface BidSection {
@@ -119,7 +156,7 @@ export interface BidSection {
   scoringWeight: string | null;
   summary: string;
   mandatedResponseStructure: string[];
-  requirements: BriefRequirement[];
+  requirements: string[];
   minimumResponseItems: string[];
   buyerActivities: string[];
   buyerChallenges: string[];
@@ -137,23 +174,22 @@ export interface BidSection {
   draft: SectionDraft | null;
 }
 
-// ── Placeholder scanner ───────────────────────────────────────────────────────
-
-function scanTokens(v: unknown): number {
-  if (typeof v === "string") {
-    const s = v as string;
-    return [...s.matchAll(/\{\{PLACEHOLDER:/g)].length + [...s.matchAll(/\{\{PH:/g)].length;
-  }
-  if (Array.isArray(v)) return (v as unknown[]).reduce<number>((n, x) => n + scanTokens(x), 0);
-  if (v && typeof v === "object") return Object.values(v as Record<string, unknown>).reduce<number>((n, x) => n + scanTokens(x), 0);
-  return 0;
+export interface SectionRevision {
+  id: string;
+  sectionId: string;
+  components: DraftComponents;
+  complianceVerdict: string;
+  createdAt: number;
 }
 
-export function countUnfilledPlaceholders(draft: SectionDraft): number {
-  if (draft.placeholders.length > 0) {
-    return draft.placeholders.filter((p) => !p.filled).length;
-  }
-  return scanTokens(draft.components);
+export interface BidPack {
+  id: string;
+  name: string;
+  buyer: string;
+  parsedContent: string;
+  createdAt: number;
+  sections: BidSection[];
+  workflowStage: WorkflowStage;
 }
 
 // ── Engagement-profile types ──────────────────────────────────────────────────
@@ -199,7 +235,7 @@ export interface Requirement {
   crossCuttingConstraints: CrossCuttingConstraint[];
 }
 
-// ── Requirement response types ─────────────────────────────────────────────────
+// ── Requirement response types ────────────────────────────────────────────────
 
 export type ResponseStatus = "draft" | "in_review" | "approved";
 
@@ -226,7 +262,7 @@ export interface RequirementResponse {
   updatedAt: number;
 }
 
-// ── QualityReview types ────────────────────────────────────────────────────────
+// ── QualityReview types ───────────────────────────────────────────────────────
 
 export type QualityReviewType = "decomposition" | "ownership" | "response" | "final";
 
@@ -248,65 +284,197 @@ export interface QualityReview {
   createdAt: number;
 }
 
-// ── Store ─────────────────────────────────────────────────────────────────────
+// ── Placeholder scanner ───────────────────────────────────────────────────────
+
+function scanTokens(v: unknown): number {
+  if (typeof v === "string") {
+    const s = v as string;
+    return [...s.matchAll(/\{\{PLACEHOLDER:/g)].length + [...s.matchAll(/\{\{PH:/g)].length;
+  }
+  if (Array.isArray(v)) return (v as unknown[]).reduce<number>((n, x) => n + scanTokens(x), 0);
+  if (v && typeof v === "object") return Object.values(v as Record<string, unknown>).reduce<number>((n, x) => n + scanTokens(x), 0);
+  return 0;
+}
+
+export function countUnfilledPlaceholders(draft: SectionDraft): number {
+  if (draft.placeholders.length > 0) {
+    return draft.placeholders.filter((p) => !p.filled).length;
+  }
+  return scanTokens(draft.components);
+}
+
+// ── Type mappers ──────────────────────────────────────────────────────────────
+
+function dbWorkItemToBidPack(row: RfpWorkItem): BidPack {
+  return {
+    id: row.id,
+    name: row.name,
+    buyer: row.buyerName,
+    parsedContent: row.parsedContent,
+    createdAt: row.createdAt.getTime(),
+    sections: [],  // sections not persisted; legacy in-memory only
+    workflowStage: row.workflowStage as WorkflowStage,
+  };
+}
+
+function dbRequirementToRequirement(row: RfpRequirement): Requirement {
+  return {
+    id: row.id,
+    bidPackId: row.workItemId,
+    code: row.requirementCode,
+    order: row.displayOrder,
+    title: row.title,
+    sourceText: row.sourceText,
+    scoringWeight: row.scoringWeight,
+    minimumExpectations: (row.minimumExpectations as string[]) ?? [],
+    considerations: (row.considerations as string[]) ?? [],
+    mandatedStructure: row.mandatedStructure,
+    owner: row.responseResponsibility as RequirementOwner,
+    ownerRationale: row.responsibilityRationale,
+    ownerConfirmed: row.responsibilityConfirmed,
+    ownerConfidence: (row.responsibilityConfidence ?? "medium") as OwnerConfidence,
+    responseStage: row.responseStage as ResponseStage,
+    rewriteAttempts: row.rewriteAttempts,
+    parentId: row.parentRequirementId,
+    crossCuttingConstraints: (row.crossCuttingConstraints as CrossCuttingConstraint[]) ?? [],
+  };
+}
+
+function dbBlockToResponseBlock(block: RfpResponseBlock): ResponseBlock {
+  return {
+    key: block.blockKey,
+    type: block.blockType as "minimum" | "enrichment",
+    prompt: block.promptText ?? "",
+    answer: block.answer,
+    placeholders: ((block.placeholders as unknown) as Placeholder[]) ?? [],
+    reviewed: block.reviewed,
+    validationState: (block.validationStatus ?? "pending") as ResponseBlock["validationState"],
+    rewriteAttempts: block.rewriteAttempts,
+    validationFindings: (block.validationFindings as string[]) ?? [],
+  };
+}
+
+function dbRowsToRequirementResponse(
+  response: RfpResponse,
+  blocks: RfpResponseBlock[],
+): RequirementResponse {
+  return {
+    id: response.id,
+    requirementId: response.requirementId,
+    lens: response.lens,
+    blocks: blocks.map(dbBlockToResponseBlock),
+    openDependencies: (response.openDependencies as string[]) ?? [],
+    status: response.status as ResponseStatus,
+    createdAt: response.createdAt.getTime(),
+    updatedAt: response.updatedAt.getTime(),
+  };
+}
+
+function dbQualityReviewToQualityReview(row: RfpQualityReview): QualityReview {
+  return {
+    id: row.id,
+    bidPackId: row.workItemId,
+    targetType: row.targetType as "pack" | "requirement" | "response" | "block",
+    targetId: row.targetId,
+    reviewType: row.reviewType as QualityReviewType,
+    score: Number(row.score ?? 0),
+    passed: row.passed ?? false,
+    findings: (row.findings as string[]) ?? [],
+    missingItems: (row.missingItems as string[]) ?? [],
+    recommendedActions: (row.recommendedActions as string[]) ?? [],
+    checks: (row.checks as Record<string, boolean>) ?? {},
+    overridden: row.overridden,
+    overrideReason: row.overrideReason,
+    overrideActor: row.overrideActor,
+    createdAt: row.createdAt.getTime(),
+  };
+}
+
+function dbAuditEventToAuditEvent(row: RfpAuditEvent): AuditEvent {
+  const payload = (row.payload as Record<string, unknown>) ?? {};
+  const sectionId = typeof payload["sectionId"] === "string" ? payload["sectionId"] : null;
+  return {
+    id: row.id,
+    bidPackId: row.workItemId,
+    sectionId,
+    type: row.eventType as AuditEventType,
+    summary: row.summary,
+    actor: row.actorType,
+    payload,
+    createdAt: row.createdAt.getTime(),
+  };
+}
+
+function storedProfileToEngagementProfile(p: StoredProfile): EngagementProfile {
+  return {
+    id: p.id,
+    bidPackId: p.bidPackId,
+    ourRole: p.ourRole,
+    primePartner: p.primePartner,
+    ourRemit: p.ourRemit ?? [],
+    otherParties: p.otherParties ?? [],
+    createdAt: p.createdAt,
+    updatedAt: p.updatedAt,
+  };
+}
+
+// ── In-memory section cache (legacy section-based flow only) ──────────────────
+// PACKS Map holds sections[] for the legacy routes. Populated on pack create
+// and on getPack() cache miss. Does NOT survive server restart (by design).
 
 const PACKS           = new Map<string, BidPack>();
 const SECTION_TO_PACK = new Map<string, string>();
-const AUDIT_LOG       = new Map<string, AuditEvent[]>();
 const REVISIONS       = new Map<string, SectionRevision[]>();
-
-const PROFILES        = new Map<string, EngagementProfile>();   // packId → profile
-const REQUIREMENTS    = new Map<string, Requirement[]>();        // packId → requirements
-const REQ_TO_PACK     = new Map<string, string>();               // reqId → packId
-const RESPONSES       = new Map<string, RequirementResponse>();  // reqId → response
-const QUALITY_REVIEWS = new Map<string, QualityReview[]>();      // packId → reviews
-
-const TTL_MS = 6 * 60 * 60 * 1000;
-
-setInterval(() => {
-  const now = Date.now();
-  for (const [id, pack] of PACKS) {
-    if (now - pack.createdAt > TTL_MS) {
-      for (const s of pack.sections) {
-        SECTION_TO_PACK.delete(s.id);
-        REVISIONS.delete(s.id);
-      }
-      const reqs = REQUIREMENTS.get(id) ?? [];
-      for (const r of reqs) {
-        REQ_TO_PACK.delete(r.id);
-        RESPONSES.delete(r.id);
-      }
-      PACKS.delete(id);
-      AUDIT_LOG.delete(id);
-      PROFILES.delete(id);
-      REQUIREMENTS.delete(id);
-      QUALITY_REVIEWS.delete(id);
-    }
-  }
-}, 30 * 60 * 1000);
 
 // ── Audit ─────────────────────────────────────────────────────────────────────
 
-export function appendAuditEvent(
+export async function appendAuditEvent(
   bidPackId: string,
   sectionId: string | null,
   type: AuditEventType,
   summary: string,
-  actor: string = "system",
+  actor = "system",
   payload: Record<string, unknown> = {},
-): AuditEvent {
-  const ev: AuditEvent = { id: randomUUID(), bidPackId, sectionId, type, summary, actor, payload, createdAt: Date.now() };
-  if (!AUDIT_LOG.has(bidPackId)) AUDIT_LOG.set(bidPackId, []);
-  AUDIT_LOG.get(bidPackId)!.push(ev);
-  return ev;
+): Promise<AuditEvent> {
+  const payloadWithSection = sectionId ? { ...payload, sectionId } : payload;
+  try {
+    const row = await repo.appendAuditEvent({
+      workItemId: bidPackId,
+      requirementId: null,
+      eventType: type,
+      summary,
+      actorType: actor,
+      payload: payloadWithSection,
+    });
+    return dbAuditEventToAuditEvent(row);
+  } catch (err) {
+    logger.error({ err, bidPackId, type }, "rfpStore: appendAuditEvent failed");
+    // Return a synthetic event so callers don't crash
+    return {
+      id: randomUUID(), bidPackId, sectionId, type, summary, actor,
+      payload: payloadWithSection, createdAt: Date.now(),
+    };
+  }
 }
 
-export function getAuditEvents(bidPackId: string, sectionId?: string): AuditEvent[] {
-  const events = AUDIT_LOG.get(bidPackId) ?? [];
-  return sectionId ? events.filter((e) => e.sectionId === sectionId || e.sectionId === null) : events;
+export async function getAuditEvents(
+  bidPackId: string,
+  sectionId?: string,
+): Promise<AuditEvent[]> {
+  try {
+    const rows = await repo.getAuditEvents(bidPackId);
+    const events = rows.map(dbAuditEventToAuditEvent);
+    if (sectionId) {
+      return events.filter((e) => e.sectionId === sectionId || e.sectionId === null);
+    }
+    return events;
+  } catch (err) {
+    logger.error({ err, bidPackId }, "rfpStore: getAuditEvents failed");
+    return [];
+  }
 }
 
-// ── Revisions ─────────────────────────────────────────────────────────────────
+// ── Revisions (legacy, in-memory only) ───────────────────────────────────────
 
 export function saveRevision(section: BidSection): SectionRevision | null {
   if (!section.draft) return null;
@@ -327,17 +495,81 @@ export function getRevisions(sectionId: string): SectionRevision[] {
 
 // ── Pack CRUD ─────────────────────────────────────────────────────────────────
 
-export function createPack(name: string, buyer: string, parsedContent: string): BidPack {
-  const pack: BidPack = {
-    id: randomUUID(), name, buyer, createdAt: Date.now(),
-    parsedContent, sections: [], workflowStage: "decompose",
-  };
+export async function createPack(
+  name: string,
+  buyer: string,
+  parsedContent: string,
+  options?: {
+    userId?: string;
+    orgId?: string;
+    docs?: DocEntry[];
+  },
+): Promise<BidPack> {
+  const row = await repo.createWorkItem({
+    name,
+    buyerName: buyer,
+    parsedContent,
+    lens: "commercial",
+    workflowStage: "decompose",
+    status: "active",
+    createdByUserId: options?.userId,
+    orgId: options?.orgId,
+  });
+
+  const pack = dbWorkItemToBidPack(row);
+
+  // Persist uploaded document metadata and extracted text now that we have a
+  // work item ID. Documents in the in-memory docStore are transient; this
+  // provides the durable link between documents and the Work Item.
+  if (options?.docs?.length) {
+    for (const doc of options.docs) {
+      try {
+        await repo.storeDocument({
+          id: doc.id,
+          workItemId: pack.id,
+          originalFilename: doc.name,
+          mimeType: doc.fileType === "excel"
+            ? "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            : "text/plain",
+          characterCount: doc.charCount,
+          extractedText: doc.text ?? null,
+          structuredContent: doc.structuredRows
+            ? (doc.structuredRows as unknown as Record<string, unknown>[])
+            : null,
+          extractionStatus: "extracted",
+        });
+      } catch (err) {
+        // Document persistence failure is non-fatal; parsedContent is already
+        // stored on the work item and is sufficient for AI operations.
+        logger.warn({ err, docId: doc.id, packId: pack.id }, "rfpStore: document persist failed (non-fatal)");
+      }
+    }
+  }
+
+  // Cache in PACKS Map for legacy section routes
   PACKS.set(pack.id, pack);
-  AUDIT_LOG.set(pack.id, []);
   return pack;
 }
 
-export function getPack(id: string): BidPack | null { return PACKS.get(id) ?? null; }
+export async function getPack(id: string): Promise<BidPack | null> {
+  // Check in-memory cache first (for section routes that need the sections array)
+  const cached = PACKS.get(id);
+  if (cached) return cached;
+
+  // Cache miss — query the DB (e.g. after server restart or cross-device access)
+  try {
+    const row = await repo.getWorkItem(id);
+    if (!row) return null;
+    const pack = dbWorkItemToBidPack(row);
+    PACKS.set(pack.id, pack);
+    return pack;
+  } catch (err) {
+    logger.error({ err, packId: id }, "rfpStore: getPack failed");
+    return null;
+  }
+}
+
+// ── Section CRUD (legacy in-memory — section flow only) ───────────────────────
 
 export function setSections(
   packId: string,
@@ -503,33 +735,34 @@ export function reopenDraft(sectionId: string): { draft: SectionDraft; sectionSt
 
 // ── Engagement profile CRUD ───────────────────────────────────────────────────
 
-export function saveProfile(
+export async function saveProfile(
   packId: string,
   data: Pick<EngagementProfile, "ourRole" | "primePartner" | "ourRemit" | "otherParties">,
-): EngagementProfile | null {
-  if (!getPack(packId)) return null;
-  const existing = PROFILES.get(packId);
-  const profile: EngagementProfile = {
-    id:           existing?.id ?? randomUUID(),
-    bidPackId:    packId,
-    ourRole:      data.ourRole,
-    primePartner: data.primePartner,
-    ourRemit:     data.ourRemit,
-    otherParties: data.otherParties,
-    createdAt:    existing?.createdAt ?? Date.now(),
-    updatedAt:    Date.now(),
-  };
-  PROFILES.set(packId, profile);
-  return profile;
+): Promise<EngagementProfile | null> {
+  try {
+    const stored = await repo.saveProfile(packId, data);
+    if (!stored) return null;
+    return storedProfileToEngagementProfile(stored);
+  } catch (err) {
+    logger.error({ err, packId }, "rfpStore: saveProfile failed");
+    return null;
+  }
 }
 
-export function getProfile(packId: string): EngagementProfile | null {
-  return PROFILES.get(packId) ?? null;
+export async function getProfile(packId: string): Promise<EngagementProfile | null> {
+  try {
+    const stored = await repo.getProfile(packId);
+    if (!stored) return null;
+    return storedProfileToEngagementProfile(stored);
+  } catch (err) {
+    logger.error({ err, packId }, "rfpStore: getProfile failed");
+    return null;
+  }
 }
 
 // ── Requirements CRUD ─────────────────────────────────────────────────────────
 
-export function saveRequirements(
+export async function saveRequirements(
   packId: string,
   reqs: Array<
     Omit<Requirement, "id" | "bidPackId" | "ownerConfidence" | "responseStage" | "rewriteAttempts"> & {
@@ -538,55 +771,80 @@ export function saveRequirements(
       rewriteAttempts?: number;
     }
   >,
-): Requirement[] {
-  if (!getPack(packId)) return [];
-  const old = REQUIREMENTS.get(packId) ?? [];
-  for (const r of old) { REQ_TO_PACK.delete(r.id); RESPONSES.delete(r.id); }
-
-  const requirements: Requirement[] = reqs.map((r) => {
-    const id = randomUUID();
-    REQ_TO_PACK.set(id, packId);
-    return {
-      ownerConfidence: "medium" as OwnerConfidence,
-      responseStage:   "pending" as ResponseStage,
-      rewriteAttempts: 0,
-      ...r,
-      id, bidPackId: packId,
-    };
-  });
-  REQUIREMENTS.set(packId, requirements);
-  return requirements;
+): Promise<Requirement[]> {
+  try {
+    const rows = await repo.replaceRequirements(
+      packId,
+      reqs.map((r) => ({
+        requirementCode: r.code,
+        displayOrder: r.order,
+        title: r.title,
+        sourceText: r.sourceText,
+        scoringWeight: r.scoringWeight ?? null,
+        minimumExpectations: r.minimumExpectations,
+        considerations: r.considerations,
+        mandatedStructure: r.mandatedStructure ?? null,
+        responseResponsibility: r.owner,
+        responsibilityRationale: r.ownerRationale,
+        responsibilityConfirmed: r.ownerConfirmed,
+        responsibilityConfidence: r.ownerConfidence ?? "medium",
+        responseStage: r.responseStage ?? "pending",
+        crossCuttingConstraints: r.crossCuttingConstraints,
+        parentRequirementId: r.parentId ?? null,
+        rewriteAttempts: r.rewriteAttempts ?? 0,
+      })),
+    );
+    return rows.map(dbRequirementToRequirement);
+  } catch (err) {
+    logger.error({ err, packId }, "rfpStore: saveRequirements failed");
+    return [];
+  }
 }
 
-export function getRequirements(packId: string): Requirement[] {
-  return REQUIREMENTS.get(packId) ?? [];
+export async function getRequirements(packId: string): Promise<Requirement[]> {
+  try {
+    const rows = await repo.getRequirements(packId);
+    return rows.map(dbRequirementToRequirement);
+  } catch (err) {
+    logger.error({ err, packId }, "rfpStore: getRequirements failed");
+    return [];
+  }
 }
 
-export function getRequirement(reqId: string): Requirement | null {
-  const packId = REQ_TO_PACK.get(reqId);
-  if (!packId) return null;
-  return REQUIREMENTS.get(packId)?.find((r) => r.id === reqId) ?? null;
+export async function getRequirement(reqId: string): Promise<Requirement | null> {
+  try {
+    const row = await repo.getRequirement(reqId);
+    return row ? dbRequirementToRequirement(row) : null;
+  } catch (err) {
+    logger.error({ err, reqId }, "rfpStore: getRequirement failed");
+    return null;
+  }
 }
 
-export function updateRequirementOwnership(
+export async function updateRequirementOwnership(
   reqId: string,
   owner: RequirementOwner,
   ownerRationale: string,
   ownerConfirmed: boolean,
   ownerConfidence?: OwnerConfidence,
-): Requirement | null {
-  const req = getRequirement(reqId);
-  if (!req) return null;
-  req.owner          = owner;
-  req.ownerRationale = ownerRationale;
-  req.ownerConfirmed = ownerConfirmed;
-  if (ownerConfidence !== undefined) req.ownerConfidence = ownerConfidence;
-  return req;
+): Promise<Requirement | null> {
+  try {
+    const row = await repo.updateRequirement(reqId, {
+      responseResponsibility: owner,
+      responsibilityRationale: ownerRationale,
+      responsibilityConfirmed: ownerConfirmed,
+      ...(ownerConfidence !== undefined ? { responsibilityConfidence: ownerConfidence } : {}),
+    });
+    return row ? dbRequirementToRequirement(row) : null;
+  } catch (err) {
+    logger.error({ err, reqId }, "rfpStore: updateRequirementOwnership failed");
+    return null;
+  }
 }
 
 // ── Requirement response CRUD ─────────────────────────────────────────────────
 
-export function saveResponse(
+export async function saveResponse(
   reqId: string,
   data: {
     lens?: string;
@@ -599,63 +857,107 @@ export function saveResponse(
     >;
     openDependencies: string[];
   },
-): RequirementResponse | null {
-  if (!getRequirement(reqId)) return null;
-  const existing = RESPONSES.get(reqId);
-  const response: RequirementResponse = {
-    id:               existing?.id ?? randomUUID(),
-    requirementId:    reqId,
-    lens:             data.lens ?? "Commercial",
-    blocks:           data.blocks.map((b) => ({
-      validationState:    "pending" as const,
-      rewriteAttempts:    0,
-      validationFindings: [] as string[],
-      ...b,
-    })),
-    openDependencies: data.openDependencies,
-    status:           existing?.status ?? "draft",
-    createdAt:        existing?.createdAt ?? Date.now(),
-    updatedAt:        Date.now(),
-  };
-  RESPONSES.set(reqId, response);
-  return response;
+): Promise<RequirementResponse | null> {
+  try {
+    // Resolve work_item_id from the requirement
+    const reqRow = await repo.getRequirement(reqId);
+    if (!reqRow) return null;
+
+    const response = await repo.upsertResponse(reqRow.workItemId, reqId, {
+      lens: data.lens ?? "Commercial",
+      openDependencies: data.openDependencies,
+    });
+
+    const blocks: Array<Omit<import("@workspace/db").InsertRfpResponseBlock, "responseId">> =
+      data.blocks.map((b) => ({
+        blockKey: b.key,
+        blockType: b.type,
+        promptText: b.prompt,
+        answer: b.answer,
+        placeholders: b.placeholders as unknown as Record<string, unknown>[],
+        reviewed: b.reviewed,
+        validationStatus: b.validationState ?? "pending",
+        validationFindings: b.validationFindings ?? [],
+        rewriteAttempts: b.rewriteAttempts ?? 0,
+      }));
+
+    const savedBlocks = await repo.replaceResponseBlocks(response.id, blocks);
+    return dbRowsToRequirementResponse(response, savedBlocks);
+  } catch (err) {
+    logger.error({ err, reqId }, "rfpStore: saveResponse failed");
+    return null;
+  }
 }
 
-export function getResponse(reqId: string): RequirementResponse | null {
-  return RESPONSES.get(reqId) ?? null;
+export async function getResponse(reqId: string): Promise<RequirementResponse | null> {
+  try {
+    const result = await repo.getResponseForRequirement(reqId);
+    if (!result) return null;
+    return dbRowsToRequirementResponse(result.response, result.blocks);
+  } catch (err) {
+    logger.error({ err, reqId }, "rfpStore: getResponse failed");
+    return null;
+  }
 }
 
-export function updateBlockAnswer(reqId: string, blockKey: string, answer: string): ResponseBlock | null {
-  const resp = RESPONSES.get(reqId);
-  if (!resp) return null;
-  const block = resp.blocks.find((b) => b.key === blockKey);
-  if (!block) return null;
-  block.answer   = answer;
-  resp.updatedAt = Date.now();
-  return block;
+export async function updateBlockAnswer(
+  reqId: string,
+  blockKey: string,
+  answer: string,
+): Promise<ResponseBlock | null> {
+  try {
+    const result = await repo.getResponseForRequirement(reqId);
+    if (!result) return null;
+    const updated = await repo.updateBlock(result.response.id, blockKey, { answer });
+    return updated ? dbBlockToResponseBlock(updated) : null;
+  } catch (err) {
+    logger.error({ err, reqId, blockKey }, "rfpStore: updateBlockAnswer failed");
+    return null;
+  }
 }
 
-export function fillBlockPlaceholder(reqId: string, blockKey: string, phId: string, value: string): Placeholder | null {
-  const resp = RESPONSES.get(reqId);
-  if (!resp) return null;
-  const block = resp.blocks.find((b) => b.key === blockKey);
-  if (!block) return null;
-  const ph = block.placeholders.find((p) => p.id === phId);
-  if (!ph) return null;
-  ph.value   = value;
-  ph.filled  = true;
-  resp.updatedAt = Date.now();
-  return ph;
+export async function fillBlockPlaceholder(
+  reqId: string,
+  blockKey: string,
+  phId: string,
+  value: string,
+): Promise<Placeholder | null> {
+  try {
+    const result = await repo.getResponseForRequirement(reqId);
+    if (!result) return null;
+    const block = result.blocks.find((b) => b.blockKey === blockKey);
+    if (!block) return null;
+
+    const placeholders = (block.placeholders as unknown as Placeholder[]).map((p) =>
+      p.id === phId ? { ...p, value, filled: true } : p,
+    );
+    const ph = placeholders.find((p) => p.id === phId);
+    if (!ph) return null;
+
+    await repo.updateBlock(result.response.id, blockKey, {
+      placeholders: placeholders as unknown as Record<string, unknown>[],
+    });
+    return ph;
+  } catch (err) {
+    logger.error({ err, reqId, blockKey, phId }, "rfpStore: fillBlockPlaceholder failed");
+    return null;
+  }
 }
 
-export function setBlockReviewed(reqId: string, blockKey: string, reviewed: boolean): boolean {
-  const resp = RESPONSES.get(reqId);
-  if (!resp) return false;
-  const block = resp.blocks.find((b) => b.key === blockKey);
-  if (!block) return false;
-  block.reviewed = reviewed;
-  resp.updatedAt = Date.now();
-  return true;
+export async function setBlockReviewed(
+  reqId: string,
+  blockKey: string,
+  reviewed: boolean,
+): Promise<boolean> {
+  try {
+    const result = await repo.getResponseForRequirement(reqId);
+    if (!result) return false;
+    const updated = await repo.updateBlock(result.response.id, blockKey, { reviewed });
+    return !!updated;
+  } catch (err) {
+    logger.error({ err, reqId, blockKey }, "rfpStore: setBlockReviewed failed");
+    return false;
+  }
 }
 
 const RESP_STATUS_FLOW: Record<ResponseStatus, ResponseStatus | null> = {
@@ -668,158 +970,251 @@ export type AdvanceResponseResult =
   | { ok: true; response: RequirementResponse }
   | { ok: false; error: string };
 
-export function advanceResponseStatus(reqId: string): AdvanceResponseResult {
-  const resp = RESPONSES.get(reqId);
-  if (!resp) return { ok: false, error: "Response not found" };
+export async function advanceResponseStatus(reqId: string): Promise<AdvanceResponseResult> {
+  try {
+    const result = await repo.getResponseForRequirement(reqId);
+    if (!result) return { ok: false, error: "Response not found" };
 
-  const unreviewed = resp.blocks.filter((b) => b.type === "minimum" && !b.reviewed);
-  if (unreviewed.length > 0)
-    return { ok: false, error: `${unreviewed.length} minimum block(s) not yet reviewed` };
+    const blocks = result.blocks.map(dbBlockToResponseBlock);
 
-  const unfilled = resp.blocks.flatMap((b) => b.placeholders).filter((p) => !p.filled);
-  if (unfilled.length > 0)
-    return { ok: false, error: `${unfilled.length} placeholder(s) not yet filled` };
+    const unreviewed = blocks.filter((b) => b.type === "minimum" && !b.reviewed);
+    if (unreviewed.length > 0)
+      return { ok: false, error: `${unreviewed.length} minimum block(s) not yet reviewed` };
 
-  const next = RESP_STATUS_FLOW[resp.status];
-  if (!next) return { ok: false, error: "Already approved" };
+    const unfilled = blocks.flatMap((b) => b.placeholders).filter((p) => !p.filled);
+    if (unfilled.length > 0)
+      return { ok: false, error: `${unfilled.length} placeholder(s) not yet filled` };
 
-  resp.status    = next;
-  resp.updatedAt = Date.now();
-  return { ok: true, response: resp };
+    const currentStatus = result.response.status as ResponseStatus;
+    const next = RESP_STATUS_FLOW[currentStatus];
+    if (!next) return { ok: false, error: "Already approved" };
+
+    const updated = await repo.updateResponse(result.response.id, { status: next });
+    if (!updated) return { ok: false, error: "Response update failed" };
+
+    return { ok: true, response: dbRowsToRequirementResponse(updated, result.blocks) };
+  } catch (err) {
+    logger.error({ err, reqId }, "rfpStore: advanceResponseStatus failed");
+    return { ok: false, error: "Internal error" };
+  }
 }
 
-export function reopenResponse(reqId: string): RequirementResponse | null {
-  const resp = RESPONSES.get(reqId);
-  if (!resp) return null;
-  resp.status    = "draft";
-  resp.updatedAt = Date.now();
-  return resp;
+export async function reopenResponse(reqId: string): Promise<RequirementResponse | null> {
+  try {
+    const result = await repo.getResponseForRequirement(reqId);
+    if (!result) return null;
+    const updated = await repo.updateResponse(result.response.id, { status: "draft" });
+    if (!updated) return null;
+    return dbRowsToRequirementResponse(updated, result.blocks);
+  } catch (err) {
+    logger.error({ err, reqId }, "rfpStore: reopenResponse failed");
+    return null;
+  }
 }
 
 // ── QualityReview CRUD ────────────────────────────────────────────────────────
 
-export function saveQualityReview(
+export async function saveQualityReview(
   packId: string,
   review: Omit<QualityReview, "id" | "bidPackId" | "overridden" | "overrideReason" | "overrideActor" | "createdAt">,
-): QualityReview {
-  const qr: QualityReview = {
-    ...review,
-    id:             randomUUID(),
-    bidPackId:      packId,
-    overridden:     false,
+): Promise<QualityReview> {
+  const row = await repo.insertQualityReview({
+    workItemId: packId,
+    targetType: review.targetType,
+    targetId: review.targetId,
+    reviewType: review.reviewType,
+    score: String(review.score),
+    passed: review.passed,
+    findings: review.findings,
+    missingItems: review.missingItems,
+    recommendedActions: review.recommendedActions,
+    checks: review.checks,
+    overridden: false,
     overrideReason: null,
-    overrideActor:  null,
-    createdAt:      Date.now(),
-  };
-  if (!QUALITY_REVIEWS.has(packId)) QUALITY_REVIEWS.set(packId, []);
-  QUALITY_REVIEWS.get(packId)!.push(qr);
+    overrideActor: null,
+  });
+
+  // Also append audit event (non-blocking on error)
   appendAuditEvent(packId, null, "validation_run",
-    `${review.reviewType} validation: ${qr.passed ? "PASSED" : "FAILED"} (score ${qr.score})`,
-    "system", { reviewType: review.reviewType, targetId: review.targetId });
-  return qr;
+    `${review.reviewType} validation: ${review.passed ? "PASSED" : "FAILED"} (score ${review.score})`,
+    "system", { reviewType: review.reviewType, targetId: review.targetId },
+  ).catch((err: unknown) => {
+    logger.warn({ err }, "rfpStore: saveQualityReview audit event failed");
+  });
+
+  return dbQualityReviewToQualityReview(row);
 }
 
-export function getQualityReviews(
+export async function getQualityReviews(
   packId: string,
   reviewType?: QualityReviewType,
   targetId?: string,
-): QualityReview[] {
-  const reviews = QUALITY_REVIEWS.get(packId) ?? [];
-  return reviews.filter((r) =>
-    (!reviewType || r.reviewType === reviewType) &&
-    (!targetId   || r.targetId  === targetId),
-  );
+): Promise<QualityReview[]> {
+  try {
+    const rows = await repo.getQualityReviews(packId, { reviewType, targetId });
+    return rows.map(dbQualityReviewToQualityReview);
+  } catch (err) {
+    logger.error({ err, packId }, "rfpStore: getQualityReviews failed");
+    return [];
+  }
 }
 
-export function getLatestQualityReview(
+export async function getLatestQualityReview(
   packId: string,
   reviewType: QualityReviewType,
   targetId?: string,
-): QualityReview | null {
-  const reviews = getQualityReviews(packId, reviewType, targetId);
-  return reviews.length > 0 ? reviews[reviews.length - 1] : null;
+): Promise<QualityReview | null> {
+  try {
+    const row = await repo.getLatestQualityReview(packId, reviewType, targetId);
+    return row ? dbQualityReviewToQualityReview(row) : null;
+  } catch (err) {
+    logger.error({ err, packId, reviewType }, "rfpStore: getLatestQualityReview failed");
+    return null;
+  }
 }
 
-export function overrideGate(
+export async function overrideGate(
   packId: string,
   reviewType: QualityReviewType,
   reason: string,
   actor: string,
   targetId?: string,
-): QualityReview | null {
-  const qr = getLatestQualityReview(packId, reviewType, targetId);
-  if (!qr) return null;
-  qr.overridden     = true;
-  qr.overrideReason = reason;
-  qr.overrideActor  = actor;
-  appendAuditEvent(packId, null, "gate_overridden",
-    `Gate override: ${reviewType} — ${reason}`, actor, { reviewType, targetId });
-  return qr;
+): Promise<QualityReview | null> {
+  try {
+    const latest = await repo.getLatestQualityReview(packId, reviewType, targetId);
+    if (!latest) return null;
+    const updated = await repo.overrideQualityReview(latest.id, reason, actor);
+    if (!updated) return null;
+
+    await appendAuditEvent(packId, null, "gate_overridden",
+      `Gate override: ${reviewType} — ${reason}`, actor, { reviewType, targetId });
+
+    return dbQualityReviewToQualityReview(updated);
+  } catch (err) {
+    logger.error({ err, packId, reviewType }, "rfpStore: overrideGate failed");
+    return null;
+  }
 }
 
-export function canPassGate(packId: string, reviewType: QualityReviewType, targetId?: string): boolean {
-  const qr = getLatestQualityReview(packId, reviewType, targetId);
+export async function canPassGate(
+  packId: string,
+  reviewType: QualityReviewType,
+  targetId?: string,
+): Promise<boolean> {
+  const qr = await getLatestQualityReview(packId, reviewType, targetId);
   if (!qr) return false;
   return qr.passed || qr.overridden;
 }
 
 // ── Workflow stage ─────────────────────────────────────────────────────────────
 
-export function setWorkflowStage(packId: string, stage: WorkflowStage): boolean {
-  const pack = PACKS.get(packId);
-  if (!pack) return false;
-  pack.workflowStage = stage;
-  appendAuditEvent(packId, null, "stage_advanced", `Workflow advanced to: ${stage}`);
-  return true;
+export async function setWorkflowStage(packId: string, stage: WorkflowStage): Promise<boolean> {
+  try {
+    const updated = await repo.updateWorkItem(packId, { workflowStage: stage });
+    if (!updated) return false;
+    // Update in-memory cache too
+    const cached = PACKS.get(packId);
+    if (cached) cached.workflowStage = stage;
+    await appendAuditEvent(packId, null, "status_changed",
+      `Workflow advanced to: ${stage}`);
+    return true;
+  } catch (err) {
+    logger.error({ err, packId, stage }, "rfpStore: setWorkflowStage failed");
+    return false;
+  }
 }
 
-export function getWorkflowStage(packId: string): WorkflowStage | null {
-  return PACKS.get(packId)?.workflowStage ?? null;
+export async function getWorkflowStage(packId: string): Promise<WorkflowStage | null> {
+  const pack = await getPack(packId);
+  return pack?.workflowStage ?? null;
 }
 
 // ── Requirement response stage ─────────────────────────────────────────────────
 
-export function setRequirementResponseStage(reqId: string, stage: ResponseStage): boolean {
-  const req = getRequirement(reqId);
-  if (!req) return false;
-  req.responseStage = stage;
-  return true;
+export async function setRequirementResponseStage(
+  reqId: string,
+  stage: ResponseStage,
+): Promise<boolean> {
+  try {
+    const row = await repo.updateRequirement(reqId, { responseStage: stage });
+    return !!row;
+  } catch (err) {
+    logger.error({ err, reqId, stage }, "rfpStore: setRequirementResponseStage failed");
+    return false;
+  }
 }
 
-// ── Block validation helpers ───────────────────────────────────────────────────
+// ── Block validation helpers ──────────────────────────────────────────────────
 
-export function setBlockValidation(
+export async function setBlockValidation(
   reqId: string,
   blockKey: string,
   state: ResponseBlock["validationState"],
   findings: string[] = [],
-): boolean {
-  const resp = RESPONSES.get(reqId);
-  if (!resp) return false;
-  const block = resp.blocks.find((b) => b.key === blockKey);
-  if (!block) return false;
-  block.validationState    = state;
-  block.validationFindings = findings;
-  if (state === "rewriting") block.rewriteAttempts = (block.rewriteAttempts ?? 0) + 1;
-  resp.updatedAt = Date.now();
-  return true;
+): Promise<boolean> {
+  try {
+    const result = await repo.getResponseForRequirement(reqId);
+    if (!result) return false;
+
+    const block = result.blocks.find((b) => b.blockKey === blockKey);
+    const updates: Partial<import("@workspace/db").InsertRfpResponseBlock> = {
+      validationStatus: state,
+      validationFindings: findings,
+    };
+    if (state === "rewriting") {
+      updates.rewriteAttempts = (block?.rewriteAttempts ?? 0) + 1;
+    }
+
+    const updated = await repo.updateBlock(result.response.id, blockKey, updates);
+    return !!updated;
+  } catch (err) {
+    logger.error({ err, reqId, blockKey, state }, "rfpStore: setBlockValidation failed");
+    return false;
+  }
 }
 
-export function replaceBlockAnswer(
+export async function replaceBlockAnswer(
   reqId: string,
   blockKey: string,
   answer: string,
   placeholders: Placeholder[],
-): ResponseBlock | null {
-  const resp = RESPONSES.get(reqId);
-  if (!resp) return null;
-  const block = resp.blocks.find((b) => b.key === blockKey);
-  if (!block) return null;
-  block.answer       = answer;
-  block.placeholders = placeholders;
-  block.reviewed     = false;
-  resp.updatedAt     = Date.now();
-  return block;
+): Promise<ResponseBlock | null> {
+  try {
+    const result = await repo.getResponseForRequirement(reqId);
+    if (!result) return null;
+    const updated = await repo.updateBlock(result.response.id, blockKey, {
+      answer,
+      placeholders: placeholders as unknown as Record<string, unknown>[],
+      reviewed: false,
+    });
+    return updated ? dbBlockToResponseBlock(updated) : null;
+  } catch (err) {
+    logger.error({ err, reqId, blockKey }, "rfpStore: replaceBlockAnswer failed");
+    return null;
+  }
+}
+
+// ── Recent work items (recovery) ──────────────────────────────────────────────
+
+export async function listRecentWorkItems(limit = 10): Promise<Array<{
+  id: string; name: string; buyer: string; workflowStage: WorkflowStage;
+  status: string; createdAt: number; updatedAt: number;
+}>> {
+  try {
+    const rows = await repo.listRecentWorkItems(limit);
+    return rows.map((r) => ({
+      id: r.id,
+      name: r.name,
+      buyer: r.buyerName,
+      workflowStage: r.workflowStage as WorkflowStage,
+      status: r.status,
+      createdAt: r.createdAt.getTime(),
+      updatedAt: r.updatedAt.getTime(),
+    }));
+  } catch (err) {
+    logger.error({ err }, "rfpStore: listRecentWorkItems failed");
+    return [];
+  }
 }
 
 // ── Assemble ──────────────────────────────────────────────────────────────────
@@ -829,13 +1224,21 @@ export interface AssembledRequirement {
   response:    RequirementResponse;
 }
 
-export function assembleResponses(packId: string): AssembledRequirement[] {
-  const reqs = getRequirements(packId).filter((r) =>
-    (r.owner === "RR" || r.owner === "shared") && r.ownerConfirmed,
-  );
-  return reqs.flatMap((req) => {
-    const resp = getResponse(req.id);
-    if (!resp || resp.status !== "approved") return [];
-    return [{ requirement: req, response: resp }];
-  });
+export async function assembleResponses(packId: string): Promise<AssembledRequirement[]> {
+  try {
+    const reqs = (await getRequirements(packId)).filter((r) =>
+      (r.owner === "RR" || r.owner === "shared") && r.ownerConfirmed,
+    );
+    const results: AssembledRequirement[] = [];
+    for (const req of reqs) {
+      const resp = await getResponse(req.id);
+      if (resp && resp.status === "approved") {
+        results.push({ requirement: req, response: resp });
+      }
+    }
+    return results;
+  } catch (err) {
+    logger.error({ err, packId }, "rfpStore: assembleResponses failed");
+    return [];
+  }
 }

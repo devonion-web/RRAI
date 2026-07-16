@@ -12,14 +12,14 @@ import {
   createPack, getPack, setSections, getSection, updateSection,
   saveDraft, updateDraft, advanceDraftStatus, reopenDraft,
   fillPlaceholder, markComponentReviewed,
-  appendAuditEvent, getAuditEvents, getRevisions, saveRevision,
+  appendAuditEvent, getAuditEvents, getRevisions,
   saveProfile, getProfile,
   saveRequirements, getRequirements, getRequirement, updateRequirementOwnership,
   saveResponse, getResponse, updateBlockAnswer, fillBlockPlaceholder, setBlockReviewed,
   advanceResponseStatus, reopenResponse,
-  saveQualityReview, getQualityReviews, getLatestQualityReview, overrideGate, canPassGate,
+  saveQualityReview, getQualityReviews, getLatestQualityReview, overrideGate,
   setWorkflowStage, setRequirementResponseStage, setBlockValidation, replaceBlockAnswer,
-  assembleResponses,
+  assembleResponses, listRecentWorkItems,
   type DraftComponents, type Placeholder, type RequirementOwner, type ResponseBlock,
   type CrossCuttingConstraint, type QualityReviewType, type OwnerConfidence,
 } from "../lib/bidPackStore";
@@ -72,7 +72,7 @@ function buildContent(docs: ReturnType<typeof getDocs>, charLimitPerDoc: number)
   return out;
 }
 
-// ── Section detection system prompt ──────────────────────────────────────────
+// ── Section detection system prompt ───────────────────────────────────────────
 
 const DETECT_SYSTEM = `You are an expert bid analyst. Read the provided procurement documents and identify all scored response sections.
 
@@ -83,7 +83,7 @@ NOT scored sections: pricing matrices, administrative forms, declarations, compa
 Output ONLY valid JSON — no prose, no code fences:
 { "sections": [{ "code": "string", "title": "string", "scoringWeight": "string|null", "summary": "one sentence" }] }`;
 
-// ── Default components (fallback) ─────────────────────────────────────────────
+// ── Default components (fallback) ──────────────────────────────────────────────
 
 function defaultComponents(): DraftComponents {
   return {
@@ -105,6 +105,21 @@ function defaultComponents(): DraftComponents {
 
 router.get("/rfp/health", (_req, res) => {
   res.json({ status: "ok", module: "rfp", storedDocs: storeSize() });
+});
+
+// ── Work-item recovery ────────────────────────────────────────────────────────
+// These routes allow the frontend to recover a Work Item session after a page
+// reload or server restart. They do not require an in-memory cache hit.
+
+router.get("/rfp/work-items", async (req, res): Promise<void> => {
+  const items = await listRecentWorkItems(20);
+  res.json({ workItems: items });
+});
+
+router.get("/rfp/work-items/:id", async (req, res): Promise<void> => {
+  const pack = await getPack(req.params["id"] as string);
+  if (!pack) { res.status(404).json({ error: "Work item not found" }); return; }
+  res.json({ workItem: pack });
 });
 
 // ── Upload ────────────────────────────────────────────────────────────────────
@@ -143,42 +158,43 @@ router.post("/rfp/store-text", (req, res): void => {
   res.json({ id: entry.id, name: entry.name, charCount: entry.charCount, fileType: "text" });
 });
 
-router.delete("/rfp/documents/:id", (req, res) => { removeDoc(req.params.id); res.json({ ok: true }); });
+router.delete("/rfp/documents/:id", (req, res) => { removeDoc(req.params["id"] as string); res.json({ ok: true }); });
 
 // ── Pack ──────────────────────────────────────────────────────────────────────
 
-router.post("/rfp/packs", (req, res): void => {
+router.post("/rfp/packs", async (req, res): Promise<void> => {
   const { name, buyer, documentIds } = req.body as Record<string, unknown>;
   if (!Array.isArray(documentIds) || !documentIds.length) { res.status(400).json({ error: "documentIds required" }); return; }
   const docs = getDocs(documentIds as string[]);
   if (!docs.length) { res.status(400).json({ error: "No documents found — they may have expired. Please re-upload." }); return; }
   const limit = Math.floor(120_000 / Math.max(docs.length, 1));
   const parsedContent = buildContent(docs, limit);
-  const pack = createPack(
+  const pack = await createPack(
     typeof name  === "string" && name.trim()  ? name.trim()  : "Bid Pack",
     typeof buyer === "string" && buyer.trim() ? buyer.trim() : "Unknown Buyer",
     parsedContent,
+    { docs },
   );
-  appendAuditEvent(pack.id, null, "pack_uploaded", `Pack "${pack.name}" created for ${pack.buyer}`, "user");
+  await appendAuditEvent(pack.id, null, "pack_uploaded", `Pack "${pack.name}" created for ${pack.buyer}`, "user");
   req.log.info({ packId: pack.id, chars: parsedContent.length }, "rfp: pack created");
   res.json(pack);
 });
 
-router.get("/rfp/packs/:id", (req, res): void => {
-  const pack = getPack(req.params.id);
+router.get("/rfp/packs/:id", async (req, res): Promise<void> => {
+  const pack = await getPack(req.params["id"] as string);
   if (!pack) { res.status(404).json({ error: "Pack not found or expired" }); return; }
   res.json(pack);
 });
 
-router.get("/rfp/packs/:id/audit", (req, res): void => {
-  const events = getAuditEvents(req.params.id);
+router.get("/rfp/packs/:id/audit", async (req, res): Promise<void> => {
+  const events = await getAuditEvents(req.params["id"] as string);
   res.json({ events });
 });
 
 // ── Detect sections ───────────────────────────────────────────────────────────
 
 router.post("/rfp/packs/:id/detect-sections", async (req, res): Promise<void> => {
-  const pack = getPack(req.params.id);
+  const pack = await getPack(req.params["id"] as string);
   if (!pack) { res.status(404).json({ error: "Pack not found" }); return; }
   req.log.info({ packId: pack.id }, "rfp: detecting sections");
   try {
@@ -187,7 +203,7 @@ router.post("/rfp/packs/:id/detect-sections", async (req, res): Promise<void> =>
       DETECT_SYSTEM, user, { maxTokens: 4096 },
     );
     const sections = setSections(pack.id, Array.isArray(result?.sections) ? result.sections : []);
-    appendAuditEvent(pack.id, null, "section_detected", `Detected ${sections.length} scored section${sections.length !== 1 ? "s" : ""}`, "RRAI");
+    await appendAuditEvent(pack.id, null, "section_detected", `Detected ${sections.length} scored section${sections.length !== 1 ? "s" : ""}`, "RRAI");
     req.log.info({ packId: pack.id, count: sections.length }, "rfp: sections detected");
     res.json({ sections });
   } catch (err) {
@@ -199,9 +215,9 @@ router.post("/rfp/packs/:id/detect-sections", async (req, res): Promise<void> =>
 // ── Extract brief ─────────────────────────────────────────────────────────────
 
 router.post("/rfp/sections/:id/extract-brief", async (req, res): Promise<void> => {
-  const section = getSection(req.params.id);
+  const section = getSection(req.params["id"] as string);
   if (!section) { res.status(404).json({ error: "Section not found" }); return; }
-  const pack = getPack(section.packId);
+  const pack = await getPack(section.packId);
   if (!pack)    { res.status(404).json({ error: "Pack not found" }); return; }
 
   req.log.info({ sectionId: section.id, code: section.code }, "rfp: extracting brief");
@@ -253,7 +269,7 @@ router.post("/rfp/sections/:id/extract-brief", async (req, res): Promise<void> =
       status:         "extracted",
     });
 
-    appendAuditEvent(pack.id, section.id, "brief_extracted", `Brief extracted for ${section.code}: ${section.title}`, "RRAI");
+    await appendAuditEvent(pack.id, section.id, "brief_extracted", `Brief extracted for ${section.code}: ${section.title}`, "RRAI");
     req.log.info({ sectionId: section.id }, "rfp: brief extracted");
     res.json({ section: updated });
   } catch (err) {
@@ -268,9 +284,9 @@ router.post("/rfp/sections/:id/extract-brief", async (req, res): Promise<void> =
 // the model call runs (often 90–180 s). Final payload arrives as a `data:` event.
 
 router.post("/rfp/sections/:id/draft", async (req, res): Promise<void> => {
-  const section = getSection(req.params.id);
+  const section = getSection(req.params["id"] as string);
   if (!section) { res.status(404).json({ error: "Section not found" }); return; }
-  const pack = getPack(section.packId);
+  const pack = await getPack(section.packId);
   if (!pack)    { res.status(404).json({ error: "Pack not found" }); return; }
 
   // Switch to SSE before any async work
@@ -388,7 +404,7 @@ router.post("/rfp/sections/:id/draft", async (req, res): Promise<void> => {
       placeholders,
       openDependencies:   Array.isArray(result?.openDependencies) ? result.openDependencies : [],
     });
-    appendAuditEvent(pack.id, section.id, "draft_generated", `Draft generated for ${section.code}: ${section.title}`, "RRAI");
+    await appendAuditEvent(pack.id, section.id, "draft_generated", `Draft generated for ${section.code}: ${section.title}`, "RRAI");
     req.log.info({ sectionId: section.id }, "rfp: draft generated");
     finish({ draft, sectionStatus: "drafted" });
   } catch (err) {
@@ -399,8 +415,8 @@ router.post("/rfp/sections/:id/draft", async (req, res): Promise<void> => {
 
 // ── Update draft ──────────────────────────────────────────────────────────────
 
-router.patch("/rfp/sections/:id/draft", (req, res): void => {
-  const section = getSection(req.params.id);
+router.patch("/rfp/sections/:id/draft", async (req, res): Promise<void> => {
+  const section = getSection(req.params["id"] as string);
   if (!section?.draft) { res.status(404).json({ error: "Draft not found" }); return; }
   const updates = req.body as Partial<{
     components: DraftComponents;
@@ -409,22 +425,22 @@ router.patch("/rfp/sections/:id/draft", (req, res): void => {
     complianceVerdict: string;
     reviewed: Record<string, boolean>;
   }>;
-  const draft = updateDraft(req.params.id, updates);
+  const draft = updateDraft(req.params["id"] as string, updates);
   if (!draft) { res.status(404).json({ error: "Draft not found" }); return; }
-  appendAuditEvent(section.packId, section.id, "draft_edited", `${section.code} components saved`, "user");
+  await appendAuditEvent(section.packId, section.id, "draft_edited", `${section.code} components saved`, "user");
   res.json({ draft });
 });
 
 // ── Fill placeholder ──────────────────────────────────────────────────────────
 
-router.post("/rfp/sections/:id/placeholders/:phId/fill", (req, res): void => {
-  const section = getSection(req.params.id);
+router.post("/rfp/sections/:id/placeholders/:phId/fill", async (req, res): Promise<void> => {
+  const section = getSection(req.params["id"] as string);
   if (!section?.draft) { res.status(404).json({ error: "Draft not found" }); return; }
   const { value } = req.body as { value?: string };
   if (!value?.trim()) { res.status(400).json({ error: "value is required" }); return; }
-  const ph = fillPlaceholder(req.params.id, req.params.phId, value.trim());
+  const ph = fillPlaceholder(req.params["id"] as string, req.params["phId"] as string, value.trim());
   if (!ph) { res.status(404).json({ error: "Placeholder not found" }); return; }
-  appendAuditEvent(section.packId, section.id, "placeholder_filled",
+  await appendAuditEvent(section.packId, section.id, "placeholder_filled",
     `Gap filled: "${ph.description}" → "${ph.value?.slice(0, 40)}"`, "user",
     { phId: ph.id, description: ph.description });
   res.json({ placeholder: ph });
@@ -432,81 +448,81 @@ router.post("/rfp/sections/:id/placeholders/:phId/fill", (req, res): void => {
 
 // ── Mark component reviewed ───────────────────────────────────────────────────
 
-router.patch("/rfp/sections/:id/components/:compName/reviewed", (req, res): void => {
-  const section = getSection(req.params.id);
+router.patch("/rfp/sections/:id/components/:compName/reviewed", async (req, res): Promise<void> => {
+  const section = getSection(req.params["id"] as string);
   if (!section?.draft) { res.status(404).json({ error: "Draft not found" }); return; }
   const { reviewed } = req.body as { reviewed?: boolean };
-  const ok = markComponentReviewed(req.params.id, req.params.compName, !!reviewed);
+  const ok = markComponentReviewed(req.params["id"] as string, req.params["compName"] as string, !!reviewed);
   if (!ok) { res.status(404).json({ error: "Section or draft not found" }); return; }
   if (reviewed) {
-    appendAuditEvent(section.packId, section.id, "component_reviewed",
-      `${req.params.compName} reviewed in ${section.code}`, "user",
-      { component: req.params.compName });
+    await appendAuditEvent(section.packId, section.id, "component_reviewed",
+      `${req.params["compName"]} reviewed in ${section.code}`, "user",
+      { component: req.params["compName"] });
   }
   res.json({ reviewed: !!reviewed });
 });
 
 // ── Advance status ────────────────────────────────────────────────────────────
 
-router.post("/rfp/sections/:id/draft/advance", (req, res): void => {
-  const section = getSection(req.params.id);
+router.post("/rfp/sections/:id/draft/advance", async (req, res): Promise<void> => {
+  const section = getSection(req.params["id"] as string);
   if (!section?.draft) { res.status(404).json({ error: "Draft not found" }); return; }
   const prevStatus = section.draft.status;
-  const result = advanceDraftStatus(req.params.id);
+  const result = advanceDraftStatus(req.params["id"] as string);
   if (!result.ok) { res.status(422).json({ error: result.error }); return; }
 
   const type    = result.draft.status === "approved" ? "approved" : "status_changed";
   const summary = result.draft.status === "approved"
     ? `${section.code} approved`
     : `${section.code}: ${prevStatus} → ${result.draft.status}`;
-  appendAuditEvent(section.packId, section.id, type, summary, "user", { from: prevStatus, to: result.draft.status });
+  await appendAuditEvent(section.packId, section.id, type, summary, "user", { from: prevStatus, to: result.draft.status });
   res.json({ draft: result.draft, sectionStatus: result.sectionStatus });
 });
 
 // ── Reopen ────────────────────────────────────────────────────────────────────
 
-router.post("/rfp/sections/:id/draft/reopen", (req, res): void => {
-  const section = getSection(req.params.id);
+router.post("/rfp/sections/:id/draft/reopen", async (req, res): Promise<void> => {
+  const section = getSection(req.params["id"] as string);
   if (!section?.draft) { res.status(404).json({ error: "Draft not found" }); return; }
-  const result = reopenDraft(req.params.id);
+  const result = reopenDraft(req.params["id"] as string);
   if (!result) { res.status(404).json({ error: "Section not found" }); return; }
-  appendAuditEvent(section.packId, section.id, "reopened", `${section.code} reopened for editing`, "user");
+  await appendAuditEvent(section.packId, section.id, "reopened", `${section.code} reopened for editing`, "user");
   res.json(result);
 });
 
 // ── Audit & revisions ─────────────────────────────────────────────────────────
 
-router.get("/rfp/sections/:id/audit", (req, res): void => {
-  const section = getSection(req.params.id);
+router.get("/rfp/sections/:id/audit", async (req, res): Promise<void> => {
+  const section = getSection(req.params["id"] as string);
   if (!section) { res.status(404).json({ error: "Section not found" }); return; }
-  const events = getAuditEvents(section.packId, section.id);
+  const events = await getAuditEvents(section.packId, section.id);
   res.json({ events });
 });
 
 router.get("/rfp/sections/:id/revisions", (req, res): void => {
-  res.json({ revisions: getRevisions(req.params.id) });
+  res.json({ revisions: getRevisions(req.params["id"] as string) });
 });
 
 // ── Engagement profile ────────────────────────────────────────────────────────
 
-router.get("/rfp/packs/:id/profile", (req, res): void => {
-  const profile = getProfile(req.params.id);
+router.get("/rfp/packs/:id/profile", async (req, res): Promise<void> => {
+  const profile = await getProfile(req.params["id"] as string);
   if (!profile) { res.status(404).json({ error: "Profile not found" }); return; }
   res.json({ profile });
 });
 
-router.post("/rfp/packs/:id/profile", (req, res): void => {
+router.post("/rfp/packs/:id/profile", async (req, res): Promise<void> => {
   const { ourRole, primePartner, ourRemit, otherParties } = req.body as {
     ourRole?: string; primePartner?: string; ourRemit?: string[]; otherParties?: string[];
   };
   if (!ourRole || !primePartner || !Array.isArray(ourRemit)) {
     res.status(400).json({ error: "ourRole, primePartner, and ourRemit are required" }); return;
   }
-  const profile = saveProfile(req.params.id, {
+  const profile = await saveProfile(req.params["id"] as string, {
     ourRole, primePartner, ourRemit, otherParties: otherParties ?? [],
   });
   if (!profile) { res.status(404).json({ error: "Pack not found" }); return; }
-  appendAuditEvent(req.params.id, null, "profile_saved",
+  await appendAuditEvent(req.params["id"] as string, null, "profile_saved",
     `Engagement profile saved: RR as ${ourRole}, prime = ${primePartner}`, "user");
   res.json({ profile });
 });
@@ -617,9 +633,9 @@ async function runConcurrent<T>(tasks: Array<() => Promise<T>>, limit: number): 
 // ── Decompose (SSE) ───────────────────────────────────────────────────────────
 
 router.post("/rfp/packs/:id/decompose", async (req, res): Promise<void> => {
-  const pack    = getPack(req.params.id);
+  const pack    = await getPack(req.params["id"] as string);
   if (!pack) { res.status(404).json({ error: "Pack not found" }); return; }
-  const profile = getProfile(req.params.id);
+  const profile = await getProfile(req.params["id"] as string);
   if (!profile) { res.status(400).json({ error: "Save an engagement profile first" }); return; }
 
   res.setHeader("Content-Type",      "text/event-stream");
@@ -757,7 +773,7 @@ Return: { "crossCuttingConstraints": [{ "type": "timeline|module|integration|com
       }
     }
 
-    // ── 5. Extract verbatim sourceText from anchors in code ──────────────────
+    // ── 5. Extract verbatim sourceText from anchors ──────────────────────────
     const VALID_OWNERS = new Set(["RR", "LogicGate", "shared", "M&S"]);
 
     const crossCuttingConstraints: CrossCuttingConstraint[] =
@@ -768,7 +784,7 @@ Return: { "crossCuttingConstraints": [{ "type": "timeline|module|integration|com
         }));
 
     let unresolvedCount = 0;
-    const requirements = saveRequirements(req.params.id, assembled.map((r, i) => {
+    const requirements = await saveRequirements(req.params["id"] as string, assembled.map((r, i) => {
       const { text: sourceText, resolved } = resolveSourceText(r._sectionText, r.startAnchor, r.endAnchor);
       if (!resolved) unresolvedCount++;
       return {
@@ -791,7 +807,7 @@ Return: { "crossCuttingConstraints": [{ "type": "timeline|module|integration|com
       };
     }));
 
-    appendAuditEvent(pack.id, null, "decomposed",
+    await appendAuditEvent(pack.id, null, "decomposed",
       `Decomposed ${requirements.length} requirements across ${sections.length} sections (${unresolvedCount} anchors fell back to section text)`, "RRAI");
     req.log.info({ packId: pack.id, count: requirements.length, sections: sections.length, unresolvedCount }, "rfp: decompose complete");
     finish({ requirements, crossCuttingConstraints });
@@ -803,19 +819,19 @@ Return: { "crossCuttingConstraints": [{ "type": "timeline|module|integration|com
 
 // ── Requirements ──────────────────────────────────────────────────────────────
 
-router.get("/rfp/packs/:id/requirements", (req, res): void => {
-  const pack = getPack(req.params.id);
+router.get("/rfp/packs/:id/requirements", async (req, res): Promise<void> => {
+  const pack = await getPack(req.params["id"] as string);
   if (!pack) { res.status(404).json({ error: "Pack not found" }); return; }
-  const reqs = getRequirements(req.params.id);
-  const withResponse = reqs.map((r) => ({ ...r, response: getResponse(r.id) ?? null }));
+  const reqs = await getRequirements(req.params["id"] as string);
+  const withResponse = await Promise.all(reqs.map(async (r) => ({ ...r, response: (await getResponse(r.id)) ?? null })));
   res.json({ requirements: withResponse });
 });
 
-router.patch("/rfp/requirements/:id/ownership", (req, res): void => {
+router.patch("/rfp/requirements/:id/ownership", async (req, res): Promise<void> => {
   const { owner, ownerRationale, ownerConfirmed, ownerConfidence } = req.body as {
     owner?: string; ownerRationale?: string; ownerConfirmed?: boolean; ownerConfidence?: string;
   };
-  const req_ = getRequirement(req.params.id);
+  const req_ = await getRequirement(req.params["id"] as string);
   if (!req_) { res.status(404).json({ error: "Requirement not found" }); return; }
 
   const VALID_OWNERS = ["RR", "LogicGate", "shared", "M&S"];
@@ -826,25 +842,25 @@ router.patch("/rfp/requirements/:id/ownership", (req, res): void => {
   const finalRationale  = ownerRationale ?? req_.ownerRationale;
   const finalConfirmed  = ownerConfirmed ?? req_.ownerConfirmed;
   const finalConfidence = (["low","medium","high"].includes(ownerConfidence ?? "") ? ownerConfidence : undefined) as OwnerConfidence | undefined;
-  const updated = updateRequirementOwnership(req.params.id, finalOwner, finalRationale, finalConfirmed, finalConfidence);
+  const updated = await updateRequirementOwnership(req.params["id"] as string, finalOwner, finalRationale, finalConfirmed, finalConfidence);
   if (!updated) { res.status(404).json({ error: "Requirement not found" }); return; }
 
   const wasOverride = owner && owner !== req_.owner;
-  appendAuditEvent(req_.bidPackId, null,
+  await appendAuditEvent(req_.bidPackId, null,
     wasOverride ? "ownership_overridden" : "ownership_confirmed",
     `${req_.code}: ownership ${finalConfirmed ? "confirmed" : "set"} as ${finalOwner}`, "user",
-    { reqId: req.params.id, owner: finalOwner, rationale: finalRationale, confidence: finalConfidence });
+    { reqId: req.params["id"], owner: finalOwner, rationale: finalRationale, confidence: finalConfidence });
   res.json({ requirement: updated });
 });
 
 // ── Respond (SSE) ─────────────────────────────────────────────────────────────
 
 router.post("/rfp/requirements/:id/respond", async (req, res): Promise<void> => {
-  const requirement = getRequirement(req.params.id);
+  const requirement = await getRequirement(req.params["id"] as string);
   if (!requirement) { res.status(404).json({ error: "Requirement not found" }); return; }
-  const pack    = getPack(requirement.bidPackId);
+  const pack    = await getPack(requirement.bidPackId);
   if (!pack)    { res.status(404).json({ error: "Pack not found" }); return; }
-  const profile = getProfile(requirement.bidPackId);
+  const profile = await getProfile(requirement.bidPackId);
 
   res.setHeader("Content-Type",      "text/event-stream");
   res.setHeader("Cache-Control",     "no-cache");
@@ -911,9 +927,9 @@ router.post("/rfp/requirements/:id/respond", async (req, res): Promise<void> => 
     }
     if (!result) throw new Error("Respond: no output after retry");
 
-    const minBlocks   = Array.isArray(result.blocks)          ? result.blocks          : [];
+    const minBlocks    = Array.isArray(result.blocks)           ? result.blocks           : [];
     const enrichBlocks = Array.isArray(result.enrichmentBlocks) ? result.enrichmentBlocks : [];
-    const allRaw      = [...minBlocks, ...enrichBlocks];
+    const allRaw       = [...minBlocks, ...enrichBlocks];
 
     const blocks = allRaw.map((b) => ({
       key:      b.key  ?? `block_${Math.random().toString(36).slice(2, 7)}`,
@@ -930,13 +946,13 @@ router.post("/rfp/requirements/:id/respond", async (req, res): Promise<void> => 
       reviewed: false,
     }));
 
-    const response = saveResponse(requirement.id, {
+    const response = await saveResponse(requirement.id, {
       lens:             result.lens ?? "Commercial",
       blocks,
       openDependencies: Array.isArray(result.openDependencies) ? result.openDependencies : [],
     });
 
-    appendAuditEvent(pack.id, null, "response_generated",
+    await appendAuditEvent(pack.id, null, "response_generated",
       `Response generated for ${requirement.code}: ${requirement.title}`, "RRAI",
       { reqId: requirement.id });
     req.log.info({ reqId: requirement.id, blocks: blocks.length }, "rfp: response generated");
@@ -949,71 +965,71 @@ router.post("/rfp/requirements/:id/respond", async (req, res): Promise<void> => 
 
 // ── Response block CRUD ───────────────────────────────────────────────────────
 
-router.get("/rfp/requirements/:id/response", (req, res): void => {
-  const response = getResponse(req.params.id);
+router.get("/rfp/requirements/:id/response", async (req, res): Promise<void> => {
+  const response = await getResponse(req.params["id"] as string);
   if (!response) { res.status(404).json({ error: "Response not found" }); return; }
   res.json({ response });
 });
 
-router.patch("/rfp/requirements/:id/response/blocks/:blockKey", (req, res): void => {
+router.patch("/rfp/requirements/:id/response/blocks/:blockKey", async (req, res): Promise<void> => {
   const { answer } = req.body as { answer?: string };
   if (typeof answer !== "string") { res.status(400).json({ error: "answer is required" }); return; }
-  const block = updateBlockAnswer(req.params.id, req.params.blockKey, answer);
+  const block = await updateBlockAnswer(req.params["id"] as string, req.params["blockKey"] as string, answer);
   if (!block) { res.status(404).json({ error: "Block not found" }); return; }
-  const req_ = getRequirement(req.params.id);
-  if (req_) appendAuditEvent(req_.bidPackId, null, "block_edited",
-    `Block ${req.params.blockKey} edited`, "user", { reqId: req.params.id });
+  const req_ = await getRequirement(req.params["id"] as string);
+  if (req_) await appendAuditEvent(req_.bidPackId, null, "block_edited",
+    `Block ${req.params["blockKey"]} edited`, "user", { reqId: req.params["id"] });
   res.json({ block });
 });
 
-router.post("/rfp/requirements/:id/response/blocks/:blockKey/placeholders/:phId/fill", (req, res): void => {
+router.post("/rfp/requirements/:id/response/blocks/:blockKey/placeholders/:phId/fill", async (req, res): Promise<void> => {
   const { value } = req.body as { value?: string };
   if (typeof value !== "string" || !value.trim()) {
     res.status(400).json({ error: "value is required" }); return;
   }
-  const ph = fillBlockPlaceholder(req.params.id, req.params.blockKey, req.params.phId, value.trim());
+  const ph = await fillBlockPlaceholder(req.params["id"] as string, req.params["blockKey"] as string, req.params["phId"] as string, value.trim());
   if (!ph) { res.status(404).json({ error: "Placeholder not found" }); return; }
   res.json({ placeholder: ph });
 });
 
-router.patch("/rfp/requirements/:id/response/blocks/:blockKey/reviewed", (req, res): void => {
+router.patch("/rfp/requirements/:id/response/blocks/:blockKey/reviewed", async (req, res): Promise<void> => {
   const { reviewed } = req.body as { reviewed?: boolean };
   if (typeof reviewed !== "boolean") { res.status(400).json({ error: "reviewed must be boolean" }); return; }
-  const ok = setBlockReviewed(req.params.id, req.params.blockKey, reviewed);
+  const ok = await setBlockReviewed(req.params["id"] as string, req.params["blockKey"] as string, reviewed);
   if (!ok) { res.status(404).json({ error: "Block not found" }); return; }
-  const req_ = getRequirement(req.params.id);
-  if (req_) appendAuditEvent(req_.bidPackId, null, "block_reviewed",
-    `Block ${req.params.blockKey} ${reviewed ? "reviewed" : "un-reviewed"}`, "user", { reqId: req.params.id });
+  const req_ = await getRequirement(req.params["id"] as string);
+  if (req_) await appendAuditEvent(req_.bidPackId, null, "block_reviewed",
+    `Block ${req.params["blockKey"]} ${reviewed ? "reviewed" : "un-reviewed"}`, "user", { reqId: req.params["id"] });
   res.json({ ok: true });
 });
 
-router.post("/rfp/requirements/:id/response/advance", (req, res): void => {
-  const result = advanceResponseStatus(req.params.id);
+router.post("/rfp/requirements/:id/response/advance", async (req, res): Promise<void> => {
+  const result = await advanceResponseStatus(req.params["id"] as string);
   if (!result.ok) { res.status(400).json({ error: result.error }); return; }
-  const req_ = getRequirement(req.params.id);
-  if (req_) appendAuditEvent(req_.bidPackId, null,
+  const req_ = await getRequirement(req.params["id"] as string);
+  if (req_) await appendAuditEvent(req_.bidPackId, null,
     result.response.status === "approved" ? "response_approved" : "response_advanced",
     `Response for ${req_?.code} advanced to ${result.response.status}`, "user");
   res.json({ response: result.response });
 });
 
-router.post("/rfp/requirements/:id/response/reopen", (req, res): void => {
-  const response = reopenResponse(req.params.id);
+router.post("/rfp/requirements/:id/response/reopen", async (req, res): Promise<void> => {
+  const response = await reopenResponse(req.params["id"] as string);
   if (!response) { res.status(404).json({ error: "Response not found" }); return; }
-  const req_ = getRequirement(req.params.id);
-  if (req_) appendAuditEvent(req_.bidPackId, null, "response_advanced",
+  const req_ = await getRequirement(req.params["id"] as string);
+  if (req_) await appendAuditEvent(req_.bidPackId, null, "response_advanced",
     `Response for ${req_?.code} reopened`, "user");
   res.json({ response });
 });
 
 // ── Quality reviews ────────────────────────────────────────────────────────────
 
-router.get("/rfp/packs/:id/quality-reviews", (req, res): void => {
-  const pack = getPack(req.params.id);
+router.get("/rfp/packs/:id/quality-reviews", async (req, res): Promise<void> => {
+  const pack = await getPack(req.params["id"] as string);
   if (!pack) { res.status(404).json({ error: "Pack not found" }); return; }
   const { reviewType, targetId } = req.query as { reviewType?: string; targetId?: string };
-  const reviews = getQualityReviews(
-    req.params.id,
+  const reviews = await getQualityReviews(
+    req.params["id"] as string,
     reviewType as QualityReviewType | undefined,
     targetId,
   );
@@ -1023,11 +1039,11 @@ router.get("/rfp/packs/:id/quality-reviews", (req, res): void => {
 // ── Validate decomposition (SSE) ──────────────────────────────────────────────
 
 router.post("/rfp/packs/:id/validate-decomp", async (req, res): Promise<void> => {
-  const pack = getPack(req.params.id);
+  const pack = await getPack(req.params["id"] as string);
   if (!pack) { res.status(404).json({ error: "Pack not found" }); return; }
-  const requirements = getRequirements(req.params.id);
+  const requirements = await getRequirements(req.params["id"] as string);
   if (!requirements.length) { res.status(400).json({ error: "No requirements to validate — decompose first" }); return; }
-  const profile = getProfile(req.params.id);
+  const profile = await getProfile(req.params["id"] as string);
 
   res.setHeader("Content-Type",      "text/event-stream");
   res.setHeader("Cache-Control",     "no-cache");
@@ -1092,9 +1108,9 @@ router.post("/rfp/packs/:id/validate-decomp", async (req, res): Promise<void> =>
     const passed = (llmResult?.passed ?? false) && orderPreserved && minimumExpectationsCaptured;
     const score  = passed ? (llmResult?.score ?? 80) : Math.min(llmResult?.score ?? 50, 69);
 
-    const qr = saveQualityReview(req.params.id, {
+    const qr = await saveQualityReview(req.params["id"] as string, {
       targetType:         "pack",
-      targetId:           req.params.id,
+      targetId:           req.params["id"] as string,
       reviewType:         "decomposition",
       score,
       passed,
@@ -1104,7 +1120,7 @@ router.post("/rfp/packs/:id/validate-decomp", async (req, res): Promise<void> =>
       checks,
     });
 
-    if (passed) setWorkflowStage(req.params.id, "map_ownership");
+    if (passed) await setWorkflowStage(req.params["id"] as string, "map_ownership");
     req.log.info({ packId: pack.id, passed, score }, "rfp: decomp validation complete");
     finish({ qualityReview: qr, workflowStage: pack.workflowStage });
   } catch (err) {
@@ -1115,8 +1131,8 @@ router.post("/rfp/packs/:id/validate-decomp", async (req, res): Promise<void> =>
 
 // ── Gate override ─────────────────────────────────────────────────────────────
 
-router.post("/rfp/packs/:id/gate/override", (req, res): void => {
-  const pack = getPack(req.params.id);
+router.post("/rfp/packs/:id/gate/override", async (req, res): Promise<void> => {
+  const pack = await getPack(req.params["id"] as string);
   if (!pack) { res.status(404).json({ error: "Pack not found" }); return; }
   const { reviewType, reason, actor, targetId, advanceTo } = req.body as {
     reviewType?: string; reason?: string; actor?: string;
@@ -1129,25 +1145,25 @@ router.post("/rfp/packs/:id/gate/override", (req, res): void => {
   if (!VALID_TYPES.includes(reviewType)) {
     res.status(400).json({ error: `reviewType must be one of ${VALID_TYPES.join(", ")}` }); return;
   }
-  const qr = overrideGate(req.params.id, reviewType as QualityReviewType, reason, actor ?? "user", targetId);
+  const qr = await overrideGate(req.params["id"] as string, reviewType as QualityReviewType, reason, actor ?? "user", targetId);
   if (!qr) { res.status(404).json({ error: "No quality review found for this reviewType — run validation first" }); return; }
 
   // Optionally advance workflowStage after override
   const VALID_STAGES = ["decompose","validate_decomp","map_ownership","validate_ownership","respond","validate_response","rewrite","revalidate","assemble","export"];
   if (advanceTo && VALID_STAGES.includes(advanceTo)) {
-    setWorkflowStage(req.params.id, advanceTo as Parameters<typeof setWorkflowStage>[1]);
+    await setWorkflowStage(req.params["id"] as string, advanceTo as Parameters<typeof setWorkflowStage>[1]);
   }
   res.json({ qualityReview: qr, workflowStage: pack.workflowStage });
 });
 
 // ── Validate ownership (deterministic gate) ───────────────────────────────────
 
-router.post("/rfp/packs/:id/validate-ownership", (req, res): void => {
-  const pack = getPack(req.params.id);
+router.post("/rfp/packs/:id/validate-ownership", async (req, res): Promise<void> => {
+  const pack = await getPack(req.params["id"] as string);
   if (!pack) { res.status(404).json({ error: "Pack not found" }); return; }
-  const requirements = getRequirements(req.params.id);
+  const requirements = await getRequirements(req.params["id"] as string);
 
-  const rrOrShared     = requirements.filter((r) => r.owner === "RR" || r.owner === "shared");
+  const rrOrShared        = requirements.filter((r) => r.owner === "RR" || r.owner === "shared");
   const unconfirmedLow    = rrOrShared.filter((r) => r.ownerConfidence === "low"    && !r.ownerConfirmed);
   const unconfirmedMed    = rrOrShared.filter((r) => r.ownerConfidence === "medium" && !r.ownerConfirmed);
   const unconfirmedShared = requirements.filter((r) => r.owner === "shared"         && !r.ownerConfirmed);
@@ -1164,8 +1180,8 @@ router.post("/rfp/packs/:id/validate-ownership", (req, res): void => {
   const passed = findings.length === 0 && rrOrShared.every((r) => r.ownerConfirmed);
   const score  = passed ? 100 : Math.max(0, 100 - ([...new Set([...unconfirmedLow, ...unconfirmedMed, ...unconfirmedShared])].length * 15));
 
-  const qr = saveQualityReview(req.params.id, {
-    targetType: "pack", targetId: req.params.id, reviewType: "ownership",
+  const qr = await saveQualityReview(req.params["id"] as string, {
+    targetType: "pack", targetId: req.params["id"] as string, reviewType: "ownership",
     score, passed, findings, missingItems,
     recommendedActions: missingItems.map((m) => `Confirm ownership: ${m}`),
     checks: {
@@ -1176,7 +1192,7 @@ router.post("/rfp/packs/:id/validate-ownership", (req, res): void => {
     },
   });
 
-  if (passed) setWorkflowStage(req.params.id, "respond");
+  if (passed) await setWorkflowStage(req.params["id"] as string, "respond");
   req.log.info({ packId: pack.id, passed }, "rfp: ownership validation complete");
   res.json({
     qualityReview: qr,
@@ -1189,13 +1205,13 @@ router.post("/rfp/packs/:id/validate-ownership", (req, res): void => {
 // ── Validate response (per requirement, JSON) ─────────────────────────────────
 
 router.post("/rfp/requirements/:id/validate-response", async (req, res): Promise<void> => {
-  const requirement = getRequirement(req.params.id);
+  const requirement = await getRequirement(req.params["id"] as string);
   if (!requirement) { res.status(404).json({ error: "Requirement not found" }); return; }
-  const response = getResponse(req.params.id);
+  const response = await getResponse(req.params["id"] as string);
   if (!response)    { res.status(404).json({ error: "Response not found — generate a response first" }); return; }
-  const profile  = getProfile(requirement.bidPackId);
+  const profile  = await getProfile(requirement.bidPackId);
 
-  setRequirementResponseStage(req.params.id, "validating");
+  await setRequirementResponseStage(req.params["id"] as string, "validating");
   req.log.info({ reqId: requirement.id, blocks: response.blocks.length }, "rfp: validating response blocks");
 
   try {
@@ -1229,7 +1245,7 @@ router.post("/rfp/requirements/:id/validate-response", async (req, res): Promise
       const llmResult = await callClaudeJSON<ValidateRespResult>(system, userContent, { maxTokens: 2048 });
       const passed    = llmResult?.passed ?? false;
       const findings  = llmResult?.findings ?? [];
-      setBlockValidation(req.params.id, block.key, passed ? "passed" : "failed", findings);
+      await setBlockValidation(req.params["id"] as string, block.key, passed ? "passed" : "failed", findings);
       blockResults.push({
         blockKey:           block.key,
         score:              llmResult?.score ?? 0,
@@ -1246,7 +1262,7 @@ router.post("/rfp/requirements/:id/validate-response", async (req, res): Promise
       ? Math.round(blockResults.reduce((s, b) => s + b.score, 0) / blockResults.length)
       : 100;
 
-    const qr = saveQualityReview(requirement.bidPackId, {
+    const qr = await saveQualityReview(requirement.bidPackId, {
       targetType:  "requirement", targetId: requirement.id, reviewType: "response",
       score:       overallScore, passed:   allPassed,
       findings:    blockResults.flatMap((b) => b.findings),
@@ -1255,11 +1271,11 @@ router.post("/rfp/requirements/:id/validate-response", async (req, res): Promise
       checks:      Object.fromEntries(blockResults.map((b) => [b.blockKey, b.passed])),
     });
 
-    setRequirementResponseStage(req.params.id, allPassed ? "passed" : "failed");
+    await setRequirementResponseStage(req.params["id"] as string, allPassed ? "passed" : "failed");
     req.log.info({ reqId: requirement.id, passed: allPassed, score: overallScore }, "rfp: response validation complete");
     res.json({ qualityReview: qr, blockResults });
   } catch (err) {
-    setRequirementResponseStage(req.params.id, "failed");
+    await setRequirementResponseStage(req.params["id"] as string, "failed");
     req.log.error({ err }, "rfp: validate-response failed");
     res.status(500).json({ error: (err as Error).message });
   }
@@ -1268,13 +1284,13 @@ router.post("/rfp/requirements/:id/validate-response", async (req, res): Promise
 // ── Rewrite block (SSE) ───────────────────────────────────────────────────────
 
 router.post("/rfp/requirements/:id/blocks/:blockKey/rewrite", async (req, res): Promise<void> => {
-  const requirement = getRequirement(req.params.id);
+  const requirement = await getRequirement(req.params["id"] as string);
   if (!requirement) { res.status(404).json({ error: "Requirement not found" }); return; }
-  const response = getResponse(req.params.id);
+  const response = await getResponse(req.params["id"] as string);
   if (!response)    { res.status(404).json({ error: "Response not found" }); return; }
-  const profile  = getProfile(requirement.bidPackId);
+  const profile  = await getProfile(requirement.bidPackId);
 
-  const { blockKey } = req.params;
+  const blockKey = req.params["blockKey"] as string;
   const block = response.blocks.find((b) => b.key === blockKey);
   if (!block) { res.status(404).json({ error: "Block not found" }); return; }
 
@@ -1303,7 +1319,7 @@ router.post("/rfp/requirements/:id/blocks/:blockKey/rewrite", async (req, res): 
   req.log.info({ reqId: requirement.id, blockKey, attempt: (block.rewriteAttempts ?? 0) + 1 }, "rfp: rewriting block");
 
   try {
-    setBlockValidation(req.params.id, blockKey, "rewriting", block.validationFindings ?? []);
+    await setBlockValidation(req.params["id"] as string, blockKey, "rewriting", block.validationFindings ?? []);
 
     const profileJson     = JSON.stringify(profile ?? {}, null, 2);
     const requirementJson = JSON.stringify({
@@ -1314,7 +1330,7 @@ router.post("/rfp/requirements/:id/blocks/:blockKey/rewrite", async (req, res): 
       crossCuttingConstraints: requirement.crossCuttingConstraints,
     }, null, 2);
 
-    const latestQr = getLatestQualityReview(requirement.bidPackId, "response", requirement.id);
+    const latestQr = await getLatestQualityReview(requirement.bidPackId, "response", requirement.id);
 
     const { system, userTemplate } = parsePromptFile(readPrompt("rewrite-block.md"));
     const userContent = userTemplate
@@ -1345,18 +1361,19 @@ router.post("/rfp/requirements/:id/blocks/:blockKey/rewrite", async (req, res): 
       filled:      false,
     }));
 
-    replaceBlockAnswer(req.params.id, blockKey, llmResult.answer, newPlaceholders);
-    setBlockValidation(req.params.id, blockKey, "pending", []);
+    await replaceBlockAnswer(req.params["id"] as string, blockKey, llmResult.answer, newPlaceholders);
+    await setBlockValidation(req.params["id"] as string, blockKey, "pending", []);
 
-    appendAuditEvent(requirement.bidPackId, null, "block_rewritten",
+    await appendAuditEvent(requirement.bidPackId, null, "block_rewritten",
       `Block ${blockKey} rewritten (attempt ${(block.rewriteAttempts ?? 0) + 1})`, "RRAI",
-      { reqId: req.params.id, blockKey, changesLog: llmResult.changesLog ?? [] });
+      { reqId: req.params["id"], blockKey, changesLog: llmResult.changesLog ?? [] });
 
-    const updatedBlock = getResponse(req.params.id)?.blocks.find((b) => b.key === blockKey) ?? null;
+    const updatedResponse = await getResponse(req.params["id"] as string);
+    const updatedBlock = updatedResponse?.blocks.find((b) => b.key === blockKey) ?? null;
     req.log.info({ reqId: requirement.id, blockKey }, "rfp: block rewrite complete");
     finish({ block: updatedBlock });
   } catch (err) {
-    setBlockValidation(req.params.id, blockKey, "failed", block.validationFindings ?? []);
+    await setBlockValidation(req.params["id"] as string, blockKey, "failed", block.validationFindings ?? []);
     req.log.error({ err }, "rfp: rewrite-block failed");
     finish({ error: (err as Error).message });
   }
@@ -1364,15 +1381,15 @@ router.post("/rfp/requirements/:id/blocks/:blockKey/rewrite", async (req, res): 
 
 // ── Assemble ──────────────────────────────────────────────────────────────────
 
-router.post("/rfp/packs/:id/assemble", (req, res): void => {
-  const pack = getPack(req.params.id);
+router.post("/rfp/packs/:id/assemble", async (req, res): Promise<void> => {
+  const pack = await getPack(req.params["id"] as string);
   if (!pack) { res.status(404).json({ error: "Pack not found" }); return; }
-  const assembled = assembleResponses(req.params.id);
+  const assembled = await assembleResponses(req.params["id"] as string);
   if (!assembled.length) {
     res.status(400).json({ error: "No approved RR/shared responses to assemble. Approve all responses first." }); return;
   }
-  setWorkflowStage(req.params.id, "assemble");
-  appendAuditEvent(req.params.id, null, "assembled",
+  await setWorkflowStage(req.params["id"] as string, "assemble");
+  await appendAuditEvent(req.params["id"] as string, null, "assembled",
     `Assembled ${assembled.length} requirement response(s)`, "user");
   req.log.info({ packId: pack.id, count: assembled.length }, "rfp: assembled");
   res.json({ assembled, workflowStage: pack.workflowStage, count: assembled.length });
@@ -1381,10 +1398,10 @@ router.post("/rfp/packs/:id/assemble", (req, res): void => {
 // ── Validate final (SSE) ──────────────────────────────────────────────────────
 
 router.post("/rfp/packs/:id/validate-final", async (req, res): Promise<void> => {
-  const pack = getPack(req.params.id);
+  const pack = await getPack(req.params["id"] as string);
   if (!pack) { res.status(404).json({ error: "Pack not found" }); return; }
-  const profile   = getProfile(req.params.id);
-  const assembled = assembleResponses(req.params.id);
+  const profile   = await getProfile(req.params["id"] as string);
+  const assembled = await assembleResponses(req.params["id"] as string);
   if (!assembled.length) {
     res.status(400).json({ error: "Nothing assembled — run assemble first" }); return;
   }
@@ -1428,8 +1445,8 @@ router.post("/rfp/packs/:id/validate-final", async (req, res): Promise<void> => 
 
     const llmResult = await callClaudeJSON<ValidateFinalResult>(system, userContent, { maxTokens: 4096 });
 
-    const qr = saveQualityReview(req.params.id, {
-      targetType:         "pack", targetId: req.params.id, reviewType: "final",
+    const qr = await saveQualityReview(req.params["id"] as string, {
+      targetType:         "pack", targetId: req.params["id"] as string, reviewType: "final",
       score:              llmResult?.score ?? 0,
       passed:             llmResult?.passed ?? false,
       findings:           llmResult?.findings ?? [],
@@ -1438,7 +1455,7 @@ router.post("/rfp/packs/:id/validate-final", async (req, res): Promise<void> => 
       checks:             llmResult?.checks ?? {},
     });
 
-    if (qr.passed) setWorkflowStage(req.params.id, "export");
+    if (qr.passed) await setWorkflowStage(req.params["id"] as string, "export");
     req.log.info({ packId: pack.id, passed: qr.passed, score: qr.score }, "rfp: final validation complete");
     finish({
       qualityReview:    qr,

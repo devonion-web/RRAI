@@ -1597,7 +1597,7 @@ export default function RFPModule({ onBack }) {
   const [recovering, setRecovering]     = useState(false)
 
   useEffect(() => {
-    const storedId = sessionStorage.getItem(SESSION_KEY)
+    const storedId = localStorage.getItem(SESSION_KEY)
     if (!storedId) return
     setRecovering(true)
     Promise.all([
@@ -1623,17 +1623,17 @@ export default function RFPModule({ onBack }) {
         setScreen('profile')
       }
     })
-    .catch(() => sessionStorage.removeItem(SESSION_KEY))
+    .catch(() => localStorage.removeItem(SESSION_KEY))
     .finally(() => setRecovering(false))
   }, [])
 
-  function handlePack(p)         { sessionStorage.setItem(SESSION_KEY, p.id); setPack(p); setScreen('profile') }
+  function handlePack(p)         { localStorage.setItem(SESSION_KEY, p.id); setPack(p); setScreen('profile') }
   function handleProfile(p)      { setProfile(p); setScreen('decompose') }
   function handleRequirements(r) { setRequirements(r); setScreen('mapping') }
   function handleMappingDone(r)  { setRequirements(r); setScreen('dashboard') }
   function handleAssemble()      { setScreen('assemble') }
   function handleReset() {
-    sessionStorage.removeItem(SESSION_KEY)
+    localStorage.removeItem(SESSION_KEY)
     setPack(null); setProfile(null); setRequirements([]); setCurrentReq(null); setScreen('setup')
   }
 
