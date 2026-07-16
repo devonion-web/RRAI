@@ -1,0 +1,166 @@
+Product Governance Baseline — Install Approved Documents and Audit Product Specifications
+
+This is a controlled product-governance task.
+
+Do not change application code.
+Do not change database schema.
+Do not change runtime behaviour.
+Do not create any new product-governance document.
+Do not rewrite product files 03–17 in this task.
+
+Approved documents
+
+The Product Owner has approved these documents as Version 1.0:
+
+- product/00_RRAI_Product_Philosophy.md
+- product/01_RRAI_Product_Principles.md
+- product/02_RRAI_Executive_Workbench.md
+
+Before proceeding, confirm that each file contains the approved substantive content rather than a placeholder.
+
+Apply these two final corrections to the Executive Workbench document only:
+
+1. In the Lens Behaviour section, replace the wording:
+
+“separate Work Items or separate lens-bound passes”
+
+with:
+
+“separate lens-bound passes within the same Work Item where appropriate”
+
+The intention is that one bounded piece of work remains one Work Item, while cross-lens reasoning occurs as separate governed passes.
+
+2. In Change Control §15.2, replace:
+
+“A need for a new deliverables catalogue is not a Workbench change”
+
+with:
+
+“A need to create or materially change the governed deliverables catalogue is not a Workbench change”
+
+Do not otherwise rewrite the document.
+
+Approval metadata
+
+In all three documents:
+
+- change Status from “Draft for approval — proposed Version 1.0” to “Version 1.0 — approved”;
+- update the final footer consistently;
+- remove wording that says approval is still pending;
+- preserve all substantive approved content.
+
+Delete obsolete stubs
+
+Delete only these three superseded empty files if they still exist:
+
+- product/00 Product Specification.md
+- product/01 Executive Experience.md
+- product/02 Executive Home.md
+
+Do not delete or rename files 03–17.
+
+Repository references
+
+Update only the minimum necessary references in:
+
+- README.md
+- CONTRIBUTING.md
+- replit.md
+- product indexes, if one already exists
+- platform-status generator classification logic, only where required to recognise the three approved documents
+
+The product-area authority sequence must be recorded as:
+
+product/00_RRAI_Product_Philosophy.md
+→ product/01_RRAI_Product_Principles.md
+→ product/02_RRAI_Executive_Workbench.md
+→ remaining product specifications
+
+Clarify that all remain subordinate to:
+
+- architecture/00_RRAI_Master_Context_v2_0.md
+- architecture/01_RRAI_Platform_Architecture_v1_0.md
+
+Audit product files 03–17
+
+Perform a read-only conformance audit of:
+
+- product/03 Conversation System.md
+- product/04 Workspace System.md
+- product/05 Executive Briefing.md
+- product/06 Capability Marketplace.md
+- product/07 Knowledge System.md
+- product/08 Memory System.md
+- product/09 Learning System.md
+- product/10 Project & Opportunity System.md
+- product/11 Meeting Intelligence.md
+- product/12 Document Intelligence.md
+- product/13 Automation Engine.md
+- product/14 Executive Settings.md
+- product/15 Administration.md
+- product/16 Reporting & Analytics.md
+- product/17 User Journeys.md
+
+For each file classify:
+
+- Keep and draft next
+- Retain but rename later
+- Merge into another product specification
+- Archive
+- Re-scope before drafting
+
+Assess each against:
+
+- defined Work Item support;
+- deliverable improvement;
+- four-lens conformance;
+- human accountability;
+- evidence and reasoning value;
+- generic-productivity drift;
+- CRM/project/task-management drift;
+- meeting/calendar-management drift;
+- operational-system drift;
+- overlap with the Executive Workbench.
+
+Do not draft or modify files 03–17.
+
+Recommended implementation order
+
+Based on the audit, recommend the smallest set of product specifications needed to make RRAI usable for defined high-value work.
+
+Prioritise specifications that directly support:
+
+- defining a Work Item;
+- assembling evidence;
+- structuring reasoning;
+- developing a deliverable;
+- human review and approval.
+
+Do not prioritise generic dashboards, meetings, personal productivity, organisational monitoring or general administration.
+
+Validation
+
+Confirm:
+
+1. the three approved documents are substantive and marked Version 1.0 — approved;
+2. the obsolete 00–02 stubs are removed;
+3. files 03–17 are unchanged;
+4. no new product document was created;
+5. no application, schema or runtime file changed;
+6. repository references are consistent;
+7. generated platform status remains deterministic and current.
+
+Return:
+
+1. changed-file list;
+2. final product/ inventory;
+3. approval-metadata verification;
+4. conformance audit for files 03–17;
+5. overlap and drift register;
+6. recommended retain/merge/archive decisions;
+7. the next three product specifications to draft, in order, with reasons;
+8. git status;
+9. exact manual commit commands.
+
+Do not commit or push.
+Stop after the report.
