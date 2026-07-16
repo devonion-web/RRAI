@@ -1,0 +1,116 @@
+You implemented RFP Internal Alpha — Phase 1: Persistent Work Item Foundation in the current repository.
+
+Do not implement anything else.
+
+Perform a verification and acceptance audit only.
+
+Provide objective evidence for each item below.
+
+1. List every new RFP database table.
+
+For each table show:
+
+- table name;
+- columns;
+- indexes;
+- foreign keys;
+- constraints.
+
+2. Verify that the active requirement-based RFP workflow reads and writes PostgreSQL rather than relying on in-memory Maps.
+
+Search for every remaining reference to:
+
+- PACKS
+- PROFILES
+- REQUIREMENTS
+- RESPONSES
+- QUALITY_REVIEWS
+- AUDIT_LOG
+
+Classify each occurrence as:
+
+- active requirement-based path;
+- legacy section-based compatibility path;
+- cache only;
+- dead code.
+
+If any active requirement-based state remains durable only in memory, state that clearly.
+
+3. Perform an end-to-end persistence test using non-customer sample data.
+
+Create a sample RFP Work Item.
+
+Then:
+
+- store or upload a sample document;
+- create or extract at least one requirement;
+- create at least one response;
+- update a response block;
+- mark the block reviewed;
+- create a quality review;
+- record audit events.
+
+Restart the API process completely.
+
+After restart, retrieve the same Work Item and prove that:
+
+- the Work Item still exists;
+- the document still exists;
+- the requirement still exists;
+- the response and block still exist;
+- the reviewed state still exists;
+- the quality review still exists;
+- the audit events still exist.
+
+Show identifiers, counts and relevant status fields, but do not expose secrets.
+
+4. Verify browser recovery.
+
+Confirm that:
+
+- the active Work Item ID is stored in localStorage;
+- module startup retrieves the Work Item from the database;
+- a missing or inaccessible Work Item produces a visible error rather than failing silently;
+- the persisted workflow stage is restored.
+
+5. List every RFP endpoint now using the database-backed repository.
+
+Separately list every endpoint that still uses legacy in-memory state.
+
+6. Verify the database migration record.
+
+Show:
+
+- schema file;
+- migration or baseline SQL filename;
+- whether it was applied;
+- direct database confirmation that the tables exist.
+
+If no reviewable migration artefact exists in Git, answer NO to Phase 1 completion.
+
+7. Run validation:
+
+- relevant automated tests;
+- API-server typecheck;
+- frontend typecheck;
+- full workspace typecheck;
+- build;
+- platform-status generation;
+- platform-status check.
+
+Distinguish pre-existing failures from new failures.
+
+8. Return the exact changed-file list.
+
+9. Conclude with:
+
+Phase 1 COMPLETE: YES
+
+or
+
+Phase 1 COMPLETE: NO
+
+If NO, list only the exact blockers.
+
+Do not begin Phase 2.
+Do not change files unless a verification test requires temporary non-production test data.

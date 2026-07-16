@@ -1,6 +1,6 @@
 <!--
 GENERATED PLATFORM EVIDENCE
-Derived from repository inspection at commit 88bccb1 (branch: feature/development-orchestrator-foundation)
+Derived from repository inspection at commit 8a5454e (branch: feature/development-orchestrator-foundation)
 Generator: pnpm --filter @workspace/scripts run generate:platform-status
 
 This document is NOT a governing architecture document.
@@ -20,10 +20,10 @@ Do not edit manually. Regenerate to update.
 
 | Metric | Value |
 | --- | --- |
-| Total routes | 106 |
+| Total routes | 108 |
 | Route files | 7 |
 | Admin / development routes | 14 |
-| All other routes | 92 |
+| All other routes | 94 |
 | Base path | All routes are served under `/api` (proxy-applied) |
 | OpenAPI spec | Unable to verify — `api-spec/` directory is absent |
 
@@ -108,9 +108,9 @@ Do not edit manually. Regenerate to update.
 
 ---
 
-### rfp.ts (37 routes)
+### rfp.ts (39 routes)
 
-1×DELETE, 9×GET, 5×PATCH, 22×POST
+1×DELETE, 11×GET, 5×PATCH, 22×POST
 
 - `DELETE /rfp/documents/:id`
 - `GET /rfp/health`
@@ -118,7 +118,7 @@ Do not edit manually. Regenerate to update.
 - `GET /rfp/packs/:id`
 - `POST /rfp/packs/:id/assemble`
 - `GET /rfp/packs/:id/audit`
-- _…and 31 more_
+- _…and 33 more_
 
 ---
 
