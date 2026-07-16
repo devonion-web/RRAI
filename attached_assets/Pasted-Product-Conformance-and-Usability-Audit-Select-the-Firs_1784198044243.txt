@@ -1,0 +1,124 @@
+Product Conformance and Usability Audit — Select the First Usable Work Item
+
+This is a read-only product and implementation audit.
+
+Do not change files.
+Do not change application code.
+Do not change database schema.
+Do not redesign the application.
+Do not draft additional governed documents.
+
+Read these approved governing documents first:
+
+- architecture/00_RRAI_Master_Context_v2_0.md
+- architecture/01_RRAI_Platform_Architecture_v1_0.md
+- product/00_RRAI_Product_Philosophy.md
+- product/01_RRAI_Product_Principles.md
+- product/02_RRAI_Executive_Workbench.md
+- engineering/00_RRAI_Development_Operating_Model.md
+
+Objective
+
+Determine the smallest implementation change that will turn the current RRAI application into a genuinely usable product for one complete, defined piece of high-value leadership work.
+
+The preferred candidate is the existing RFP/RFI capability, but verify this against the actual repository rather than assuming it.
+
+Audit the live application and identify every existing user-facing module, route and workflow.
+
+For each current module, assess:
+
+1. What defined, high-value work does it support?
+2. What deliverable does it produce?
+3. Does it operate as a bounded Work Item?
+4. Does it establish:
+   - purpose;
+   - owner;
+   - audience;
+   - active lens;
+   - intended deliverable;
+   - scope;
+   - evidence requirements;
+   - approval requirements;
+   - completion condition?
+5. Does it support the Workbench lifecycle:
+   - Define
+   - Gather
+   - Reason
+   - Develop
+   - Review
+   - Approve
+   - Complete
+   - Reuse?
+6. Does it preserve evidence, sources, confidence and human approval?
+7. Does it drift toward:
+   - generic chat;
+   - task/project management;
+   - CRM;
+   - meeting management;
+   - general dashboards;
+   - operational tooling?
+
+RFP/RFI deep assessment
+
+Inspect the current RFP and Proposal functionality in detail.
+
+Report:
+
+- current screens;
+- current API routes;
+- current data persistence;
+- file-upload behaviour;
+- extraction and reasoning flow;
+- current deliverable/output;
+- current review and approval handling;
+- current knowledge retrieval;
+- current gaps and defects;
+- whether a real user could complete an RFP/RFI Work Item from start to finish today.
+
+Define the minimum usable vertical slice
+
+Recommend one Work Item that should become the Internal Alpha workflow.
+
+Prefer:
+
+“Produce a governed RFP/RFI response from uploaded customer requirements and approved RRAI knowledge.”
+
+Define its minimum complete experience:
+
+1. Define the engagement and intended response.
+2. Upload and inspect source documents.
+3. Extract and classify requirements.
+4. Gather permitted evidence and approved knowledge.
+5. Develop structured draft responses.
+6. Review evidence, gaps, confidence and ownership.
+7. Approve the response.
+8. Export a usable deliverable.
+9. Retain reusable knowledge through governed paths.
+
+Do not propose unrelated dashboards, development orchestration, calendars, meetings, CRM or broad platform work.
+
+Prioritisation
+
+Separate findings into:
+
+- Must fix for first real use;
+- Should fix after first use;
+- Later capability;
+- Remove or hide because it causes drift.
+
+Return:
+
+1. current user-facing module inventory;
+2. conformance assessment against the three approved product documents;
+3. detailed RFP/RFI current-state assessment;
+4. the recommended first Work Item;
+5. the smallest usable vertical-slice scope;
+6. exact acceptance criteria;
+7. exact files likely to change;
+8. database and API dependencies;
+9. implementation risks;
+10. a proposed implementation sequence of no more than three phases.
+
+Stop after the audit.
+
+Do not implement anything.
