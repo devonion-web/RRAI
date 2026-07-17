@@ -17,6 +17,8 @@ const MODEL = "claude-sonnet-4-6";
 
 export interface ClaudeOptions {
   maxTokens?: number;
+  /** Optional AbortSignal — when signalled the Anthropic stream is aborted immediately. */
+  signal?: AbortSignal;
 }
 
 /** Strip ```json fences and pull out the outermost JSON object or array. */
@@ -119,9 +121,9 @@ export async function callClaudeJSON<T>(
 
     throw new Error("Claude returned no usable content block");
   } catch (err: unknown) {
-    // If the proxy/model rejects tool_choice (400), fall back to plain text + defensive parse
-    const isApiErr = err instanceof Anthropic.APIError;
-    if (isApiErr && (err as Anthropic.APIError).status === 400) {
+    // If the proxy/model rejects tool_choice (400), fall back to plain text + defensive parse.
+    // The instanceof check narrows err to Anthropic.APIError so .status is accessible without a cast.
+    if (err instanceof Anthropic.APIError && err.status === 400) {
       logger.warn("callClaudeJSON: tool-forcing rejected (400), falling back to text parse");
       const raw = await callClaude(system, user, { maxTokens });
       return defensiveParse<T>(raw);
@@ -169,4 +171,37 @@ export async function callClaudeTextStreamed(
   stream.on("text", (chunk) => { fullText += chunk; });
   await stream.finalMessage();
   return fullText.trim();
+}
+
+/**
+ * Streams Claude text output chunk-by-chunk via a callback.
+ * Each text delta from the model is forwarded to `onChunk` immediately —
+ * the caller is responsible for writing to SSE / whatever transport it needs.
+ *
+ * If `opts.signal` is provided and aborted, the Anthropic SDK stream is
+ * cancelled via the native AbortSignal mechanism; an `Anthropic.APIUserAbortError`
+ * is thrown to distinguish a client-initiated abort from a real API error.
+ */
+export async function streamClaudeText(
+  system: string,
+  user: string,
+  onChunk: (text: string) => void,
+  opts: ClaudeOptions = {},
+): Promise<void> {
+  const stream = anthropic.messages.stream(
+    {
+      model: MODEL,
+      max_tokens: opts.maxTokens ?? 8192,
+      system,
+      messages: [{ role: "user", content: user }],
+    },
+    // Pass the AbortSignal directly to the SDK — when signalled the SDK
+    // cancels the HTTP request and throws APIUserAbortError.
+    opts.signal ? { signal: opts.signal } : undefined,
+  );
+  stream.on("text", onChunk);
+  const final = await stream.finalMessage();
+  if (final.stop_reason === "max_tokens") {
+    throw new Error("Claude response truncated — increase max_tokens");
+  }
 }

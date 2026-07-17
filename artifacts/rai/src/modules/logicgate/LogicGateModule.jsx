@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import logo from './assets/rr-logo.png'
-import { extractFiles, generatePrep, postDiscovery, dealStrategy, generateScorecard, updateScore, createOpportunity, getOpportunity, addManualEvent, extractContacts, saveContacts, getOpportunityContacts, getContactsExportUrl, enrichContactApi, listSowProfiles, getSowProfile, generateSoW, enrichDealRisk, enrichDiscoveryQuestions, enrichProductFit, generateRichBriefing, generateEmails, generatePostDemo, generateSolutionBreakdown, generateProposalEmail, generateProposalDocument, generateProposalSection, verifyProposal, getValueDriverLibrary, getOperationalMetricsLibrary, suggestValueDrivers } from './api.js'
+import { ApiConflictError, extractFiles, generatePrep, postDiscovery, dealStrategy, generateScorecard, updateScore, listOpportunities, createOpportunity, getOpportunity, addManualEvent, extractContacts, saveContacts, getOpportunityContacts, getContactsExportUrl, enrichContactApi, listSowProfiles, getSowProfile, generateSoW, enrichDealRisk, enrichDiscoveryQuestions, enrichProductFit, generateRichBriefing, generateEmails, generatePostDemo, generateSolutionBreakdown, generateProposalEmail, generateProposalDocument, generateProposalSection, generateProposalSectionStream, verifyProposal, getValueDriverLibrary, getOperationalMetricsLibrary, suggestValueDrivers, getWorkingState, saveWorkingState } from './api.js'
 import {
   Document,
   Packer,
@@ -3922,43 +3922,54 @@ function DealDashboard({
   )
 }
 
-// ── Persistence helpers ──
-// Save and restore the current opportunity state across browser refreshes.
-// Stores only the fields that are safe and useful to rehydrate — nothing
-// transient (loading flags, errors, file uploads), nothing sensitive
-// (no API keys), and no derived values that can be recomputed from the
-// stored fields. The stored payload is intentionally small.
+// ── Recovery cache ──
+// A write-back cache stored in localStorage that enables state recovery when
+// the server is temporarily unreachable. It is NOT the source of truth —
+// the PostgreSQL working-state record is always authoritative.
+//
+// Rules:
+//   • Contains no authentication or role data.
+//   • Includes opportunityId + serverVersion for staleness detection.
+//   • Expires after RECOVERY_TTL_MS (24 h); evicted on every read.
+//   • Cleared after every confirmed successful server save.
+//   • Only offered to the user when the server is unreachable.
+//   • Never silently overwrites a confirmed server record.
 
-const PERSIST_KEY = 'logicgate_rr_current_opportunity'
-const PERSIST_VERSION = 1
+const RECOVERY_KEY = 'rr_lg_recovery_v1'
+const RECOVERY_TTL_MS = 24 * 60 * 60 * 1000 // 24 hours
 
-function loadPersistedState() {
+function writeRecoveryCache(opportunityId, serverVersion, payload) {
   try {
-    const raw = localStorage.getItem(PERSIST_KEY)
+    localStorage.setItem(RECOVERY_KEY, JSON.stringify({
+      opportunityId,
+      serverVersion,        // ISO string of last confirmed save; null if never saved
+      cacheTimestamp: new Date().toISOString(),
+      expires: new Date(Date.now() + RECOVERY_TTL_MS).toISOString(),
+      payload,
+    }))
+  } catch { /* quota exceeded or storage unavailable — silently skip */ }
+}
+
+function readRecoveryCache() {
+  try {
+    const raw = localStorage.getItem(RECOVERY_KEY)
     if (!raw) return null
     const parsed = JSON.parse(raw)
-    // Version gate — if the stored format is older than the app expects,
-    // discard rather than try to upgrade in-place. Cheap and safe.
-    if (parsed?.__v !== PERSIST_VERSION) return null
+    if (!parsed?.expires || new Date(parsed.expires) < new Date()) {
+      localStorage.removeItem(RECOVERY_KEY)
+      return null
+    }
     return parsed
-  } catch {
-    return null
-  }
+  } catch { return null }
 }
 
-function persistState(payload) {
-  try {
-    const safe = { __v: PERSIST_VERSION, ...payload, savedAt: new Date().toISOString() }
-    localStorage.setItem(PERSIST_KEY, JSON.stringify(safe))
-  } catch {
-    // Quota exceeded or storage unavailable — silently skip.
-    // Persistence is best-effort, not load-bearing.
-  }
+function clearRecoveryCache() {
+  try { localStorage.removeItem(RECOVERY_KEY) } catch {}
 }
 
-function clearPersistedState() {
-  try { localStorage.removeItem(PERSIST_KEY) } catch {}
-}
+// ── Save lifecycle constants ──
+const SAVE_DEBOUNCE_MS = 2000  // ms to wait after the last change before saving
+const SAVE_MAX_RETRIES = 3     // max transient-failure retries (exponential backoff)
 
 // ─────────────────────────────────────────────────────────────────────────
 // OperationalMetricsPanel — V1.5a
@@ -4288,40 +4299,129 @@ function ProposalSectionContent({ sectionId, content }) {
 export default function LogicGateModule() {
   const fileRef = useRef(null)
 
-  // ── Restore-from-localStorage flow ──
-  // Instead of restoring directly into state on mount, we hold the saved
-  // snapshot in `pendingRestore` and surface a Resume / Discard banner.
-  // The user explicitly chooses whether to resume — fresh sessions never
-  // get auto-overwritten by stale data. The banner only appears if there's
-  // actually a saved snapshot.
-  //
-  // After the user chooses (or the snapshot is empty), `restoreDecided`
-  // flips to true and the persistence effect is allowed to write again.
+  // ── Restore / resume state ──
+  // `pendingRestore` holds a snapshot offered to the user via the Resume banner.
+  // `restoreDecided` gates the persistence effect so it cannot overwrite a
+  // pending snapshot before the user has chosen Resume or Discard.
   const [pendingRestore, setPendingRestore] = useState(null) // null | parsed snapshot
   const [restoreDecided, setRestoreDecided] = useState(false)
   // Legacy scoring banner — set when a resumed snapshot has dashboards from
-  // the old scoring model (no scoring_model_version field). The user can
-  // either regenerate (recommended) or dismiss to keep the old scores.
+  // the old scoring model (no scoring_model_version field).
   const [legacyScoringDetected, setLegacyScoringDetected] = useState(null) // null | { pre, post }
 
+  // ── Save lifecycle ──
+  // 'idle'        — session just loaded, no local changes yet
+  // 'unsaved'     — changes pending; debounce timer running
+  // 'saving'      — PUT /working-state in flight
+  // 'saved'       — last PUT confirmed; serverVersion matches server
+  // 'save-failed' — PUT failed after retries (network / server error)
+  // 'stale'       — server rejected write; a newer version exists on server
+  const [saveStatus, setSaveStatus] = useState('idle')
+  const [serverVersion, setServerVersion] = useState(null) // ISO string from last confirmed save
+  const [lastSavedAt, setLastSavedAt] = useState(null)     // ISO string
+
+  // Refs — mutable values accessible in async callbacks without stale closures
+  const serverVersionRef = useRef(null)
+  const saveTimerRef = useRef(null)
+  const pendingSavePayloadRef = useRef(null)
+
+  function updateServerVersion(v) {
+    serverVersionRef.current = v
+    setServerVersion(v)
+  }
+
+  // ── Server-authoritative mount ──
+  // The server's opportunity list and working state are the source of truth.
+  // The recovery cache (localStorage) is used only when the server is
+  // unreachable. Server state is never replaced by an older local copy.
   useEffect(() => {
-    const saved = loadPersistedState()
-    // Treat as "has data" only if it actually contains something useful,
-    // otherwise just mark decided and move on.
-    const hasUsefulData = Boolean(
-      saved && (
-        saved.dashboard ||
-        saved.postDashboard ||
-        (saved.company && saved.company.trim()) ||
-        (saved.prep && saved.prep.trim()) ||
-        (saved.postResult && saved.postResult.trim())
-      )
-    )
-    if (hasUsefulData) {
-      setPendingRestore(saved)
-    } else {
-      setRestoreDecided(true)
+    async function init() {
+      const cache = readRecoveryCache()
+      const cachedOppId = cache?.opportunityId ?? null
+
+      try {
+        // Fetch the authoritative opportunity list from the server
+        const oppsData = await listOpportunities()
+        const oppList = Array.isArray(oppsData?.opportunities)
+          ? oppsData.opportunities
+          : Array.isArray(oppsData) ? oppsData : []
+
+        if (oppList.length === 0) {
+          // No server opportunities — clean slate
+          setRestoreDecided(true)
+          return
+        }
+
+        // Only auto-load when the recovery cache points to a known server opp.
+        // Prevents silently loading an arbitrary opportunity on first visit.
+        const targetOpp = cachedOppId
+          ? oppList.find((o) => (o.opportunity_id ?? o.id) === cachedOppId)
+          : null
+
+        if (!targetOpp) {
+          // Recovery cache empty or points to a server-unknown opp — clean slate
+          clearRecoveryCache()
+          setRestoreDecided(true)
+          return
+        }
+
+        const targetId = targetOpp.opportunity_id ?? targetOpp.id
+
+        // Load working state from server (authoritative)
+        const wsData = await getWorkingState(targetId)
+        const serverState = wsData?.state ?? null
+        const sv = wsData?.serverVersion ?? null
+        updateServerVersion(sv)
+
+        if (!serverState || typeof serverState !== 'object') {
+          // Opportunity exists but no working state saved yet
+          setOpportunityId(targetId)
+          setSaveStatus('idle')
+          setRestoreDecided(true)
+          return
+        }
+
+        const hasUsefulData = Boolean(
+          serverState.dashboard || serverState.postDashboard ||
+          (serverState.company && serverState.company.trim()) ||
+          (serverState.prep && serverState.prep.trim()) ||
+          (serverState.postResult && serverState.postResult.trim())
+        )
+
+        if (hasUsefulData) {
+          // Offer via banner (user can confirm or start fresh)
+          setPendingRestore({ ...serverState, opportunityId: targetId, _fromServer: true, savedAt: sv })
+        } else {
+          setOpportunityId(targetId)
+          setRestoreDecided(true)
+        }
+      } catch (_networkErr) {
+        // Server unreachable — offer recovery cache if available and not expired
+        if (cache?.payload) {
+          const p = cache.payload
+          const hasUsefulData = Boolean(
+            p.dashboard || p.postDashboard ||
+            (p.company && p.company.trim()) ||
+            (p.prep && p.prep.trim()) ||
+            (p.postResult && p.postResult.trim())
+          )
+          if (hasUsefulData) {
+            setPendingRestore({
+              ...p,
+              opportunityId: cache.opportunityId,
+              _fromCache: true,
+              savedAt: cache.cacheTimestamp,
+            })
+          } else {
+            setRestoreDecided(true)
+          }
+        } else {
+          setRestoreDecided(true)
+        }
+      }
     }
+
+    init()
   }, [])
 
   // ── Mode ──
@@ -4754,16 +4854,18 @@ export default function LogicGateModule() {
     return { year1, threeYear, tcv, roiRatio, paybackMonths }
   }
 
-  // ── Persistence ──
-  // Save the current opportunity to localStorage whenever the relevant
-  // fields change. Gated on `restoreDecided` so the effect doesn't write
-  // empty state over a saved snapshot before the user has chosen Resume
-  // or Discard. Transient state (loading, errors, modal visibility, file
-  // uploads) is not persisted — only the things needed to reconstruct a
-  // generated opportunity.
+  // ── Persistence: recovery cache + debounced server save ──
+  // On every relevant state change:
+  //   1. Write a recovery cache to localStorage (best-effort, no auth/role data).
+  //   2. Schedule a debounced server save (SAVE_DEBOUNCE_MS). Retries on transient
+  //      failures. Returns 409 → marks as stale (user sees Reload prompt).
+  //
+  // Gated on `restoreDecided` to prevent writing before the user has
+  // chosen Resume or Discard. Transient state (loading, errors, modals,
+  // file objects) is not persisted.
   useEffect(() => {
     if (!restoreDecided) return
-    persistState({
+    const payload = {
       mode,
       opportunityId,
       // Pre-discovery
@@ -4791,7 +4893,6 @@ export default function LogicGateModule() {
       postDashboard,
       postSourceNotes,
       // Rich briefings
-      // Rolling rich briefing
       richBriefing,
       richBriefingStage,
       briefingHistory,
@@ -4823,7 +4924,51 @@ export default function LogicGateModule() {
       // Stage-gate / status
       opportunityStatus,
       declineReason,
-    })
+    }
+
+    // 1. Recovery cache (fire-and-forget; no auth/role data stored)
+    writeRecoveryCache(opportunityId, serverVersionRef.current, payload)
+
+    // 2. Debounced server save — only when an opportunity record exists
+    if (!opportunityId) return
+
+    setSaveStatus('unsaved')
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
+    pendingSavePayloadRef.current = payload
+
+    const timerId = setTimeout(async () => {
+      const savedPayload = pendingSavePayloadRef.current
+      if (!savedPayload) return
+
+      const currentVersion = serverVersionRef.current
+      setSaveStatus('saving')
+
+      let attempt = 0
+      while (attempt < SAVE_MAX_RETRIES) {
+        try {
+          const result = await saveWorkingState(opportunityId, savedPayload, currentVersion)
+          updateServerVersion(result.serverVersion)
+          setLastSavedAt(result.savedAt)
+          setSaveStatus('saved')
+          clearRecoveryCache()
+          return
+        } catch (err) {
+          if (err instanceof ApiConflictError) {
+            setSaveStatus('stale')
+            if (err.serverVersion) updateServerVersion(err.serverVersion)
+            return
+          }
+          attempt++
+          if (attempt < SAVE_MAX_RETRIES) {
+            await new Promise((r) => setTimeout(r, 1000 * Math.pow(2, attempt - 1)))
+          }
+        }
+      }
+      setSaveStatus('save-failed')
+    }, SAVE_DEBOUNCE_MS)
+    saveTimerRef.current = timerId
+
+    return () => clearTimeout(timerId)
   }, [
     restoreDecided,
     mode, opportunityId,
@@ -5652,25 +5797,38 @@ export default function LogicGateModule() {
 
   async function handleGenerateProposalSection(sectionId) {
     const sourceDash = postDashboard || dashboard
+    // Clear content and mark loading — streaming will build content incrementally
     setProposalSections(prev => ({
       ...prev,
-      [sectionId]: { ...(prev[sectionId] || {}), loading: true, error: '' },
+      [sectionId]: { content: '', loading: true, error: '' },
     }))
     try {
-      const data = await generateProposalSection({
-        sectionId,
-        company: postCompany || company,
-        dashboard: sourceDash,
-        postDemoSummary: demoSummary,
-        solutionResult,
-        demoNotes,
-        richBriefing,
-        pricing: proposalPricing,
-      })
-      if (!data?.content) throw new Error(`Empty content for section: ${sectionId}`)
+      await generateProposalSectionStream(
+        {
+          sectionId,
+          company: postCompany || company,
+          dashboard: sourceDash,
+          postDemoSummary: demoSummary,
+          solutionResult,
+          demoNotes,
+          richBriefing,
+          pricing: proposalPricing,
+        },
+        (delta) => {
+          // Append each text chunk to the section content as it arrives
+          setProposalSections(prev => {
+            const existing = prev[sectionId] || {}
+            return {
+              ...prev,
+              [sectionId]: { ...existing, content: (existing.content || '') + delta, loading: true, error: '' },
+            }
+          })
+        },
+      )
+      // Streaming complete — clear loading flag
       setProposalSections(prev => ({
         ...prev,
-        [sectionId]: { content: data.content, loading: false, error: '' },
+        [sectionId]: { ...(prev[sectionId] || {}), loading: false, error: '' },
       }))
     } catch (err) {
       setProposalSections(prev => ({
@@ -5680,13 +5838,15 @@ export default function LogicGateModule() {
     }
   }
 
+  // Generate all sections in parallel — every section fires an independent SSE
+  // request and updates its own state as chunks arrive.  Promise.allSettled
+  // ensures we wait for every section (success or failure) before clearing the
+  // generating-all flag, and a failed section never blocks the others.
   async function handleGenerateAllProposalSections() {
     if (opportunityStatus === 'declined') return
     setProposalDocumentError('')
     setProposalGeneratingAll(true)
-    for (const section of PROPOSAL_SECTION_ORDER) {
-      await handleGenerateProposalSection(section.id)
-    }
+    await Promise.allSettled(PROPOSAL_SECTION_ORDER.map(s => handleGenerateProposalSection(s.id)))
     setProposalGeneratingAll(false)
   }
 
@@ -6008,13 +6168,9 @@ export default function LogicGateModule() {
     }
   }
 
-  // Restore the saved opportunity into state. Called when the user clicks
-  // Resume in the banner. After this, restoreDecided flips so the
-  // persistence effect resumes saving normally.
-  function handleResume() {
-    if (!pendingRestore) return
-    const s = pendingRestore
-
+  // Apply a saved snapshot into component state. Used by handleResume and
+  // by the auto-load path when server state is loaded on mount.
+  function applySnapshot(s) {
     // Pre-discovery
     if (s.mode) setMode(s.mode)
     if (s.opportunityId !== undefined) setOpportunityId(s.opportunityId)
@@ -6103,9 +6259,6 @@ export default function LogicGateModule() {
     if (s.opportunityStatus !== undefined) setOpportunityStatus(s.opportunityStatus || 'open')
     if (s.declineReason !== undefined) setDeclineReason(s.declineReason || '')
 
-    setPendingRestore(null)
-    setRestoreDecided(true)
-
     // Legacy scoring detection — dashboards generated under the old scoring
     // model don't carry scoring_model_version. The new strict 4-pillar model
     // produces materially different scores, so we surface a regeneration
@@ -6120,10 +6273,32 @@ export default function LogicGateModule() {
     }
   }
 
-  // Discard the saved snapshot. Wipes localStorage and starts the session
-  // clean. Does not touch backend audit / opportunity records.
+  // Restore the saved opportunity into state. Called when the user clicks
+  // Resume in the banner. Applies the snapshot then clears the banner and
+  // allows the persistence effect to write again.
+  function handleResume() {
+    if (!pendingRestore) return
+    const s = pendingRestore
+    applySnapshot(s)
+    // Sync the serverVersion ref/state so the first save after resume
+    // sends the correct X-Expected-Version header.
+    if (s._fromServer && s.savedAt) {
+      updateServerVersion(s.savedAt)
+      setSaveStatus('saved')
+      setLastSavedAt(s.savedAt)
+    } else if (s._fromCache) {
+      // Recovery cache: server state is unknown, so allow an unconditional write
+      updateServerVersion(null)
+      setSaveStatus('unsaved')
+    }
+    setPendingRestore(null)
+    setRestoreDecided(true)
+  }
+
+  // Discard the saved snapshot. Clears the recovery cache and starts the
+  // session clean. Does not touch backend opportunity records.
   function handleDiscard() {
-    clearPersistedState()
+    clearRecoveryCache()
     setPendingRestore(null)
     setRestoreDecided(true)
   }
@@ -6310,10 +6485,15 @@ export default function LogicGateModule() {
     setStatus('')
     setMode('pre')
 
-    // Wipe the persisted snapshot so a refresh doesn't bring it back
-    clearPersistedState()
+    // Clear the recovery cache so a refresh doesn't bring the old opp back
+    clearRecoveryCache()
 
-    // Cancel any pending restore banner and lock further writes as decided
+    // Reset save lifecycle for the new opportunity
+    updateServerVersion(null)
+    setSaveStatus('idle')
+    setLastSavedAt(null)
+
+    // Cancel any pending restore banner and allow writes
     setPendingRestore(null)
     setRestoreDecided(true)
   }
@@ -6568,7 +6748,7 @@ export default function LogicGateModule() {
     <div style={S.page}>
       <div style={S.shell}>
 
-        {/* Resume / Discard banner — shown only when a saved snapshot is detected on load */}
+        {/* Resume / Discard banner — shown when a saved snapshot is found on mount */}
         {pendingRestore && (
           <div style={{
             display: 'flex',
@@ -6577,21 +6757,24 @@ export default function LogicGateModule() {
             gap: 12,
             padding: '12px 16px',
             marginBottom: 12,
-            background: NAVY_LIGHT,
-            border: `1px solid ${BORDER}`,
-            borderLeft: `4px solid ${NAVY}`,
+            background: pendingRestore._fromCache ? '#FFFBEB' : NAVY_LIGHT,
+            border: `1px solid ${pendingRestore._fromCache ? '#FDE68A' : BORDER}`,
+            borderLeft: `4px solid ${pendingRestore._fromCache ? '#F59E0B' : NAVY}`,
             borderRadius: 10,
             flexWrap: 'wrap',
           }}>
             <div style={{ flex: '1 1 280px', minWidth: 0 }}>
-              <div style={{ fontSize: 12, fontWeight: 700, color: NAVY, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 3 }}>
-                Saved Opportunity Found
+              <div style={{ fontSize: 12, fontWeight: 700, color: pendingRestore._fromCache ? '#92400E' : NAVY, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 3 }}>
+                {pendingRestore._fromServer ? 'Saved Session Found' : pendingRestore._fromCache ? 'Offline Recovery Data' : 'Saved Opportunity Found'}
               </div>
               <div style={{ fontSize: 13, color: '#334155', lineHeight: 1.5 }}>
-                Resume previous opportunity{pendingRestore.company ? `: ${pendingRestore.company}` : ''}?
+                {pendingRestore._fromCache
+                  ? <>Server unreachable — local draft available{pendingRestore.company ? ` for ${pendingRestore.company}` : ''}. Resume from cache?</>
+                  : <>Resume previous session{pendingRestore.company ? `: ${pendingRestore.company}` : ''}?</>
+                }
                 {pendingRestore.savedAt && (
                   <span style={{ color: MUTED, marginLeft: 6 }}>
-                    (saved {new Date(pendingRestore.savedAt).toLocaleString('en-GB')})
+                    ({pendingRestore._fromCache ? 'cached' : 'saved'} {new Date(pendingRestore.savedAt).toLocaleString('en-GB')})
                   </span>
                 )}
               </div>
@@ -6603,7 +6786,7 @@ export default function LogicGateModule() {
                   padding: '8px 16px',
                   borderRadius: 8,
                   border: 'none',
-                  background: NAVY,
+                  background: pendingRestore._fromCache ? '#F59E0B' : NAVY,
                   color: '#fff',
                   fontSize: 13,
                   fontWeight: 600,
@@ -6627,9 +6810,52 @@ export default function LogicGateModule() {
                   cursor: 'pointer',
                 }}
               >
-                Discard
+                Start Fresh
               </button>
             </div>
+          </div>
+        )}
+
+        {/* Save status indicator — hidden when idle or no opportunity loaded */}
+        {saveStatus !== 'idle' && opportunityId && (
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 8, marginBottom: 8 }}>
+            {saveStatus === 'saving' && (
+              <span style={{ fontSize: 11, color: MUTED }}>Saving…</span>
+            )}
+            {saveStatus === 'unsaved' && (
+              <span style={{ fontSize: 11, color: MUTED }}>Unsaved changes</span>
+            )}
+            {saveStatus === 'saved' && lastSavedAt && (
+              <span style={{ fontSize: 11, color: '#16A34A' }}>
+                ✓ Saved {new Date(lastSavedAt).toLocaleTimeString('en-GB')}
+              </span>
+            )}
+            {saveStatus === 'save-failed' && (
+              <span style={{ fontSize: 11, color: '#DC2626', fontWeight: 600 }}>
+                ⚠ Save failed — check connection
+              </span>
+            )}
+            {saveStatus === 'stale' && (
+              <div style={{
+                display: 'flex', alignItems: 'center', gap: 8,
+                padding: '4px 10px', background: '#FEF3C7', borderRadius: 6,
+                border: '1px solid #FDE68A',
+              }}>
+                <span style={{ fontSize: 11, color: '#92400E' }}>
+                  A newer version exists on the server.
+                </span>
+                <button
+                  onClick={() => window.location.reload()}
+                  style={{
+                    fontSize: 11, padding: '2px 8px', borderRadius: 4,
+                    border: '1px solid #D97706', background: 'transparent',
+                    color: '#92400E', cursor: 'pointer', fontFamily: 'inherit',
+                  }}
+                >
+                  Reload
+                </button>
+              </div>
+            )}
           </div>
         )}
 
@@ -8602,7 +8828,6 @@ export default function LogicGateModule() {
                     const isLoading = sec?.loading || false
                     const hasContent = Boolean(sec?.content)
                     const hasError = Boolean(sec?.error)
-                    const isCurrentlyGenerating = proposalGeneratingAll && !hasContent && !hasError
                     return (
                       <div key={s.id} style={{
                         background: '#fff', border: `1px solid ${hasError ? '#fca5a5' : BORDER}`,
@@ -8647,28 +8872,45 @@ export default function LogicGateModule() {
                           <div style={{ marginLeft: 32 }}>
                             {s.id === 'next_steps' ? (
                               <>
-                                <div style={{ fontSize: 11, color: MUTED, marginBottom: 4, fontStyle: 'italic' }}>
-                                  Edit suggested next steps before downloading
-                                </div>
+                                {!isLoading && (
+                                  <div style={{ fontSize: 11, color: MUTED, marginBottom: 4, fontStyle: 'italic' }}>
+                                    Edit suggested next steps before downloading
+                                  </div>
+                                )}
                                 <textarea
                                   value={sec.content}
                                   onChange={(e) => setProposalSections(prev => ({
                                     ...prev,
                                     next_steps: { ...prev.next_steps, content: e.target.value },
                                   }))}
-                                  rows={8}
+                                  readOnly={isLoading}
+                                  rows={isLoading ? 4 : 8}
                                   style={{
                                     width: '100%', boxSizing: 'border-box',
                                     fontFamily: 'ui-monospace, "Cascadia Code", Menlo, monospace',
                                     fontSize: 12, padding: '8px 10px',
                                     border: `1px solid ${BORDER}`, borderRadius: 6,
-                                    resize: 'vertical', outline: 'none',
+                                    resize: isLoading ? 'none' : 'vertical', outline: 'none',
                                     color: '#374151', lineHeight: 1.65,
                                     background: '#f8fafc',
                                   }}
                                 />
                               </>
+                            ) : isLoading ? (
+                              // While streaming: show raw markdown text so the user sees content
+                              // appear token-by-token without flickering table re-renders
+                              <div style={{
+                                background: '#f8fafc', border: `1px solid ${BORDER}`, borderRadius: 6,
+                                padding: '10px 12px', maxHeight: 200, overflowY: 'auto',
+                                fontFamily: 'ui-monospace, "Cascadia Code", Menlo, monospace',
+                                fontSize: 11.5, lineHeight: 1.6, color: '#374151',
+                                whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+                              }}>
+                                {sec.content}
+                                <span style={{ display: 'inline-block', width: 8, height: 13, background: NAVY, marginLeft: 1, verticalAlign: 'text-bottom', animation: 'none', opacity: 0.8 }} />
+                              </div>
                             ) : (
+                              // Streaming complete: show the fully rendered table/markdown view
                               <div style={{
                                 background: '#f8fafc', border: `1px solid ${BORDER}`, borderRadius: 6,
                                 padding: '10px 12px', maxHeight: 320, overflowY: 'auto',
